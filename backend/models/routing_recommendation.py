@@ -15,3 +15,6 @@ class RoutingRecommendation(Base):
     specialty: Mapped[str] = mapped_column(String(128))
     appointment_type: Mapped[str] = mapped_column(String(128))
     rationale: Mapped[str] = mapped_column(Text)
+    # ids from config/hospital.yaml — staff may override either one
+    department_id: Mapped[str | None] = mapped_column(String(64))
+    doctor_id: Mapped[str | None] = mapped_column(String(64))

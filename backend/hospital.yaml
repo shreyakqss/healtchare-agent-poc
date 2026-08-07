@@ -1,0 +1,146 @@
+# Configurable hospital. Everything here is demonstration data for a synthetic
+# POC — no real organisation, clinician, or clinical protocol is represented.
+#
+# Edit this file and re-run `python scripts/seed.py --reset` to simulate a
+# different clinic without touching any agent code.
+
+hospital:
+  id: qss-demo-clinic
+  name: QSS Demo Clinic
+  timezone: Asia/Kolkata
+
+appointment_types:
+  - id: urgent_slot
+    label: Urgent same-day slot
+    duration_minutes: 20
+  - id: in_person_consult
+    label: In-person consultation
+    duration_minutes: 30
+  - id: video_consult
+    label: Video consultation
+    duration_minutes: 20
+  - id: routine_followup
+    label: Routine follow-up
+    duration_minutes: 15
+
+departments:
+  - id: general_medicine
+    name: General Medicine
+    default: true
+  - id: cardiology
+    name: Cardiology
+  - id: pulmonology
+    name: Pulmonology
+  - id: orthopedics
+    name: Orthopedics
+  - id: dermatology
+    name: Dermatology
+  - id: ent
+    name: ENT
+
+doctors:
+  - id: dr_mehta
+    name: Dr. A. Mehta
+    department_id: general_medicine
+    working_days: [mon, tue, wed, thu, fri]
+  - id: dr_rao
+    name: Dr. S. Rao
+    department_id: cardiology
+    working_days: [mon, wed, fri]
+  - id: dr_iyer
+    name: Dr. K. Iyer
+    department_id: pulmonology
+    working_days: [tue, thu]
+  - id: dr_banerjee
+    name: Dr. R. Banerjee
+    department_id: orthopedics
+    working_days: [mon, tue, thu, fri]
+  - id: dr_kaur
+    name: Dr. P. Kaur
+    department_id: dermatology
+    working_days: [wed, fri]
+  - id: dr_nair
+    name: Dr. V. Nair
+    department_id: ent
+    working_days: [mon, thu]
+
+# Keyword -> department. First match wins; unmatched cases fall back to the
+# department flagged `default: true` above.
+specialty_map:
+  cardiology:
+    [chest pain, palpitations, heart, irregular heartbeat, chest tightness]
+  pulmonology:
+    [shortness of breath, breathlessness, wheezing, persistent cough, asthma]
+  orthopedics: [joint pain, back pain, fracture, knee, shoulder, sprain]
+  dermatology: [rash, skin, itching, hives, acne, lesion]
+  ent: [sore throat, ear pain, sinus, hearing, nasal congestion]
+
+# Administrative urgency only — these decide how soon someone is seen and by
+# which desk, never what is wrong with the patient. The rule engine is the only
+# thing that sets a priority; the LLM writes the explanation prose.
+#
+# Evaluation order is high -> medium -> low; the first matching rule wins, and
+# TR-LOW-000 is the guaranteed fallback so every result carries a rule id.
+triage_rules:
+  version: "2026.08.1"
+  rules:
+    - code: TR-HIGH-001
+      priority: high
+      condition:
+        any_symptom:
+          [
+            chest pain,
+            chest tightness,
+            shortness of breath,
+            breathlessness,
+            severe bleeding,
+            fainting,
+            loss of consciousness,
+          ]
+      action: Route to an urgent same-day slot and flag for immediate staff attention.
+      explanation: The patient reported a symptom the clinic has designated for same-day administrative escalation.
+      specialty_hint: cardiology
+
+    - code: TR-HIGH-002
+      priority: high
+      condition:
+        allergy_conflict: true
+      action: Flag the allergy and medication conflict for clinician attention before any appointment is confirmed.
+      explanation: A reported allergy overlaps with a reported current medication, which the clinic always escalates for human review.
+
+    - code: TR-MED-001
+      priority: medium
+      condition:
+        min_duration_days: 14
+      action: Offer an in-person consultation within the week.
+      explanation: The reported symptom duration exceeds the clinic's two-week threshold for a prompt in-person review.
+
+    - code: TR-MED-002
+      priority: medium
+      condition:
+        any_symptom: [fever, persistent cough, vomiting, dizziness]
+        any_history: [diabetes, hypertension, asthma, immunocompromised]
+      action: Offer an in-person consultation within the week.
+      explanation: A reported symptom combined with an existing condition on the clinic's watch list warrants a prompt review.
+
+    - code: TR-LOW-000
+      priority: low
+      condition: {}
+      action: Offer a routine consultation at the next available slot.
+      explanation: No rule for elevated administrative urgency matched, so the case follows the standard routine pathway.
+
+# Which appointment type each priority maps to.
+priority_appointment_map:
+  high: urgent_slot
+  medium: in_person_consult
+  low: routine_followup
+
+# Fields the intake assistant must collect before pre-screening can run.
+required_intake_fields:
+  - reason_for_visit
+  - symptom
+  - duration
+  - history
+  - medication
+  - allergy
+  - contact_preference

@@ -1,11 +1,12 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from config import settings
 from api.audit import router as audit_router
 from api.cases import router as cases_router
+from api.hospital import router as hospital_router
 from api.intake import router as intake_router
 from api.review import router as review_router
+from config import settings
 
 app = FastAPI(
     title=settings.APP_NAME,
@@ -39,8 +40,13 @@ async def health():
         "message": "Healthcare Agent POC Backend is running",
     }
 
-# Include routers for different API endpoints
-app.include_router(audit_router, prefix="/api/audit", tags=["audit"])
-app.include_router(cases_router, prefix="/api/cases", tags=["cases"])
-app.include_router(intake_router, prefix="/api/intake", tags=["intake"])
-app.include_router(review_router, prefix="/api/review", tags=["review"])
+
+# Each router declares its own resource path (/intake-sessions, /cases, ...);
+# the version prefix lives here so there is exactly one place to change it.
+API_PREFIX = "/api/v1/healthcare"
+
+app.include_router(intake_router, prefix=API_PREFIX)
+app.include_router(cases_router, prefix=API_PREFIX)
+app.include_router(review_router, prefix=API_PREFIX)
+app.include_router(audit_router, prefix=API_PREFIX)
+app.include_router(hospital_router, prefix=API_PREFIX)
