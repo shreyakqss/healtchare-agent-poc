@@ -9,9 +9,6 @@ do not adjust it.
 Inputs are duck-typed on purpose: SQLAlchemy models satisfy them, and so do
 plain objects in tests.
 """
-
-from __future__ import annotations
-
 import re
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Protocol
@@ -48,13 +45,9 @@ DURATION_KINDS = {"duration"}
 class Fact(Protocol):
     kind: str
     value: str
-
-
 class Allergy(Protocol):
     kind: str  # allergy | medication
     name: str
-
-
 class Rule(Protocol):
     code: str
     priority: str
@@ -89,7 +82,6 @@ def parse_duration_days(text: str) -> float | None:
         return count * _DURATION_UNIT_DAYS[match.group(2).lower()]
 
     return None
-
 
 def find_allergy_conflicts(
     allergies_and_meds: Iterable[Allergy],
@@ -126,7 +118,6 @@ def find_allergy_conflicts(
                 )
     return conflicts
 
-
 def _matching_facts(facts: Iterable[Fact], kinds: set[str], keywords: list[str]):
     """Yield (keyword, fact) for every keyword found in a fact of the given kinds."""
     for fact in facts:
@@ -136,7 +127,6 @@ def _matching_facts(facts: Iterable[Fact], kinds: set[str], keywords: list[str])
         for keyword in keywords:
             if keyword.lower() in value:
                 yield keyword, fact
-
 
 def _evaluate_condition(
     condition: dict[str, Any],
@@ -209,7 +199,6 @@ def _evaluate_condition(
         ]
 
     return True, evidence
-
 
 def evaluate(
     facts: Iterable[Fact],

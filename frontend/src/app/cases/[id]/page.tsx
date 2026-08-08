@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { ApiError, api, type AuditEvent, type CaseDetail } from "@/lib/api";
+import { Banner, icons } from "@/lib/ui";
 import CaseView from "./case-view";
 
 // Live case state — never prerendered.
@@ -16,12 +17,18 @@ export default async function CasePage({ params }: PageProps<"/cases/[id]">) {
   } catch (err) {
     return (
       <div>
-        <Link href="/dashboard" className="text-sm underline">
-          ← Back to dashboard
+        <Link
+          href="/dashboard"
+          className="inline-flex items-center gap-1.5 text-xs text-faint hover:text-dim"
+        >
+          <icons.chevron className="rotate-180 text-[14px]" />
+          Patient queue
         </Link>
-        <p className="mt-6 rounded border border-red-300 bg-red-50 p-3 text-sm text-red-800 dark:border-red-800 dark:bg-red-950 dark:text-red-200">
-          {err instanceof ApiError ? err.message : String(err)}
-        </p>
+        <div className="mt-6">
+          <Banner tone="error">
+            {err instanceof ApiError ? err.message : String(err)}
+          </Banner>
+        </div>
       </div>
     );
   }

@@ -4,9 +4,6 @@ Runs only after a clinician has approved the case. The care task it produces is
 explicitly a **draft**: nothing here books an appointment or touches an external
 system.
 """
-
-from __future__ import annotations
-
 import logging
 from datetime import datetime, timezone
 

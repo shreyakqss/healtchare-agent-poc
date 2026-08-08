@@ -159,6 +159,7 @@ def list_cases(db: Session = Depends(get_db)):
                 department=routing.specialty if routing else None,
                 doctor_name=doctor["name"] if doctor else None,
                 chief_complaint=reason.value if reason else None,
+                demographics=case.demographics_fixture or {},
                 created_at=case.created_at,
                 updated_at=last_event.created_at if last_event else None,
             )

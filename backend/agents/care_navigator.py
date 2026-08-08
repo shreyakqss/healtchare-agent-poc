@@ -8,10 +8,7 @@ The rationale text is written in code rather than generated, so the reason a
 patient was routed somewhere is always reproducible.
 """
 
-from __future__ import annotations
-
 from sqlalchemy.orm import Session
-
 from models import AuditEvent, PatientCase, PatientFact, RoutingRecommendation
 from services import hospital_config, specialty_mapper
 

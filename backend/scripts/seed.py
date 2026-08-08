@@ -21,8 +21,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from config import settings  # noqa: E402
-from models import Base, SessionLocal, TriageRule, engine  # noqa: E402
-from services import hospital_config  # noqa: E402
+from models import Base, SessionLocal, engine  # noqa: E402
+from services import hospital_config, triage_rules  # noqa: E402
 
 
 def reset_schema() -> None:
@@ -42,46 +42,17 @@ def create_schema() -> None:
 
 
 def seed_triage_rules(db) -> int:
-    """Load approved rules from hospital.yaml into the database.
+    """Load the active hospital's approved rules into the database.
 
-    They live in the DB so TriageResult.rule_ids points at real rows and the
-    audit trail can resolve which rule fired; they are authored in YAML so a
-    non-developer can read and edit them.
+    The reconciliation itself lives in `services/triage_rules.py` so the hospital
+    admin API runs the identical path when a config is saved or another clinic
+    is activated.
     """
-    config = hospital_config.reload()
-    block = config.get("triage_rules", {})
-    version = str(block.get("version", "0"))
-    rules = block.get("rules", [])
-
-    if not rules:
-        raise SystemExit(
-            "hospital.yaml defines no triage rules. A priority must always trace "
-            "to a configured rule, so refusing to seed an empty rule set."
-        )
-    if not any(not (r.get("condition") or {}) for r in rules):
-        raise SystemExit(
-            "hospital.yaml has no fallback rule (one with an empty condition). "
-            "Without it a case could get no priority at all."
-        )
-
-    existing = {r.code: r for r in db.query(TriageRule).all()}
-    written = 0
-
-    for entry in rules:
-        rule = existing.get(entry["code"])
-        if rule is None:
-            rule = TriageRule(code=entry["code"])
-            db.add(rule)
-        rule.version = version
-        rule.priority = entry["priority"]
-        rule.condition = entry.get("condition") or {}
-        rule.action = entry["action"]
-        rule.explanation = entry["explanation"]
-        rule.specialty_hint = entry.get("specialty_hint")
-        written += 1
-
-    db.commit()
-    return written
+    hospital_config.reload()
+    try:
+        return triage_rules.sync(db)
+    except hospital_config.ConfigError as exc:
+        raise SystemExit(f"Refusing to seed: {exc}") from exc
 
 
 def seed_cases(db) -> int:

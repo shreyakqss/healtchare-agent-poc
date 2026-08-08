@@ -6,10 +6,7 @@ the TriageResult — the model is never asked to judge urgency, and its output i
 never allowed to replace what the rule engine decided.
 """
 
-from __future__ import annotations
-
 import logging
-
 from sqlalchemy.orm import Session
 
 from agents.medical_record_processor import collect_attachments

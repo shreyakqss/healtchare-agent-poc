@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel
 
@@ -23,6 +23,27 @@ class MessageResponse(BaseModel):
     missing_fields: list[str]
     intake_complete: bool
     transcript: list[dict[str, str]]
+
+
+class TurnEvent(BaseModel):
+    """One frame of an intake turn in progress.
+
+    Deliberately one flat model rather than a discriminated union: it crosses
+    the wire as SSE `data:` lines, and the four shapes are small enough that a
+    `type` switch on the client beats four schemas to keep in step.
+
+        token    a chunk of the assistant's reply, for the screen
+        segment  a speakable phrase, for text-to-speech
+        done     the canonical turn — this, not the chunks, is what was stored
+        error    the turn failed; `detail` is patient-safe
+    """
+
+    type: Literal["token", "segment", "done", "error"]
+    text: str | None = None
+    index: int | None = None
+    response: MessageResponse | None = None
+    status: int | None = None
+    detail: str | None = None
 
 
 class AttachmentResponse(BaseModel):
@@ -122,6 +143,9 @@ class CaseListItem(BaseModel):
     department: str | None
     doctor_name: str | None
     chief_complaint: str | None
+    # The queue shows who is waiting, so the fixture demographics ride along
+    # rather than making the dashboard fetch every case detail to find them.
+    demographics: dict[str, Any] = {}
     created_at: datetime
     updated_at: datetime | None
 

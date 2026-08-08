@@ -6,6 +6,7 @@ from api.cases import router as cases_router
 from api.hospital import router as hospital_router
 from api.intake import router as intake_router
 from api.review import router as review_router
+from api.voice import router as voice_router
 from config import settings
 
 app = FastAPI(
@@ -50,3 +51,6 @@ app.include_router(cases_router, prefix=API_PREFIX)
 app.include_router(review_router, prefix=API_PREFIX)
 app.include_router(audit_router, prefix=API_PREFIX)
 app.include_router(hospital_router, prefix=API_PREFIX)
+# Voice is an input channel for intake, not a workflow of its own — see
+# services/voice.py. Mounting it last keeps that reading order.
+app.include_router(voice_router, prefix=API_PREFIX)

@@ -5,9 +5,6 @@ extracted so a clinician can read them alongside the case; **images are stored
 and displayed only**. Nothing here interprets an image, and nothing here
 returns anything the triage engine consumes.
 """
-
-from __future__ import annotations
-
 import logging
 import mimetypes
 import uuid
@@ -33,10 +30,8 @@ ATTACHMENT_KINDS = {
     "other",
 }
 
-
 class UploadRejected(ValueError):
     """The upload failed validation and was never written to disk."""
-
 
 @dataclass
 class StoredAttachment:
@@ -74,7 +69,6 @@ def validate(filename: str, size_bytes: int, kind: str) -> str:
 
     return extension
 
-
 def _extract_pdf_text(path: Path) -> str | None:
     try:
         from pypdf import PdfReader
@@ -87,7 +81,6 @@ def _extract_pdf_text(path: Path) -> str | None:
         logger.warning("PDF text extraction failed for %s: %s", path.name, exc)
         return None
 
-
 def _extract_plain_text(path: Path) -> str | None:
     try:
         text = path.read_text(encoding="utf-8", errors="replace").strip()
@@ -95,7 +88,6 @@ def _extract_plain_text(path: Path) -> str | None:
     except OSError as exc:
         logger.warning("Text read failed for %s: %s", path.name, exc)
         return None
-
 
 def store(
     case_id: uuid.UUID, filename: str, content: bytes, kind: str
@@ -131,7 +123,6 @@ def store(
         extracted_text=extracted_text,
         is_image=is_image,
     )
-
 
 def absolute_path(storage_uri: str) -> Path:
     """Resolve a stored URI back to a path, refusing anything outside UPLOAD_DIR."""

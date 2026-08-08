@@ -14,9 +14,6 @@ The DB session travels in the run config rather than in state: it is not
 serialisable, and keeping it out of state means state stays checkpointable if
 that day comes.
 """
-
-from __future__ import annotations
-
 import logging
 
 from langgraph.graph import END, START, StateGraph
@@ -65,12 +62,17 @@ async def node_extract_facts(state: CaseState, config) -> CaseState:
 async def node_plan_question(state: CaseState, config) -> CaseState:
     db = _db(config)
     planned = await plan_next_question(
-        db, state["case_id"], state.get("transcript", [])
+        db,
+        state["case_id"],
+        state["session_id"],
+        state.get("transcript", []),
+        on_token=(config or {}).get("configurable", {}).get("on_token"),
     )
     return {
         "next_question": planned.question,
         "missing_fields": planned.missing_fields,
         "intake_complete": planned.complete,
+        "asks_field": planned.asks_field,
     }
 
 
@@ -98,7 +100,6 @@ async def node_process_records(state: CaseState, config) -> CaseState:
         "status": "ANALYZING",
     }
 
-
 async def node_evaluate_urgency(state: CaseState, config) -> CaseState:
     """Rules only. Never call an LLM from this node."""
     db = _db(config)
@@ -109,7 +110,6 @@ async def node_evaluate_urgency(state: CaseState, config) -> CaseState:
         "warnings": result.warnings or [],
         "specialty_hint": getattr(result, "specialty_hint", None),
     }
-
 
 async def node_navigate_care(state: CaseState, config) -> CaseState:
     db = _db(config)
@@ -124,7 +124,6 @@ async def node_navigate_care(state: CaseState, config) -> CaseState:
         "doctor_id": recommendation.doctor_id,
     }
 
-
 async def node_summarise(state: CaseState, config) -> CaseState:
     db = _db(config)
     case_id = state["case_id"]
@@ -135,7 +134,6 @@ async def node_summarise(state: CaseState, config) -> CaseState:
         apply_transition(db, session, "NEEDS_REVIEW", "system:prescreen", case_id)
 
     return {"summary_id": str(summary.id), "status": "NEEDS_REVIEW"}
-
 
 def build_prescreen_graph():
     builder = StateGraph(CaseState)
@@ -163,7 +161,6 @@ async def node_final_summary(state: CaseState, config) -> CaseState:
         "status": "COMPLETED",
     }
 
-
 def build_finalize_graph():
     builder = StateGraph(CaseState)
     builder.add_node("final_summary", node_final_summary)
@@ -178,5 +175,12 @@ prescreen_graph = build_prescreen_graph()
 finalize_graph = build_finalize_graph()
 
 
-def run_config(db: Session) -> dict:
-    return {"configurable": {"db": db}}
+def run_config(db: Session, on_token=None) -> dict:
+    """`on_token`, when given, receives each chunk of the patient-facing reply
+    as the model generates it — the seam that lets a turn be streamed without
+    the graph itself knowing or caring who is watching.
+
+    It travels in the config for the same reason the session does: it is a live
+    callable, not serialisable state.
+    """
+    return {"configurable": {"db": db, "on_token": on_token}}

@@ -35,6 +35,9 @@ class CaseState(TypedDict, total=False):
     next_question: str
     missing_fields: list[str]
     intake_complete: bool
+    # Which required field `next_question` is asking about, stored on the
+    # message so the next turn can recognise a denial.
+    asks_field: str
     extracted: dict[str, int]
 
     # pre-screening

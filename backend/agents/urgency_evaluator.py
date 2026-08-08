@@ -6,12 +6,9 @@ No prompt, no model output, and no uploaded document can reach a priority
 through this path.
 """
 
-from __future__ import annotations
-
 from sqlalchemy.orm import Session
-
 from models import AllergyMedication, AuditEvent, PatientFact, TriageResult, TriageRule
-from services import triage_engine
+from services import hospital_config, triage_engine
 
 
 def evaluate_urgency(db: Session, case_id) -> TriageResult:
@@ -21,11 +18,19 @@ def evaluate_urgency(db: Session, case_id) -> TriageResult:
         .filter(AllergyMedication.case_id == case_id)
         .all()
     )
-    rules = db.query(TriageRule).all()
+    # Scoped to the active hospital: another clinic's rules are in the same
+    # table and must never fire on this case.
+    hospital_id = hospital_config.active_id()
+    rules = (
+        db.query(TriageRule)
+        .filter(TriageRule.hospital_id == hospital_id, TriageRule.retired.is_(False))
+        .all()
+    )
 
     if not rules:
         raise RuntimeError(
-            "No triage rules are seeded. Run `python scripts/seed.py` first — "
+            f"No triage rules are seeded for hospital '{hospital_id}'. Run "
+            "`python scripts/seed.py` or re-activate it from the hospital page — "
             "a priority must always trace to a configured rule."
         )
 

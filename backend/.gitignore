@@ -73,6 +73,10 @@ logs/
 data/uploads/*
 !data/uploads/.gitkeep
 
+# Which hospital is currently active is local demo state; the YAMLs themselves
+# are committed. Absent, the app falls back to settings.DEFAULT_HOSPITAL_ID.
+data/hospitals/active.txt
+
 # --------------------------------------------------
 # Generated Files
 # --------------------------------------------------

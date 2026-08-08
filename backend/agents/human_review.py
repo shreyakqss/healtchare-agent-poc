@@ -5,9 +5,6 @@ edits are written to `ClinicalReview.edits` and never applied over the original
 `PatientFact` rows, so what the patient said stays distinguishable from what a
 clinician corrected.
 """
-
-from __future__ import annotations
-
 from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 from models import AuditEvent, ClinicalReview, IntakeSession, PatientCase
@@ -23,12 +20,10 @@ def latest_review(db: Session, case_id) -> ClinicalReview | None:
         .first()
     )
 
-
 def is_approved(db: Session, case_id) -> bool:
     """True only when a clinician has actively approved or approved-with-edits."""
     review = latest_review(db, case_id)
     return review is not None and review.decision in {"approve", "edit"}
-
 
 def record_review(
     db: Session,

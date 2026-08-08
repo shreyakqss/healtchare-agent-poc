@@ -77,6 +77,10 @@ class NextQuestion(BaseModel):
         default="",
         description="One sentence on why this question is being asked.",
     )
+    # Set by the planner, never by the model. Stored on the assistant's message
+    # so the following turn can tell "the patient denied this" from "we have
+    # not asked yet" — the distinction the repeat loop turned on.
+    asks_field: str = ""
 
 
 # --- symptom / history extractor -------------------------------------------

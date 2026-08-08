@@ -6,12 +6,8 @@ ClinicalReview.edits; these rows are the original patient statement and are
 never overwritten.
 """
 
-from __future__ import annotations
-
 import logging
-
 from sqlalchemy.orm import Session
-
 from models import AllergyMedication, PatientFact
 from schemas.agent_outputs import ExtractedFact, ExtractionResult, json_schema
 from services.llm_client import LLMError, llm
@@ -21,6 +17,17 @@ logger = logging.getLogger(__name__)
 # A single fact is one clause of what the patient said. Anything longer is the
 # model narrating instead of extracting, and it lands in the clinician's view.
 MAX_FACT_CHARS = 220
+
+# A bare negation is not a fact. The model tags "No" as whatever field was just
+# asked about, which files "history: None" beside the denial the planner has
+# already recorded properly. The denial belongs in the record; this echo of it
+# does not.
+EMPTY_ANSWERS = {"no", "none", "nope", "nothing", "nil", "n/a", "na", "-", "n"}
+
+
+def is_empty_answer(value: str) -> bool:
+    """Is this just the patient saying no, rather than a fact?"""
+    return value.strip().strip(".,!").lower() in EMPTY_ANSWERS
 
 SYSTEM = """You extract structured information from what a patient said during intake.
 
@@ -43,7 +50,24 @@ Rules for the `value` field:
 If the patient names a condition they live with (for example diabetes, asthma,
 hypertension), record it as a `history` fact — even when they mention it in the
 same breath as the medication they take for it. The medication also goes in
-allergies_medications; the condition still belongs in facts."""
+allergies_medications; the condition still belongs in facts.
+
+One sentence usually carries SEVERAL facts. Split it. A patient who describes a
+problem has told you the reason for the visit, the symptom, and often how long
+it has lasted, all at once — emit one fact for each.
+
+Example. The patient said: "Hi, I want to see a doctor. I've been having some
+chest pain since this morning."
+{"facts": [
+  {"kind": "reason_for_visit", "value": "chest pain", "confidence": 1.0},
+  {"kind": "symptom", "value": "chest pain", "confidence": 1.0},
+  {"kind": "duration", "value": "since this morning", "confidence": 1.0}
+], "allergies_medications": []}
+
+Note that "chest pain" appears twice on purpose: it is both why they came and
+the symptom itself. Never emit only reason_for_visit for a sentence like that.
+
+A fact you leave out is one the assistant has to ask the patient about again."""
 
 
 async def extract_facts(
@@ -102,11 +126,21 @@ async def extract_facts(
                 ),
             )
 
+    # Why the patient came is settled once, on the first thing they said.
+    # Small models tag almost every later answer as another reason_for_visit —
+    # the reported transcript collected four, including "no" — which buries the
+    # real one in the clinician's view.
+    has_reason = any(kind == "reason_for_visit" for kind, _ in existing)
+
     fact_count = 0
     for fact in facts:
         value = fact.value.strip()[:MAX_FACT_CHARS]
-        if not value or (fact.kind, value.lower()) in existing:
+        if not value or is_empty_answer(value) or (fact.kind, value.lower()) in existing:
             continue
+        if fact.kind == "reason_for_visit":
+            if has_reason:
+                continue
+            has_reason = True
         db.add(
             PatientFact(
                 case_id=case_id,

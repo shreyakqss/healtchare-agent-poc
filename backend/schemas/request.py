@@ -20,6 +20,10 @@ class ConsentRequest(BaseModel):
 
 class MessageRequest(BaseModel):
     content: str = Field(min_length=1, max_length=4000)
+    # How the patient produced this turn. Recorded on the audit event and
+    # nothing else — a spoken turn and a typed turn are processed identically,
+    # so this must never be branched on.
+    channel: Literal["text", "voice"] = "text"
 
 
 class ReviewRequest(BaseModel):

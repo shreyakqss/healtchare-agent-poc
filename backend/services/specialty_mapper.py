@@ -5,11 +5,7 @@ not a classifier: routing is an administrative decision the clinic configures
 and staff can override, and a keyword table is auditable in a way a model
 output is not.
 """
-
-from __future__ import annotations
-
 from typing import Any, Iterable, Protocol
-
 from services import hospital_config
 
 MATCHABLE_KINDS = {"symptom", "reason_for_visit", "history", "condition"}
@@ -46,7 +42,6 @@ def match_department(
                 return department, hits
 
     return hospital_config.default_department(), []
-
 
 def pick_doctor(department_id: str) -> dict[str, Any] | None:
     """First doctor listed for the department.

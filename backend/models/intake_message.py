@@ -21,3 +21,10 @@ class IntakeMessage(Base):
     role: Mapped[str] = mapped_column(String(16))  # patient | assistant
     content: Mapped[str] = mapped_column(Text)
     turn_index: Mapped[int] = mapped_column(Integer)
+    # Which required intake field an assistant question was asking about.
+    # Null on patient turns and on anything not asking for a field.
+    #
+    # This is what lets the next turn tell "the patient said no" from "we never
+    # asked": a denial produces no fact, so without it the field looks
+    # outstanding forever and gets asked again in different words.
+    asks_field: Mapped[str | None] = mapped_column(String(64), default=None)

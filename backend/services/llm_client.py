@@ -7,11 +7,9 @@ nothing else in the codebase imports an SDK.
 Nothing here is allowed to decide a triage priority. Agents use it to extract
 structure and write prose; `services/triage_engine.py` owns the decisions.
 """
-
-from __future__ import annotations
-
 import json
 import logging
+from collections.abc import AsyncIterator
 from typing import Any
 
 import httpx
@@ -23,7 +21,6 @@ from tenacity import (
 )
 
 from config import settings
-
 logger = logging.getLogger(__name__)
 
 
@@ -117,6 +114,62 @@ class LLMClient:
         }
         data = await self._post("/api/chat", payload)
         return (data.get("message") or {}).get("content", "").strip()
+
+    async def stream_text(
+        self, system: str, user: str, *, temperature: float = 0.2
+    ) -> AsyncIterator[str]:
+        """`chat_text`, yielded as the model produces it.
+
+        Ollama answers `stream: true` with one JSON object per line. The reply
+        is the concatenation of the chunks, so a caller that only wants the
+        whole thing can still join them — which is why there is no third
+        prose method.
+
+        Deliberately not wrapped in tenacity: by the time a stream breaks the
+        patient has already seen half a sentence, and a silent replay would
+        duplicate it. A break surfaces as `LLMError` like any other failure and
+        the caller decides.
+        """
+        payload = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            "stream": True,
+            "options": {"temperature": temperature},
+        }
+
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                async with client.stream(
+                    "POST", f"{self.base_url}/api/chat", json=payload
+                ) as response:
+                    if response.status_code >= 400:
+                        body = (await response.aread()).decode(errors="replace")
+                        raise LLMError(
+                            f"Ollama returned {response.status_code}: {body[:400]}"
+                        )
+                    async for line in response.aiter_lines():
+                        if not line.strip():
+                            continue
+                        try:
+                            data = json.loads(line)
+                        except json.JSONDecodeError:
+                            # One unreadable frame is not worth failing a reply
+                            # the patient is already watching arrive.
+                            logger.warning("Skipped an unparseable stream frame")
+                            continue
+                        chunk = (data.get("message") or {}).get("content", "")
+                        if chunk:
+                            yield chunk
+                        if data.get("done"):
+                            return
+        except httpx.HTTPError as exc:
+            raise LLMError(
+                f"Could not reach Ollama at {self.base_url}. Is `ollama serve` "
+                f"running and `{self.model}` pulled? ({exc})"
+            ) from exc
 
     async def health(self) -> bool:
         try:

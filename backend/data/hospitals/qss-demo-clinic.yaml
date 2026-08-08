@@ -1,8 +1,10 @@
 # Configurable hospital. Everything here is demonstration data for a synthetic
 # POC — no real organisation, clinician, or clinical protocol is represented.
 #
-# Edit this file and re-run `python scripts/seed.py --reset` to simulate a
-# different clinic without touching any agent code.
+# One file per clinic in this directory; the file name is the hospital id, and
+# `active.txt` beside them names the one currently live. Edit here and re-run
+# `python scripts/seed.py`, or use the /hospital page — both go through the same
+# validation and the same triage-rule sync.
 
 hospital:
   id: qss-demo-clinic

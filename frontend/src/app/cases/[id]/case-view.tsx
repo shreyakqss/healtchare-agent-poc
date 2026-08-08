@@ -2,38 +2,42 @@
 
 import Link from "next/link";
 import { useState } from "react";
+import { buildPipeline, timeline } from "@/lib/agents";
 import {
   ApiError,
-  PRIORITY_STYLES,
-  STATUS_STYLES,
   api,
   type AuditEvent,
   type CaseDetail,
 } from "@/lib/api";
-
-function Panel({
-  title,
-  subtitle,
-  children,
-}: {
-  title: string;
-  subtitle?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <section className="rounded-lg border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
-      <div className="border-b border-zinc-200 px-5 py-3 dark:border-zinc-800">
-        <h2 className="text-sm font-semibold">{title}</h2>
-        {subtitle && <p className="mt-0.5 text-xs text-zinc-500">{subtitle}</p>}
-      </div>
-      <div className="px-5 py-4">{children}</div>
-    </section>
-  );
-}
+import {
+  Banner,
+  Button,
+  Dot,
+  Empty,
+  Panel,
+  PriorityTag,
+  StatusTag,
+  Tag,
+  caseRef,
+  duration,
+  humanTime,
+  icons,
+  inputClass,
+  titleCase,
+} from "@/lib/ui";
+import AgentRail from "./agent-rail";
 
 function asStringList(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((v) => typeof v === "string") : [];
 }
+
+/** Fact kinds grouped the way a clinician reads them, in that order. */
+const FACT_GROUPS: [string, string[]][] = [
+  ["Symptoms", ["symptom", "reason_for_visit"]],
+  ["Duration & onset", ["duration", "onset"]],
+  ["History", ["history"]],
+  ["Contact", ["contact_preference"]],
+];
 
 export default function CaseView({
   caseId,
@@ -44,8 +48,7 @@ export default function CaseView({
   initialDetail: CaseDetail;
   initialAudit: AuditEvent[];
 }) {
-  // Seeded from the server render — no fetch-on-mount effect. Reloads happen
-  // in event handlers after a mutation.
+  // Seeded from the server render — reloads happen in event handlers only.
   const [detail, setDetail] = useState(initialDetail);
   const [audit, setAudit] = useState(initialAudit);
   const [error, setError] = useState<string | null>(null);
@@ -54,27 +57,21 @@ export default function CaseView({
   const [reviewerRole, setReviewerRole] = useState("clinician");
   const [editField, setEditField] = useState("");
   const [editValue, setEditValue] = useState("");
-  const [doctorId, setDoctorId] = useState(
-    initialDetail.routing?.doctor_id ?? "",
-  );
+  const [doctorId, setDoctorId] = useState(initialDetail.routing?.doctor_id ?? "");
   const [notes, setNotes] = useState("");
   const [followUp, setFollowUp] = useState("");
-
-  async function reload() {
-    const [caseDetail, auditTrail] = await Promise.all([
-      api.getCase(caseId),
-      api.audit(caseId),
-    ]);
-    setDetail(caseDetail);
-    setAudit(auditTrail);
-  }
 
   async function run(action: () => Promise<unknown>) {
     setBusy(true);
     setError(null);
     try {
       await action();
-      await reload();
+      const [caseDetail, auditTrail] = await Promise.all([
+        api.getCase(caseId),
+        api.audit(caseId),
+      ]);
+      setDetail(caseDetail);
+      setAudit(auditTrail);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : String(err));
     } finally {
@@ -82,449 +79,679 @@ export default function CaseView({
     }
   }
 
-  const summarySections = (detail.prescreening_summary?.sections ??
-    {}) as Record<string, unknown>;
-  const finalSections = (detail.final_summary?.sections ?? {}) as Record<
-    string,
-    unknown
-  >;
+  const runs = buildPipeline(detail, audit);
+  const trace = timeline(audit);
+  const summary = (detail.prescreening_summary?.sections ?? {}) as Record<string, unknown>;
+  const finalSections = (detail.final_summary?.sections ?? {}) as Record<string, unknown>;
   const approved =
     detail.review?.decision === "approve" || detail.review?.decision === "edit";
+  const demographics = detail.demographics as Record<string, unknown>;
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <Link href="/dashboard" className="text-sm underline">
-            ← Back to dashboard
-          </Link>
-          <h1 className="mt-2 text-2xl font-semibold tracking-tight">
-            {(summarySections.chief_complaint as string) ?? "Patient case"}
-          </h1>
-          <p className="mt-1 text-xs text-zinc-500">Case {detail.case_id}</p>
+    <div className="space-y-5">
+      <Link
+        href="/dashboard"
+        className="inline-flex items-center gap-1.5 text-xs text-faint hover:text-dim"
+      >
+        <icons.chevron className="rotate-180 text-[14px]" />
+        Patient queue
+      </Link>
+
+      {/* --- case header --------------------------------------------------- */}
+      <div className="rounded-md border border-line bg-gradient-to-r from-surface to-surface/40">
+        <div className="flex flex-wrap items-start gap-x-8 gap-y-4 px-6 py-5">
+          <div className="min-w-[16rem]">
+            <p className="font-mono text-xs text-accent">{caseRef(detail.case_id)}</p>
+            <h1 className="mt-1 text-xl font-semibold tracking-tight">
+              {(summary.chief_complaint as string) ??
+                detail.facts.find((f) => f.kind === "reason_for_visit")?.value ??
+                "Patient case"}
+            </h1>
+            <p className="mt-1 font-mono text-[11px] text-faint">{detail.case_id}</p>
+          </div>
+
+          {(
+            [
+              [
+                "Patient",
+                (demographics.fixture_id as string) ?? "Synthetic patient",
+                [demographics.age && `${demographics.age}`, demographics.sex]
+                  .filter(Boolean)
+                  .join(" · "),
+              ],
+              [
+                "Department",
+                detail.routing?.specialty ?? "Not routed",
+                detail.routing?.appointment_type ?? "",
+              ],
+              [
+                "Doctor",
+                detail.routing?.doctor_name ?? "Unassigned",
+                detail.routing?.doctor_id ?? "",
+              ],
+            ] as const
+          ).map(([label, value, hint]) => (
+            <div key={label}>
+              <p className="eyebrow">{label}</p>
+              <p className="mt-1 text-sm font-medium">{value}</p>
+              {hint && <p className="text-[11px] text-faint">{hint}</p>}
+            </div>
+          ))}
+
+          <div className="ml-auto flex items-center gap-2">
+            <PriorityTag priority={detail.triage?.priority} />
+            <StatusTag status={detail.status} />
+          </div>
         </div>
-        <div className="flex items-center gap-2">
-          <span
-            className={`rounded px-2.5 py-1 text-xs font-medium ${
-              STATUS_STYLES[detail.status] ?? "bg-zinc-100 dark:bg-zinc-800"
-            }`}
-          >
-            {detail.status.replaceAll("_", " ")}
-          </span>
-          {detail.triage && (
-            <span
-              className={`rounded px-2.5 py-1 text-xs font-medium ring-1 ${
-                PRIORITY_STYLES[detail.triage.priority] ?? ""
-              }`}
-            >
-              {detail.triage.priority} priority
+
+        {/* stage strip */}
+        <div className="flex flex-wrap items-center gap-x-1 gap-y-2 border-t border-line-soft px-6 py-3">
+          {runs.map((step, index) => (
+            <span key={step.key} className="flex items-center gap-1">
+              <span
+                className={`flex items-center gap-1.5 rounded px-2 py-1 text-[11px] ${
+                  step.status === "completed"
+                    ? "text-low"
+                    : step.status === "running"
+                      ? "bg-info/10 text-info"
+                      : step.status === "waiting"
+                        ? "bg-med/10 text-med"
+                        : step.status === "failed"
+                          ? "bg-high/10 text-high"
+                          : "text-faint"
+                }`}
+              >
+                {step.status === "completed" ? (
+                  <icons.check className="text-[12px]" />
+                ) : (
+                  <Dot
+                    tone={
+                      step.status === "running"
+                        ? "info"
+                        : step.status === "waiting"
+                          ? "med"
+                          : step.status === "failed"
+                            ? "high"
+                            : "neutral"
+                    }
+                    live={step.status === "running"}
+                  />
+                )}
+                {step.name}
+              </span>
+              {index < runs.length - 1 && (
+                <icons.chevron className="text-[12px] text-line" />
+              )}
             </span>
-          )}
+          ))}
         </div>
       </div>
 
-      {error && (
-        <p className="rounded border border-red-300 bg-red-50 p-3 text-sm text-red-800 dark:border-red-800 dark:bg-red-950 dark:text-red-200">
-          {error}
-        </p>
-      )}
+      {error && <Banner tone="error">{error}</Banner>}
 
       {detail.triage?.warnings.map((warning, index) => (
-        <p
-          key={index}
-          className="rounded border border-amber-400 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-200"
-        >
-          <strong>Warning: </strong>
-          {warning.message ?? warning.type}
-        </p>
+        <Banner key={index} tone="warn">
+          <span className="font-medium">{titleCase(warning.type ?? "warning")}: </span>
+          {warning.message ?? "Flagged for clinician attention."}
+        </Banner>
       ))}
 
-      <div className="grid gap-6 lg:grid-cols-2">
-        <Panel
-          title="Patient-reported facts"
-          subtitle="Original statements. Reviewer edits are stored separately and never overwrite these."
-        >
-          {detail.facts.length === 0 ? (
-            <p className="text-sm text-zinc-500">Nothing recorded yet.</p>
-          ) : (
-            <ul className="space-y-2 text-sm">
-              {detail.facts.map((fact) => (
-                <li key={fact.id} className="flex gap-2">
-                  <span className="shrink-0 rounded bg-zinc-100 px-1.5 py-0.5 text-xs text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">
-                    {fact.kind}
-                  </span>
-                  <span>{fact.value}</span>
-                  <span className="ml-auto shrink-0 text-xs text-zinc-400">
-                    turn {fact.source_turn}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
-
-          {detail.allergies_medications.length > 0 && (
-            <>
-              <h3 className="mt-5 text-xs font-semibold uppercase tracking-wide text-zinc-500">
-                Allergies &amp; medications
-              </h3>
-              <ul className="mt-2 space-y-1 text-sm">
-                {detail.allergies_medications.map((entry) => (
-                  <li key={entry.id}>
-                    <span className="rounded bg-zinc-100 px-1.5 py-0.5 text-xs dark:bg-zinc-800">
-                      {entry.kind}
-                    </span>{" "}
-                    {entry.name}
-                    {entry.reaction_or_dose && (
-                      <span className="text-zinc-500"> — {entry.reaction_or_dose}</span>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            </>
-          )}
-
-          {detail.missing_fields.length > 0 && (
-            <p className="mt-5 rounded bg-amber-50 p-2.5 text-xs text-amber-900 dark:bg-amber-950 dark:text-amber-200">
-              Missing information: {detail.missing_fields.join(", ")}
-            </p>
-          )}
-        </Panel>
-
-        <Panel
-          title="Administrative priority"
-          subtitle="Decided by configured rules, not by a language model."
-        >
-          {!detail.triage ? (
-            <p className="text-sm text-zinc-500">
-              Pre-screening has not run for this case yet.
-            </p>
-          ) : (
-            <>
-              <p className="text-sm">
-                Priority <strong>{detail.triage.priority}</strong> from rule
-                {detail.triage.rule_codes.length > 1 ? "s" : ""}{" "}
-                <code className="rounded bg-zinc-100 px-1 text-xs dark:bg-zinc-800">
-                  {detail.triage.rule_codes.join(", ")}
-                </code>
-              </p>
-              <h3 className="mt-4 text-xs font-semibold uppercase tracking-wide text-zinc-500">
-                Evidence
-              </h3>
-              <ul className="mt-2 space-y-1.5 text-sm">
-                {detail.triage.evidence.map((item, index) => (
-                  <li key={index} className="text-zinc-700 dark:text-zinc-300">
-                    <span className="text-xs text-zinc-500">
-                      [{item.rule_code} · {item.matched_on}]
-                    </span>{" "}
-                    {item.text}
-                    {item.days !== undefined && (
-                      <span className="text-zinc-500">
-                        {" "}
-                        ({item.days} days ≥ {item.threshold_days})
-                      </span>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            </>
-          )}
-        </Panel>
-
-        <Panel title="Recommendation" subtitle="Advisory only — staff may override.">
-          {!detail.routing ? (
-            <p className="text-sm text-zinc-500">No recommendation yet.</p>
-          ) : (
+      <div className="grid items-start gap-5 xl:grid-cols-[19rem_minmax(0,1fr)_23rem]">
+        {/* --- column 1: the patient record ------------------------------- */}
+        <div className="space-y-5">
+          <Panel eyebrow="Profile" title="Patient">
             <dl className="space-y-2 text-sm">
-              <div className="flex gap-2">
-                <dt className="w-32 shrink-0 text-zinc-500">Department</dt>
-                <dd>{detail.routing.specialty}</dd>
-              </div>
-              <div className="flex gap-2">
-                <dt className="w-32 shrink-0 text-zinc-500">Doctor</dt>
-                <dd>{detail.routing.doctor_name ?? "Unassigned"}</dd>
-              </div>
-              <div className="flex gap-2">
-                <dt className="w-32 shrink-0 text-zinc-500">Appointment</dt>
-                <dd>{detail.routing.appointment_type}</dd>
-              </div>
-              <div className="flex gap-2">
-                <dt className="w-32 shrink-0 text-zinc-500">Rationale</dt>
-                <dd className="text-zinc-600 dark:text-zinc-400">
-                  {detail.routing.rationale}
+              {Object.entries(demographics).map(([key, value]) => (
+                <div key={key} className="flex gap-3">
+                  <dt className="w-24 shrink-0 text-xs text-faint">{titleCase(key)}</dt>
+                  <dd className="text-dim">{String(value)}</dd>
+                </div>
+              ))}
+              <div className="flex gap-3">
+                <dt className="w-24 shrink-0 text-xs text-faint">Consent</dt>
+                <dd>
+                  <Tag tone={detail.consent_status === "granted" ? "low" : "high"}>
+                    {detail.consent_status}
+                  </Tag>
                 </dd>
               </div>
             </dl>
-          )}
-        </Panel>
+          </Panel>
 
-        <Panel
-          title="Medical records"
-          subtitle="Stored for you to open. Images are never interpreted by the system."
-        >
-          {detail.attachments.length === 0 ? (
-            <p className="text-sm text-zinc-500">No attachments.</p>
-          ) : (
-            <ul className="space-y-2 text-sm">
-              {detail.attachments.map((attachment) => (
-                <li key={attachment.id} className="flex items-center gap-2">
-                  <span className="rounded bg-zinc-100 px-1.5 py-0.5 text-xs dark:bg-zinc-800">
-                    {attachment.kind}
-                  </span>
-                  <a
-                    href={api.attachmentUrl(detail.case_id, attachment.id)}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="underline underline-offset-2"
-                  >
-                    {attachment.filename}
-                  </a>
-                  <span className="ml-auto text-xs text-zinc-400">
-                    {attachment.has_extracted_text
-                      ? "text extracted"
-                      : "not interpreted"}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </Panel>
-      </div>
-
-      <Panel
-        title="Clinician summary"
-        subtitle="Generated from patient-reported facts. Not a diagnosis."
-      >
-        {!detail.prescreening_summary ? (
-          <p className="text-sm text-zinc-500">Not generated yet.</p>
-        ) : (
-          <div className="space-y-3 text-sm">
-            <p>{summarySections.context_for_clinician as string}</p>
-            {(
-              [
-                ["Reported symptoms", "reported_symptoms"],
-                ["Relevant history", "relevant_history"],
-                ["Medications", "medications"],
-                ["Allergies", "allergies"],
-              ] as const
-            ).map(([label, key]) => {
-              const values = asStringList(summarySections[key]);
-              if (values.length === 0) return null;
-              return (
-                <p key={key}>
-                  <span className="text-zinc-500">{label}: </span>
-                  {values.join(", ")}
-                </p>
-              );
-            })}
-            {detail.prescreening_summary.missing_information.length > 0 && (
-              <p className="rounded bg-amber-50 p-2.5 text-xs text-amber-900 dark:bg-amber-950 dark:text-amber-200">
-                Missing: {detail.prescreening_summary.missing_information.join(", ")}
-              </p>
-            )}
-          </div>
-        )}
-      </Panel>
-
-      {/* --- clinician actions ------------------------------------------- */}
-
-      <Panel
-        title="Clinician review"
-        subtitle="Nothing is released to the patient until this is recorded."
-      >
-        {detail.review ? (
-          <p className="text-sm">
-            Recorded as <strong>{detail.review.decision}</strong> by{" "}
-            {detail.review.reviewer_role} on{" "}
-            {new Date(detail.review.created_at).toLocaleString()}.
-            {Object.keys(detail.review.edits).length > 0 && (
-              <span className="block mt-2 text-zinc-600 dark:text-zinc-400">
-                Edits (kept separate from patient statements):{" "}
-                <code className="rounded bg-zinc-100 px-1 text-xs dark:bg-zinc-800">
-                  {JSON.stringify(detail.review.edits)}
-                </code>
-              </span>
-            )}
-          </p>
-        ) : (
-          <div className="space-y-3">
-            <div className="flex flex-wrap gap-2">
-              <input
-                value={reviewerRole}
-                onChange={(event) => setReviewerRole(event.target.value)}
-                placeholder="reviewer role"
-                className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-950"
-              />
-              <input
-                value={editField}
-                onChange={(event) => setEditField(event.target.value)}
-                placeholder="field to correct (optional)"
-                className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-950"
-              />
-              <input
-                value={editValue}
-                onChange={(event) => setEditValue(event.target.value)}
-                placeholder="corrected value"
-                className="flex-1 rounded-md border border-zinc-300 px-3 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-950"
-              />
-            </div>
-            <div className="flex gap-2">
-              <button
-                disabled={busy}
-                onClick={() =>
-                  void run(() => api.review(caseId, "approve", reviewerRole))
-                }
-                className="rounded-md bg-emerald-700 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-600 disabled:opacity-50"
-              >
-                Approve
-              </button>
-              <button
-                disabled={busy || !editField.trim()}
-                onClick={() =>
-                  void run(() =>
-                    api.review(caseId, "edit", reviewerRole, {
-                      [editField.trim()]: editValue,
-                    }),
-                  )
-                }
-                className="rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900"
-              >
-                Approve with edit
-              </button>
-              <button
-                disabled={busy}
-                onClick={() =>
-                  void run(() => api.review(caseId, "reject", reviewerRole))
-                }
-                className="rounded-md border border-red-400 px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-50 disabled:opacity-50 dark:text-red-300 dark:hover:bg-red-950"
-              >
-                Reject
-              </button>
-            </div>
-          </div>
-        )}
-      </Panel>
-
-      {approved && (
-        <Panel
-          title="Consultation notes"
-          subtitle="Written by the clinician. The final summary reads these; it never rewrites them."
-        >
-          <ul className="mb-4 space-y-2 text-sm">
-            {detail.consultation_notes.map((note) => (
-              <li
-                key={note.id}
-                className="rounded border border-zinc-200 p-3 dark:border-zinc-800"
-              >
-                <p className="text-xs text-zinc-500">
-                  {note.doctor_id} · {new Date(note.created_at).toLocaleString()}
-                </p>
-                <p className="mt-1">{note.notes}</p>
-                {note.follow_up_instructions && (
-                  <p className="mt-1 text-zinc-600 dark:text-zinc-400">
-                    Follow-up: {note.follow_up_instructions}
-                  </p>
-                )}
-              </li>
-            ))}
-          </ul>
-
-          <div className="space-y-2">
-            <input
-              value={doctorId}
-              onChange={(event) => setDoctorId(event.target.value)}
-              placeholder="doctor id (e.g. dr_mehta)"
-              className="w-full rounded-md border border-zinc-300 px-3 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-950"
-            />
-            <textarea
-              value={notes}
-              onChange={(event) => setNotes(event.target.value)}
-              placeholder="Consultation notes…"
-              rows={3}
-              className="w-full rounded-md border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-950"
-            />
-            <input
-              value={followUp}
-              onChange={(event) => setFollowUp(event.target.value)}
-              placeholder="Follow-up instructions (optional)"
-              className="w-full rounded-md border border-zinc-300 px-3 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-950"
-            />
-            <div className="flex gap-2">
-              <button
-                disabled={busy || !notes.trim() || !doctorId.trim()}
-                onClick={() =>
-                  void run(async () => {
-                    await api.addConsultationNote(caseId, {
-                      doctor_id: doctorId.trim(),
-                      notes: notes.trim(),
-                      follow_up_instructions: followUp.trim() || null,
-                    });
-                    setNotes("");
-                    setFollowUp("");
-                  })
-                }
-                className="rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900"
-              >
-                Save notes
-              </button>
-              <button
-                disabled={busy || detail.consultation_notes.length === 0}
-                onClick={() => void run(() => api.finalize(caseId))}
-                className="rounded-md bg-emerald-700 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-600 disabled:opacity-50"
-              >
-                Finalise visit summary
-              </button>
-            </div>
-          </div>
-        </Panel>
-      )}
-
-      {detail.final_summary && (
-        <Panel title="Final visit summary" subtitle="Released after clinician approval.">
-          <div className="space-y-2 text-sm">
-            <p>
-              <span className="text-zinc-500">Visit reason: </span>
-              {finalSections.visit_reason as string}
-            </p>
-            <p>{finalSections.consultation_overview as string}</p>
-            <p>
-              <span className="text-zinc-500">Notes: </span>
-              {finalSections.doctor_notes_summary as string}
-            </p>
-            {asStringList(finalSections.follow_up_instructions).length > 0 && (
-              <div>
-                <span className="text-zinc-500">Follow-up:</span>
-                <ul className="mt-1 list-inside list-disc">
-                  {asStringList(finalSections.follow_up_instructions).map(
-                    (instruction, index) => (
-                      <li key={index}>{instruction}</li>
-                    ),
-                  )}
-                </ul>
+          <Panel
+            eyebrow="Patient-reported"
+            title="Facts"
+            actions={<span className="text-[11px] text-faint">{detail.facts.length}</span>}
+          >
+            {detail.facts.length === 0 ? (
+              <Empty>Nothing recorded yet.</Empty>
+            ) : (
+              <div className="space-y-4">
+                {FACT_GROUPS.map(([label, kinds]) => {
+                  const facts = detail.facts.filter((f) => kinds.includes(f.kind));
+                  if (facts.length === 0) return null;
+                  return (
+                    <div key={label}>
+                      <p className="eyebrow mb-1.5">{label}</p>
+                      <ul className="space-y-1.5">
+                        {facts.map((fact) => (
+                          <li key={fact.id} className="flex gap-2 text-sm">
+                            <span className="mt-1.5 size-1 shrink-0 rounded-full bg-accent/70" />
+                            <span className="text-dim">{fact.value}</span>
+                            <span className="ml-auto shrink-0 font-mono text-[10px] text-faint">
+                              t{fact.source_turn}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  );
+                })}
               </div>
             )}
-            <p className="mt-3 rounded bg-zinc-100 p-2.5 text-xs dark:bg-zinc-800">
-              A draft scheduling task was created. Draft only — nothing has been
-              booked.
+            <p className="mt-4 border-t border-line-soft pt-2.5 text-[11px] leading-4 text-faint">
+              Original patient statements. Clinician corrections are stored
+              separately and never overwrite these.
             </p>
-          </div>
-        </Panel>
-      )}
+          </Panel>
 
-      <Panel title="Consent &amp; audit timeline" subtitle={`${audit.length} events`}>
-        <ol className="space-y-2 text-sm">
-          {audit.map((event) => (
-            <li key={event.id} className="flex gap-3">
-              <span className="w-40 shrink-0 text-xs text-zinc-500">
-                {new Date(event.created_at).toLocaleString()}
-              </span>
-              <span className="w-56 shrink-0 font-medium">{event.action}</span>
-              <span className="text-zinc-600 dark:text-zinc-400">
-                {event.actor}
-              </span>
-            </li>
-          ))}
-        </ol>
-      </Panel>
+          <Panel eyebrow="Clinical" title="Allergies & medications">
+            {detail.allergies_medications.length === 0 ? (
+              <Empty>None recorded.</Empty>
+            ) : (
+              <ul className="space-y-2">
+                {detail.allergies_medications.map((entry) => (
+                  <li key={entry.id} className="flex items-start gap-2.5 text-sm">
+                    <span
+                      className={`mt-0.5 shrink-0 ${
+                        entry.kind === "allergy" ? "text-high" : "text-info"
+                      }`}
+                    >
+                      {entry.kind === "allergy" ? <icons.alert /> : <icons.pill />}
+                    </span>
+                    <span>
+                      <span className="text-text">{entry.name}</span>
+                      {entry.reaction_or_dose && (
+                        <span className="block text-xs text-faint">
+                          {entry.reaction_or_dose}
+                        </span>
+                      )}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Panel>
+
+          <Panel eyebrow="Uploads" title="Medical records">
+            {detail.attachments.length === 0 ? (
+              <Empty>No attachments.</Empty>
+            ) : (
+              <ul className="space-y-2">
+                {detail.attachments.map((file) => (
+                  <li key={file.id}>
+                    <a
+                      href={api.attachmentUrl(detail.case_id, file.id)}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="flex items-center gap-3 rounded border border-line bg-raised/40 p-2.5 transition-colors hover:border-faint"
+                    >
+                      <span className="text-faint">
+                        {file.mime_type.startsWith("image/") ? (
+                          <icons.image className="text-[18px]" />
+                        ) : (
+                          <icons.file className="text-[18px]" />
+                        )}
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-xs font-medium text-text">
+                          {file.filename}
+                        </span>
+                        <span className="block text-[10px] text-faint">
+                          {file.kind.replaceAll("_", " ")} ·{" "}
+                          {(file.size_bytes / 1024).toFixed(0)} KB ·{" "}
+                          {file.has_extracted_text ? "text extracted" : "stored only"}
+                        </span>
+                      </span>
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <p className="mt-3 border-t border-line-soft pt-2.5 text-[11px] leading-4 text-faint">
+              Attachment content is never passed to the triage engine — an upload
+              cannot change a priority.
+            </p>
+          </Panel>
+        </div>
+
+        {/* --- column 2: the AI output and the clinician's actions -------- */}
+        <div className="space-y-5">
+          <Panel
+            eyebrow="Rule engine"
+            title="AI pre-screening"
+            actions={<PriorityTag priority={detail.triage?.priority} />}
+          >
+            {!detail.triage ? (
+              <Empty>Pre-screening has not run for this case yet.</Empty>
+            ) : (
+              <div className="grid gap-5 md:grid-cols-2">
+                <div>
+                  <p className="eyebrow mb-2">Key facts</p>
+                  <ul className="space-y-1.5 text-sm">
+                    {(asStringList(summary.reported_symptoms).length
+                      ? asStringList(summary.reported_symptoms)
+                      : detail.facts.filter((f) => f.kind === "symptom").map((f) => f.value)
+                    ).map((item, index) => (
+                      <li key={index} className="flex gap-2">
+                        <icons.heart className="mt-0.5 shrink-0 text-[13px] text-high" />
+                        <span className="text-dim">{item}</span>
+                      </li>
+                    ))}
+                    {asStringList(summary.relevant_history).map((item, index) => (
+                      <li key={`h${index}`} className="flex gap-2">
+                        <icons.clock className="mt-0.5 shrink-0 text-[13px] text-faint" />
+                        <span className="text-dim">{item}</span>
+                      </li>
+                    ))}
+                  </ul>
+
+                  {(detail.prescreening_summary?.missing_information.length ?? 0) > 0 && (
+                    <>
+                      <p className="eyebrow mb-1.5 mt-4">Missing</p>
+                      <ul className="space-y-1">
+                        {detail.prescreening_summary!.missing_information.map((item) => (
+                          <li key={item} className="flex gap-2 text-sm text-med">
+                            <icons.alert className="mt-0.5 shrink-0 text-[13px]" />
+                            {titleCase(item)}
+                          </li>
+                        ))}
+                      </ul>
+                    </>
+                  )}
+                </div>
+
+                <div>
+                  <p className="eyebrow mb-2">Evidence</p>
+                  <ul className="space-y-2">
+                    {detail.triage.evidence.map((item, index) => (
+                      <li
+                        key={index}
+                        className="rounded border border-line bg-ink/50 px-3 py-2"
+                      >
+                        <p className="flex items-center gap-2">
+                          <span className="font-mono text-[11px] text-accent">
+                            {item.rule_code}
+                          </span>
+                          <span className="text-[10px] text-faint">
+                            matched on {item.matched_on}
+                          </span>
+                        </p>
+                        <p className="mt-1 text-xs text-dim">
+                          {item.text ?? item.keyword}
+                          {item.days !== undefined && (
+                            <span className="text-faint">
+                              {" "}
+                              ({item.days} days ≥ {item.threshold_days})
+                            </span>
+                          )}
+                        </p>
+                      </li>
+                    ))}
+                  </ul>
+                  <p className="mt-3 flex gap-1.5 text-[11px] leading-4 text-faint">
+                    <icons.shield className="mt-px shrink-0 text-[13px] text-accent" />
+                    Priority came from rules{" "}
+                    <span className="font-mono text-accent">
+                      {detail.triage.rule_codes.join(", ")}
+                    </span>
+                    , not from a language model.
+                  </p>
+                </div>
+              </div>
+            )}
+          </Panel>
+
+          <Panel eyebrow="Advisory" title="Care recommendation">
+            {!detail.routing ? (
+              <Empty>No recommendation yet.</Empty>
+            ) : (
+              <>
+                <div className="grid gap-3 sm:grid-cols-3">
+                  {(
+                    [
+                      ["Department", detail.routing.specialty, icons.route],
+                      [
+                        "Doctor",
+                        detail.routing.doctor_name ?? "Unassigned",
+                        icons.stethoscope,
+                      ],
+                      ["Appointment", detail.routing.appointment_type, icons.clock],
+                    ] as const
+                  ).map(([label, value, Glyph]) => (
+                    <div
+                      key={label}
+                      className="rounded border border-line bg-raised/40 px-3 py-2.5"
+                    >
+                      <p className="eyebrow flex items-center gap-1.5">
+                        <Glyph className="text-[13px]" />
+                        {label}
+                      </p>
+                      <p className="mt-1 text-sm font-medium">{value}</p>
+                    </div>
+                  ))}
+                </div>
+                <p className="mt-3 text-xs leading-5 text-dim">
+                  {detail.routing.rationale}
+                </p>
+              </>
+            )}
+          </Panel>
+
+          <Panel eyebrow="Generated" title="Clinician brief">
+            {!detail.prescreening_summary ? (
+              <Empty>Not generated yet.</Empty>
+            ) : (
+              <div className="space-y-3 text-sm">
+                <p className="leading-6 text-dim">
+                  {summary.context_for_clinician as string}
+                </p>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  {(
+                    [
+                      ["Reported symptoms", "reported_symptoms"],
+                      ["Relevant history", "relevant_history"],
+                      ["Medications", "medications"],
+                      ["Allergies", "allergies"],
+                    ] as const
+                  ).map(([label, key]) => {
+                    const values = asStringList(summary[key]);
+                    if (values.length === 0) return null;
+                    return (
+                      <div key={key}>
+                        <p className="eyebrow mb-1">{label}</p>
+                        <div className="flex flex-wrap gap-1">
+                          {values.map((value, index) => (
+                            <Tag key={index}>{value}</Tag>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+                <p className="border-t border-line-soft pt-2.5 text-[11px] text-faint">
+                  Written from recorded facts only. Not a diagnosis.
+                </p>
+              </div>
+            )}
+          </Panel>
+
+          {/* --- clinician gate ------------------------------------------ */}
+          <Panel
+            eyebrow="Human in the loop"
+            title="Clinician review"
+            actions={
+              detail.review ? (
+                <Tag tone={detail.review.decision === "reject" ? "high" : "low"}>
+                  {detail.review.decision}
+                </Tag>
+              ) : (
+                <Tag tone="med">
+                  <Dot tone="med" live />
+                  awaiting decision
+                </Tag>
+              )
+            }
+          >
+            {detail.review ? (
+              <div className="text-sm text-dim">
+                Recorded as <span className="text-text">{detail.review.decision}</span> by{" "}
+                {detail.review.reviewer_role} at{" "}
+                <span suppressHydrationWarning>
+                  {new Date(detail.review.created_at).toLocaleString()}
+                </span>
+                .
+                {Object.keys(detail.review.edits).length > 0 && (
+                  <div className="mt-3">
+                    <p className="eyebrow mb-1">Clinician corrections</p>
+                    <dl className="space-y-1">
+                      {Object.entries(detail.review.edits).map(([key, value]) => (
+                        <div key={key} className="flex gap-2 text-xs">
+                          <dt className="font-mono text-faint">{key}</dt>
+                          <dd className="text-text">{String(value)}</dd>
+                        </div>
+                      ))}
+                    </dl>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <p className="text-xs text-dim">
+                  Nothing is released to the patient and no consultation can be
+                  recorded until a decision exists.
+                </p>
+                <div className="grid gap-2 sm:grid-cols-3">
+                  <input
+                    value={reviewerRole}
+                    onChange={(event) => setReviewerRole(event.target.value)}
+                    placeholder="reviewer role"
+                    className={inputClass}
+                  />
+                  <input
+                    value={editField}
+                    onChange={(event) => setEditField(event.target.value)}
+                    placeholder="field to correct (optional)"
+                    className={inputClass}
+                  />
+                  <input
+                    value={editValue}
+                    onChange={(event) => setEditValue(event.target.value)}
+                    placeholder="corrected value"
+                    className={inputClass}
+                  />
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    variant="primary"
+                    disabled={busy}
+                    onClick={() => void run(() => api.review(caseId, "approve", reviewerRole))}
+                  >
+                    <icons.check className="text-[15px]" />
+                    Approve
+                  </Button>
+                  <Button
+                    disabled={busy || !editField.trim()}
+                    onClick={() =>
+                      void run(() =>
+                        api.review(caseId, "edit", reviewerRole, {
+                          [editField.trim()]: editValue,
+                        }),
+                      )
+                    }
+                  >
+                    Approve with correction
+                  </Button>
+                  <Button
+                    variant="danger"
+                    disabled={busy}
+                    onClick={() => void run(() => api.review(caseId, "reject", reviewerRole))}
+                  >
+                    Reject
+                  </Button>
+                </div>
+              </div>
+            )}
+          </Panel>
+
+          {approved && (
+            <Panel eyebrow="Consultation" title="Doctor notes">
+              {detail.consultation_notes.length > 0 && (
+                <ul className="mb-4 space-y-2">
+                  {detail.consultation_notes.map((note) => (
+                    <li key={note.id} className="rounded border border-line bg-ink/50 p-3">
+                      <p className="flex items-center gap-2 text-[11px] text-faint">
+                        <icons.stethoscope className="text-[13px]" />
+                        {note.doctor_id}
+                        <span suppressHydrationWarning>
+                          · {new Date(note.created_at).toLocaleString()}
+                        </span>
+                      </p>
+                      <p className="mt-1.5 text-sm leading-6 text-dim">{note.notes}</p>
+                      {note.follow_up_instructions && (
+                        <p className="mt-1.5 text-xs text-accent">
+                          Follow-up: {note.follow_up_instructions}
+                        </p>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+
+              <div className="space-y-2">
+                <input
+                  value={doctorId}
+                  onChange={(event) => setDoctorId(event.target.value)}
+                  placeholder="doctor id (e.g. dr_rao)"
+                  className={inputClass}
+                />
+                <textarea
+                  value={notes}
+                  onChange={(event) => setNotes(event.target.value)}
+                  placeholder="Consultation notes…"
+                  rows={3}
+                  className={`${inputClass} resize-y`}
+                />
+                <input
+                  value={followUp}
+                  onChange={(event) => setFollowUp(event.target.value)}
+                  placeholder="Follow-up instructions (optional)"
+                  className={inputClass}
+                />
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    disabled={busy || !notes.trim() || !doctorId.trim()}
+                    onClick={() =>
+                      void run(async () => {
+                        await api.addConsultationNote(caseId, {
+                          doctor_id: doctorId.trim(),
+                          notes: notes.trim(),
+                          follow_up_instructions: followUp.trim() || null,
+                        });
+                        setNotes("");
+                        setFollowUp("");
+                      })
+                    }
+                  >
+                    Save notes
+                  </Button>
+                  <Button
+                    variant="primary"
+                    disabled={busy || detail.consultation_notes.length === 0}
+                    onClick={() => void run(() => api.finalize(caseId))}
+                  >
+                    <icons.play className="text-[13px]" />
+                    Run final summary
+                  </Button>
+                </div>
+              </div>
+            </Panel>
+          )}
+
+          {detail.final_summary && (
+            <Panel
+              eyebrow="Released"
+              title="Final visit summary"
+              actions={<Tag tone="low">completed</Tag>}
+            >
+              <div className="space-y-3 text-sm">
+                <div>
+                  <p className="eyebrow mb-1">Visit reason</p>
+                  <p className="text-dim">{finalSections.visit_reason as string}</p>
+                </div>
+                <div>
+                  <p className="eyebrow mb-1">Overview</p>
+                  <p className="leading-6 text-dim">
+                    {finalSections.consultation_overview as string}
+                  </p>
+                </div>
+                <div>
+                  <p className="eyebrow mb-1">Doctor notes</p>
+                  <p className="leading-6 text-dim">
+                    {finalSections.doctor_notes_summary as string}
+                  </p>
+                </div>
+                {asStringList(finalSections.follow_up_instructions).length > 0 && (
+                  <div>
+                    <p className="eyebrow mb-1">Follow-up</p>
+                    <ul className="space-y-1">
+                      {asStringList(finalSections.follow_up_instructions).map(
+                        (instruction, index) => (
+                          <li key={index} className="flex gap-2 text-dim">
+                            <icons.check className="mt-1 shrink-0 text-[13px] text-accent" />
+                            {instruction}
+                          </li>
+                        ),
+                      )}
+                    </ul>
+                  </div>
+                )}
+                <p className="rounded border border-line bg-raised/50 px-3 py-2 text-[11px] text-faint">
+                  A draft scheduling task was created. Draft only — nothing has been
+                  booked.
+                </p>
+              </div>
+            </Panel>
+          )}
+        </div>
+
+        {/* --- column 3: how it got here ---------------------------------- */}
+        <div className="space-y-5">
+          <AgentRail runs={runs} />
+
+          <Panel
+            eyebrow="Observability"
+            title="Execution timeline"
+            actions={<span className="text-[11px] text-faint">{trace.length} events</span>}
+            bodyClassName="p-4"
+          >
+            {trace.length === 0 ? (
+              <Empty>No events recorded.</Empty>
+            ) : (
+              <ol className="space-y-0">
+                {trace.map((entry, index) => (
+                  <li key={entry.id} className="relative flex gap-3 pb-3 last:pb-0">
+                    {index < trace.length - 1 && (
+                      <span className="absolute left-[3.55rem] top-4 h-full w-px bg-line" />
+                    )}
+                    <span
+                      className="nums w-14 shrink-0 pt-px font-mono text-[10px] text-faint"
+                      suppressHydrationWarning
+                    >
+                      {humanTime(entry.at)}
+                    </span>
+                    <span className="z-10 mt-1 size-1.5 shrink-0 rounded-full bg-accent/60 ring-4 ring-surface" />
+                    <span className="min-w-0 flex-1">
+                      <span className="flex items-baseline gap-2">
+                        <span className="text-xs font-medium text-text">
+                          {entry.label}
+                        </span>
+                        <span className="nums ml-auto shrink-0 font-mono text-[10px] text-faint">
+                          +{duration(entry.offsetMs)}
+                        </span>
+                      </span>
+                      <span className="block truncate text-[10px] text-faint">
+                        {entry.actor}
+                        {entry.detail && ` · ${entry.detail}`}
+                      </span>
+                    </span>
+                  </li>
+                ))}
+              </ol>
+            )}
+          </Panel>
+        </div>
+      </div>
     </div>
   );
 }

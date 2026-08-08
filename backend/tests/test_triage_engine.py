@@ -9,10 +9,8 @@ Run from backend/:  pytest tests/
 from dataclasses import dataclass
 
 import pytest
-import yaml
 
-from config import settings
-from services import triage_engine
+from services import hospital_config, triage_engine
 
 
 @dataclass
@@ -38,8 +36,8 @@ class R:
 
 
 def load_configured_rules() -> list[R]:
-    """Use the real hospital.yaml so the test fails if the config drifts."""
-    config = yaml.safe_load(settings.HOSPITAL_CONFIG_PATH.read_text(encoding="utf-8"))
+    """Use the active hospital's real config so the test fails if it drifts."""
+    config = hospital_config.load()
     return [
         R(
             code=r["code"],

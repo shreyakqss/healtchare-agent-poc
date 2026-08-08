@@ -17,16 +17,20 @@ class Settings(BaseSettings):
     # LLM provider. Everything goes through services/llm_client.py, so swapping
     # providers means editing that one file plus these two settings.
     OLLAMA_BASE_URL: str = "http://localhost:11434"
-    OLLAMA_MODEL: str = "llama3.1:8b"
+    # OLLAMA_MODEL: str = "llama3.1:8b"
+    OLLAMA_MODEL: str = "gemma3:1b"
     LLM_TIMEOUT_SECONDS: float = 120.0
+    OPENAI_API_KEY: str | None = None
 
     # Uploaded medical documents and images. Synthetic fixtures only.
     UPLOAD_DIR: Path = BASE_DIR / "data" / "uploads"
     MAX_UPLOAD_MB: int = 25
 
-    # Kept as a bare file, not a `config/` package — that directory name would
-    # shadow this module the moment anyone added an __init__.py to it.
-    HOSPITAL_CONFIG_PATH: Path = BASE_DIR / "hospital.yaml"
+    # One YAML per hospital/clinic; the file stem is the hospital id. The
+    # active one is named in `active.txt` beside them (gitignored — it is local
+    # demo state), falling back to DEFAULT_HOSPITAL_ID.
+    HOSPITALS_DIR: Path = BASE_DIR / "data" / "hospitals"
+    DEFAULT_HOSPITAL_ID: str = "qss-demo-clinic"
 
     model_config = SettingsConfigDict(
         # Absolute, so settings load no matter which directory the process

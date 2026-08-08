@@ -1,26 +1,151 @@
 @import "tailwindcss";
 
+/* `dark:` follows the toggle, not the OS. The inline script in the layout
+ * resolves the OS preference once and always stamps `data-theme` on <html>,
+ * so one attribute drives both these utilities and the palette below. */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+/* Design tokens for the clinical operations console.
+ *
+ * Light is the default palette and dark is the single override block further
+ * down — every component references these semantic names, so a theme is a
+ * palette swap and nothing else. Roles, not shades:
+ *
+ *   ink      page background      surface  panels
+ *   raised   hover / elevation    line     hairline borders
+ *   text/dim/faint                primary / secondary / tertiary type
+ *
+ * `ink` stays recessed relative to `surface` in both themes, which is why an
+ * inset block reads as inset either way. */
+@theme {
+  --color-ink: #f2f5f8;
+  --color-surface: #ffffff;
+  --color-raised: #eaeff5;
+  --color-line: #d5dfe8;
+  --color-line-soft: #e6ecf2;
+
+  --color-text: #0d1a24;
+  --color-dim: #4a6072;
+  --color-faint: #647d90;
+
+  --color-accent: #0f766e;
+  --color-accent-dim: #2dd4bf;
+  /* Type laid directly on `accent` — the two swap independently. */
+  --color-on-accent: #ffffff;
+  --color-info: #2563eb;
+
+  --color-high: #d92038;
+  --color-med: #b45309;
+  --color-low: #047857;
+
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
+}
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  color-scheme: light;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
+/* The whole dark theme. Unlayered, so it wins over Tailwind's theme layer
+ * without needing a specificity fight. */
+[data-theme="dark"] {
+  color-scheme: dark;
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  --color-ink: #05080c;
+  --color-surface: #0a1017;
+  --color-raised: #101923;
+  --color-line: #1c2836;
+  --color-line-soft: #141d27;
+
+  --color-text: #e7eef6;
+  --color-dim: #93a6b8;
+  --color-faint: #5d7186;
+
+  --color-accent: #2ee6c5;
+  --color-accent-dim: #0f5f55;
+  --color-on-accent: #05080c;
+  --color-info: #4aa8ff;
+
+  --color-high: #ff4d5e;
+  --color-med: #f5a524;
+  --color-low: #34d399;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background:
+    radial-gradient(
+      70rem 40rem at 15% -10%,
+      color-mix(in oklab, var(--color-accent) 7%, transparent),
+      transparent
+    ),
+    radial-gradient(
+      55rem 35rem at 95% 0%,
+      color-mix(in oklab, var(--color-info) 6%, transparent),
+      transparent
+    ),
+    var(--color-ink);
+  background-attachment: fixed;
+  color: var(--color-text);
+  font-family: var(--font-sans);
+}
+
+/* Section eyebrow — the small uppercase label above a block of content. */
+.eyebrow {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--color-faint);
+}
+
+/* Tabular figures keep metric rows from shifting as numbers tick. */
+.nums {
+  font-variant-numeric: tabular-nums;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-line);
+  border: 3px solid transparent;
+  background-clip: content-box;
+  border-radius: 99px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+@keyframes pulse-ring {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in oklab, var(--color-info) 55%, transparent);
+  }
+  70% {
+    box-shadow: 0 0 0 7px transparent;
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+.running-dot {
+  animation: pulse-ring 1.6s ease-out infinite;
+}
+
+/* Dashed edge that travels between two graph nodes while one is executing. */
+@keyframes flow-dash {
+  to {
+    stroke-dashoffset: -16;
+  }
+}
+.edge-live {
+  stroke-dasharray: 4 4;
+  animation: flow-dash 0.7s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .running-dot,
+  .edge-live {
+    animation: none;
+  }
 }
