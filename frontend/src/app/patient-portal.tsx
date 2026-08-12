@@ -5,7 +5,9 @@ import { useEffect, useRef, useState } from "react";
 import {
   ApiError,
   api,
+  type AnswerOptions,
   type Attachment,
+  type MessageResponse,
   type TranscriptTurn,
   type VoiceStatus,
 } from "@/lib/api";
@@ -51,6 +53,7 @@ const STEPS = [
   { label: "Consent", fields: [] as string[] },
   { label: "Reason for visit", fields: ["reason_for_visit"] },
   { label: "Symptoms", fields: ["symptom", "duration"] },
+  { label: "About you", fields: ["name", "age", "gender"] },
   { label: "Medical history", fields: ["history"] },
   { label: "Medications & allergies", fields: ["medication", "allergy"] },
   { label: "Contact preference", fields: ["contact_preference"] },
@@ -95,6 +98,19 @@ export default function PatientPortal({
   const [submitted, setSubmitted] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
   const scroller = useRef<HTMLDivElement>(null);
+
+  // --- one-tap answers -----------------------------------------------------
+  // Offered beside the question, never instead of it: tapping one sends an
+  // ordinary patient message and the composer never goes away. Fetched after
+  // the reply has been read, so nothing here can delay a token of it.
+  const [options, setOptions] = useState<AnswerOptions | null>(null);
+  /** A chosen option that still needs a detail typed — "Phone" wants a number. */
+  const [pending, setPending] = useState<{ option: string; prompt: string } | null>(
+    null,
+  );
+  const [pendingDetail, setPendingDetail] = useState("");
+  /** Which turn the options belong to, so a late reply cannot show stale chips. */
+  const turnToken = useRef(0);
 
   // --- voice ---------------------------------------------------------------
   // Voice is an input channel, so it owns no conversation state of its own:
@@ -156,8 +172,37 @@ export default function PatientPortal({
    * speech segment to the playback queue. There is one generated reply and it
    * is heard and read at the same time.
    */
+  /**
+   * Fetch the one-tap answers for the question that just arrived.
+   *
+   * Deliberately not awaited by the turn: the reply is already on screen and
+   * readable, and chips appearing a moment later costs the patient nothing.
+   * `token` drops the result if another turn has started since — a fast typist
+   * must never be shown chips for a question they have already answered.
+   */
+  async function loadOptions(result: MessageResponse, token: number) {
+    if (result.intake_complete || !result.next_question) return;
+    try {
+      const next = await api.suggestions(
+        result.session_id,
+        result.next_question,
+        result.asks_field,
+      );
+      if (token !== turnToken.current) return;
+      setOptions(next.options.length ? next : null);
+    } catch {
+      /* Options are a convenience. Without them the patient types. */
+    }
+  }
+
   async function runTurn(content: string, channel: "text" | "voice") {
     if (!sessionId) return;
+
+    // Whatever was on offer answered the previous question.
+    const token = ++turnToken.current;
+    setOptions(null);
+    setPending(null);
+    setPendingDetail("");
 
     // Voice: the queue lives for one turn, so an interrupt cannot leak into
     // the next one. Text: no queue at all, so a broken TTS model cannot touch
@@ -211,6 +256,8 @@ export default function PatientPortal({
       // stop early with fields still outstanding.
       if (result.intake_complete && !submitted) {
         await submit();
+      } else {
+        void loadOptions(result, token);
       }
     } catch (err) {
       queue?.stop();
@@ -227,6 +274,36 @@ export default function PatientPortal({
     if (!sessionId || !draft.trim() || busy || working) return;
     const content = draft.trim();
     setDraft("");
+    setTranscript((prior) => [...prior, { role: "patient", content }]);
+    await runTurn(content, "text");
+  }
+
+  /**
+   * Tap an offered answer.
+   *
+   * Most send straight away — the whole point is one tap instead of typing.
+   * The ones that need a detail ("Phone" wants a number) open a single input
+   * instead, and what is finally sent is still one ordinary patient message.
+   */
+  async function choose(option: string) {
+    if (busy || working) return;
+    const prompt = options?.follow_ups?.[option];
+    if (prompt) {
+      setPending({ option, prompt });
+      setPendingDetail("");
+      return;
+    }
+    setTranscript((prior) => [...prior, { role: "patient", content: option }]);
+    await runTurn(option, "text");
+  }
+
+  /** Send the chosen option with whatever was typed after it, as one turn. */
+  async function sendPending() {
+    if (!pending || busy || working) return;
+    const typed = pendingDetail.trim();
+    const content = typed
+      ? `Contact me by ${pending.option.toLowerCase()}: ${typed}`
+      : `Contact me by ${pending.option.toLowerCase()}.`;
     setTranscript((prior) => [...prior, { role: "patient", content }]);
     await runTurn(content, "text");
   }
@@ -376,6 +453,14 @@ export default function PatientPortal({
                 I do not consent
               </Button>
             </div>
+
+            <p className="border-t border-line-soft pt-4 text-xs text-faint">
+              Demonstrating rather than typing?{" "}
+              <Link href="/simulation" className="text-dim hover:text-accent">
+                Run synthetic patients
+              </Link>{" "}
+              through this same intake instead.
+            </p>
           </div>
         </div>
       </div>
@@ -523,6 +608,74 @@ export default function PatientPortal({
             </p>
           ) : (
             <>
+              {/* One-tap answers. Never a menu: the composer below stays live,
+                  and anything not on offer is typed as it always was. */}
+              {pending ? (
+                <div className="mb-3 rounded border border-accent/35 bg-accent/6 px-3 py-2.5">
+                  <div className="flex items-center gap-2">
+                    <Tag tone="accent">{pending.option}</Tag>
+                    <span className="text-xs text-dim">{pending.prompt}</span>
+                    <button
+                      onClick={() => setPending(null)}
+                      className="ml-auto text-[11px] text-faint hover:text-dim"
+                    >
+                      change
+                    </button>
+                  </div>
+                  <div className="mt-2 flex items-stretch gap-2">
+                    <input
+                      value={pendingDetail}
+                      onChange={(event) => setPendingDetail(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") {
+                          event.preventDefault();
+                          void sendPending();
+                        }
+                      }}
+                      // Gets the right keyboard on a phone, which is most of
+                      // why anyone taps a chip instead of typing.
+                      type={pending.option === "Email" ? "email" : "tel"}
+                      inputMode={pending.option === "Email" ? "email" : "tel"}
+                      autoFocus
+                      placeholder={pending.prompt}
+                      disabled={busy || working}
+                      className={`${inputClass} h-9 min-w-0 flex-1`}
+                    />
+                    <Button
+                      variant="primary"
+                      onClick={() => void sendPending()}
+                      disabled={busy || working}
+                      className="h-9 shrink-0 px-3"
+                    >
+                      <icons.send className="text-[14px]" />
+                      Send
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                options && (
+                  <div className="mb-3">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {options.options.map((option) => (
+                        <button
+                          key={option}
+                          onClick={() => void choose(option)}
+                          disabled={busy || working}
+                          className="rounded-full border border-line bg-raised/50 px-3 py-1.5 text-xs text-dim transition-colors hover:border-accent/45 hover:bg-accent/8 hover:text-accent disabled:cursor-not-allowed disabled:opacity-45"
+                        >
+                          {option}
+                        </button>
+                      ))}
+                    </div>
+                    <p className="mt-1.5 text-[11px] text-faint">
+                      {options.source === "llm"
+                        ? "Shortcuts based on what you have already told us — tap one, or type your own answer."
+                        : "Tap an answer, or type your own."}
+                    </p>
+                  </div>
+                )
+              )}
+
               {/* Voice is optional: if the models are missing the tab explains
                   why and text intake is untouched. */}
               <div className="mb-3 flex items-center gap-2">
@@ -699,11 +852,11 @@ export default function PatientPortal({
           >
             {submitted ? "Submitted" : "Submit for clinician review"}
           </Button>
-          {!intakeComplete && !submitted && turns > 0 && (
+          {/* {!intakeComplete && !submitted && turns > 0 && (
             <p className="mt-2 text-[11px] text-med">
               You can submit now, but the assistant still has a few questions.
             </p>
-          )}
+          )} */}
         </Panel>
       </div>
     </div>

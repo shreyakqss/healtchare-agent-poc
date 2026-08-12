@@ -15,8 +15,19 @@ from sqlalchemy.orm import Session
 from agents import intake_agent
 from agents.question_planner import missing_fields
 from models import AuditEvent, IntakeMessage, IntakeSession, PatientCase, get_db
-from schemas.request import ConsentRequest, MessageRequest, StartSessionRequest
-from schemas.response import MessageResponse, SessionResponse, TurnEvent
+from schemas.request import (
+    ConsentRequest,
+    MessageRequest,
+    StartSessionRequest,
+    SuggestionRequest,
+)
+from schemas.response import (
+    AnswerOptionsResponse,
+    MessageResponse,
+    SessionResponse,
+    TurnEvent,
+)
+from services import answer_options
 from services.voice import split_for_speech
 from workflow.graph import intake_graph, run_config
 
@@ -259,7 +270,36 @@ async def process_turn(
             missing_fields=state.get("missing_fields", missing_fields(db, case.id)),
             intake_complete=intake_complete,
             transcript=_transcript(db, session.id),
+            asks_field=state.get("asks_field") or None,
         ),
+    )
+
+
+@router.post("/{session_id}/suggestions", response_model=AnswerOptionsResponse)
+async def suggest_answers(
+    session_id: uuid.UUID, payload: SuggestionRequest, db: Session = Depends(get_db)
+):
+    """One-tap answers for the question that was just asked.
+
+    Asked for separately, after the reply has been read, rather than folded
+    into the turn: the planner's reply streams as free text and is generated
+    exactly once, and this must not delay a word of it. A patient who never
+    sees a chip has lost nothing but a tap, so failures come back as an empty
+    list rather than an error.
+    """
+    session, _ = _load(db, session_id)
+    options, source = await answer_options.suggest(
+        payload.field, payload.question, _transcript(db, session.id)
+    )
+    return AnswerOptionsResponse(
+        field=payload.field,
+        options=options,
+        source=source,
+        follow_ups={
+            option: prompt
+            for option in options
+            if (prompt := answer_options.follow_up_for(payload.field, option))
+        },
     )
 
 

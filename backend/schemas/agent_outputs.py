@@ -18,7 +18,14 @@ FactKind = Literal[
     "history",
     "condition",
     "contact_preference",
-    "demographic",
+    # Who the patient is. Three kinds rather than one "demographic" catch-all:
+    # intake tracks each required field separately, and a single kind meant a
+    # patient who gave only their age closed the whole question. The catch-all
+    # was also where the model put its inventions — it filed a sex for patients
+    # who never stated one.
+    "name",
+    "age",
+    "gender",
 ]
 
 
@@ -96,6 +103,17 @@ class ExtractedAllergyMedication(BaseModel):
     kind: Literal["allergy", "medication"]
     name: str
     reaction_or_dose: str = ""
+
+
+class AnswerOptions(BaseModel):
+    """One-tap replies to the question intake just asked.
+
+    A convenience for the patient, not a step in the workflow: whatever is
+    tapped becomes an ordinary patient message. Empty is a valid answer — an
+    open question with no short answers should offer none.
+    """
+
+    options: list[str] = Field(default_factory=list)
 
 
 class ExtractionResult(BaseModel):

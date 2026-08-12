@@ -434,6 +434,13 @@ export default function OpsView({
         subtitle="Every agent in the patient-care pipeline, what it produced, and how long it took. Timings are real elapsed times read back from the audit trail."
         actions={
           <>
+            <Link
+              href="/simulation"
+              className="inline-flex items-center gap-2 rounded border border-line px-3 py-1.5 text-sm text-dim transition-colors hover:border-faint hover:text-text"
+            >
+              <icons.users className="text-[15px]" />
+              Simulate patients
+            </Link>
             <Button onClick={toggleLive} variant={live ? "primary" : "ghost"}>
               {live ? <icons.stop className="text-[13px]" /> : <icons.play className="text-[13px]" />}
               {live ? "Live" : "Go live"}

@@ -26,6 +26,15 @@ class MessageRequest(BaseModel):
     channel: Literal["text", "voice"] = "text"
 
 
+class SuggestionRequest(BaseModel):
+    """Ask for one-tap answers to the question just asked."""
+
+    question: str = Field(min_length=1, max_length=2000)
+    #: The required field the question is for, as returned on the turn. Decides
+    #: whether the answers are a fixed list or are generated.
+    field: str | None = None
+
+
 class ReviewRequest(BaseModel):
     decision: Literal["approve", "edit", "reject"]
     reviewer_role: str = Field(default="clinician", max_length=64)

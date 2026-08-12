@@ -15,7 +15,7 @@ Backend — **run from `backend/`**, imports are top-level absolute (`from confi
 ```powershell
 activatevenv AI-POC                  # venv lives at D:\Python\virtual_envs\AI-POC
 python scripts/seed.py --reset       # create tables + seed rules and 5 synthetic cases
-pytest tests/                        # triage engine, hospital config, voice audio + speech segmentation
+pytest tests/                        # triage engine, hospital config, voice audio + speech segmentation, patient agent
 uvicorn main:app --reload            # http://localhost:8000, docs at /docs
 ```
 
@@ -57,6 +57,25 @@ These are enforced in code, not just documented. Don't refactor them away:
 
 So every assistant question stores the field it was for (`IntakeMessage.asks_field`), and `_settle_last_question` closes it on the next turn by writing a real row. **The value is not one thing** — `NONE_REPORTED` for a denial (`is_denial`), `DECLINED` when the patient asks to move on (`wants_to_move_on`), `NOT_CAPTURED` when they answered and the extractor made nothing of it. Collapsing those was the first attempt and it filed "symptom: None reported" on a chest-pain case; never write a denial the patient did not make. Intake also always closes with a spoken message (`CLOSING`), because returning `question=""` stores no message and reads as a freeze.
 
+**Who the patient is is collected in the chat**, not assumed. `name`, `age` and
+`gender` are ordinary entries in `required_intake_fields` (asked after the
+complaint, because that is what the patient opened the chat to talk about), and
+they are three separate fact kinds rather than one `demographic` catch-all — a
+patient who gave only their age would otherwise close all three, and the
+catch-all was where the model put its inventions. One introduction ("I'm Priya
+Nair, 51, female") fills all three at once, which is why they are not merged
+into a single question.
+
+The answers are also copied onto `PatientCase.demographics_fixture` by
+`symptom_extractor.merge_demographics()`, because the queue and the case header
+read demographics and not facts — a row reading "Synthetic patient" for someone
+who gave their name three turns ago is the feature looking broken exactly where
+it is looked at. **First value stated wins**, so a fixture supplied when the
+session opened (the simulator names its patients from the Synthea record) is
+never overwritten by a later extraction, and placeholder answers are skipped
+because "Declined to answer" is not a name. The fact rows remain the record of
+what was said; this is a copy for display.
+
 The extractor's system prompt carries a **worked example** showing one sentence split into reason_for_visit + symptom + duration. Without it llama3.1:8b collapsed all three into a single `reason_for_visit` on every opener tested, so a patient who said "chest pain since this morning" was asked for both again. Prose instructions did not move it; the example did. Keep the example.
 
 **Agents** (`agents/`) are plain async functions taking `(db, ...)` — LangGraph nodes, not classes. Only four touch the LLM: `question_planner`, `symptom_extractor`, `summary_agent`, `task_report_agent`. Each catches `LLMError` and degrades to a documented fallback rather than blocking the workflow, which is also how `seed.py` works with Ollama switched off.
@@ -72,6 +91,63 @@ The planner asks for free text rather than constrained JSON. `complete` and `mis
 Chunks are transport. The **`done` frame is the record**: one `IntakeMessage` per turn holding the whole reply, which is the planner's return value and not necessarily what was streamed — a mid-stream failure falls back to a template, and the client re-renders from `done`, so the half-sentence on screen is replaced rather than left. Per-turn state (the token queue, the speech buffer) is local to one `process_turn` call, which is all "sessions stream independently" needs to mean.
 
 `services/voice.split_for_speech()` cuts the growing reply at sentence, then clause, then a hard character ceiling. It is pure text and loads no model, so intake imports it without dragging in ONNX. A boundary only counts when whitespace follows, so "2.5 days" is not two sentences — hence the `final=True` flush.
+
+**The patient simulator is a patient, not an agent.** `/simulation` runs two or
+three synthetic patients through the whole workflow at once so the multi-agent
+system can be watched handling them independently. Patients are **Synthea**
+records (`services/synthea.py`): a real CSV export dropped in
+`backend/data/synthea/csv/` wins, otherwise the bundled `data/patients.yaml`,
+whose comments map each block to the export column it mirrors. Only what a
+patient could actually say is read — demographics, active conditions, active
+medications, allergies and the reason for the latest encounter.
+
+`services/patient_agent.py` splits the two halves: **the record decides what is
+true** (`answers_for()` derives one sentence per intake field, so the patient
+cannot report a drug Synthea never gave them), **the model decides how it is
+said**. The LLM is handed exactly one fact and told to state it; a reply that
+drops the fact is discarded for the derived sentence, because a small model
+answers "do you take any medication?" with a fluent, useless "Yes." and the
+field then never fills. `source: "script"` on the reply says that happened, and
+the simulation shows it.
+
+The **whole driver is in the browser** (`frontend/src/lib/simulation.ts`): start
+session, consent, turns, prescreen, review, notes, finalise are the calls the
+portal and dashboard already make, and `POST /simulation/patients/{id}/reply` is
+the only simulation-specific endpoint there is. `api/simulation.py` imports no
+agent, no graph and no workflow, exactly like `api/voice.py`. A simulated case
+is an ordinary case: it appears in the dashboard and the operations centre, and
+`demographics.simulated` is a UI label no backend code branches on. Concurrency
+is plain concurrent promises — nothing is shared but the pause/stop flags, so
+the interleaving on screen is real. Statuses and timings per lane come from
+`buildPipeline` over the audit trail like every other surface; the one thing
+overlaid is the step currently executing, which has not been audited yet
+because the request making it happen is still in flight.
+
+Two defects the first end-to-end run found, both pre-existing and both fixed:
+intake's placeholder answers (`NOT_CAPTURED` and friends) were reaching the
+allergy/medication conflict check, where the same sentinel in both rows matched
+*itself* and escalated the case to high — `urgency_evaluator.clinical_entries()`
+now drops them before the engine sees them, and the rows still stand in the
+record. And the extractor's prompt had a worked example for facts but none for
+allergies or medications, so a stated medicine produced no row at all; there is
+now a second example, per this file's own lesson that prose does not move it.
+
+**Extraction quality is bounded by the configured model**, and it is the
+extractor that feels it first. Measured on the same prompts, `llama3.1:8b`
+against `gemma3:1b` (the current `OLLAMA_MODEL`):
+
+| The patient said | llama3.1:8b | gemma3:1b |
+|---|---|---|
+| "I'm allergic to Penicillin V." | allergy | **medication** |
+| "I take Amlodipine 5 MG Oral Tablet." | medication | nothing, plus an invented hypertension history |
+| "I'm male." | gender | **name** |
+| "I'm Priya Nair, 51, female." | name + age + gender | name only |
+
+Nothing here is guessed around: a field the extractor could not read closes as
+`NOT_CAPTURED` and the clinician is pointed at the transcript, which is the
+documented behaviour. But the `sim_meera` fixture exists to demonstrate the
+allergy/medication conflict escalation, and one-turn introductions only collapse
+into a single question, on 8b.
 
 **Configurable hospital:** `backend/data/hospitals/*.yaml` — one file per clinic, holding departments, doctors, appointment types, the specialty keyword map, and the triage rules. **The file stem is the hospital id**; `hospital.id` inside the YAML is display metadata only. Read it through `services/hospital_config.py` (cached; call `reload()` after editing).
 
@@ -109,7 +185,7 @@ Every state-changing endpoint writes an `AuditEvent`; that's what makes `/cases/
 
 Next.js 16 App Router + React 19 + Tailwind v4 (PostCSS plugin, no `tailwind.config`), TypeScript strict, `@/*` → `./src/*`.
 
-Four surfaces: `/` patient portal, `/dashboard` staff queue, `/cases/[id]` case detail, `/ops` AI Operations Center, plus `/hospital` (the builder).
+Four surfaces: `/` patient portal, `/dashboard` staff queue, `/cases/[id]` case detail, `/ops` AI Operations Center, plus `/hospital` (the builder) and `/simulation` (synthetic patients running the whole pipeline).
 
 Three things this Next version does differently from most training data:
 

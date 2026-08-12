@@ -8,11 +8,20 @@ never overwritten.
 
 import logging
 from sqlalchemy.orm import Session
-from models import AllergyMedication, PatientFact
+from agents.question_planner import DECLINED, NONE_REPORTED, NOT_CAPTURED
+from models import AllergyMedication, PatientCase, PatientFact
 from schemas.agent_outputs import ExtractedFact, ExtractionResult, json_schema
 from services.llm_client import LLMError, llm
 
 logger = logging.getLogger(__name__)
+
+# Fact kind -> the key the staff surfaces read off the case header. Mirrored
+# there as they are extracted, because a queue row that says "Synthetic
+# patient" for someone who gave their name three turns ago is the feature
+# looking broken exactly where staff look. The fact rows remain the record of
+# what was said; this is a copy for display, and the first value stated wins so
+# a demographics fixture supplied at session start is never overwritten.
+DEMOGRAPHIC_KEYS = {"name": "name", "age": "age", "gender": "sex"}
 
 # A single fact is one clause of what the patient said. Anything longer is the
 # model narrating instead of extracting, and it lands in the clinician's view.
@@ -29,6 +38,48 @@ def is_empty_answer(value: str) -> bool:
     """Is this just the patient saying no, rather than a fact?"""
     return value.strip().strip(".,!").lower() in EMPTY_ANSWERS
 
+
+PLACEHOLDER_ANSWERS = frozenset({NONE_REPORTED, DECLINED, NOT_CAPTURED})
+
+
+def merge_demographics(current: dict, stated: list[tuple[str, str]]) -> dict:
+    """Fold name/age/gender facts into the case's demographics.
+
+    First value stated wins, so a fixture supplied when the session opened is
+    never overwritten by a later extraction. Placeholder answers are skipped:
+    intake writes one when a field was closed by a denial or a decline, and
+    "Declined to answer" is not a name.
+    """
+    merged = dict(current)
+    for kind, value in stated:
+        value = (value or "").strip()
+        if value and value not in PLACEHOLDER_ANSWERS and kind in DEMOGRAPHIC_KEYS:
+            merged.setdefault(DEMOGRAPHIC_KEYS[kind], value)
+    return merged
+
+
+def sync_demographics(db: Session, case_id) -> dict:
+    """Copy what intake collected onto the case, for the queue and case header."""
+    case = db.get(PatientCase, case_id)
+    if case is None:
+        return {}
+
+    facts = (
+        db.query(PatientFact)
+        .filter(PatientFact.case_id == case_id, PatientFact.kind.in_(DEMOGRAPHIC_KEYS))
+        .order_by(PatientFact.source_turn)
+        .all()
+    )
+    current = dict(case.demographics_fixture or {})
+    updated = merge_demographics(current, [(f.kind, f.value) for f in facts])
+
+    if updated != current:
+        # Reassigned rather than mutated: SQLAlchemy does not track in-place
+        # edits to a JSON column.
+        case.demographics_fixture = updated
+        db.commit()
+    return updated
+
 SYSTEM = """You extract structured information from what a patient said during intake.
 
 Return only what the patient actually stated. Do not infer, expand, diagnose, or \
@@ -40,7 +91,9 @@ Fact kinds:
 - duration: how long something has lasted (keep their wording, e.g. "about 3 weeks")
 - history: a past or ongoing medical condition
 - contact_preference: how they want to be contacted
-- demographic: age, sex, or similar
+- name: the patient's own name
+- age: their age in years, as they said it
+- gender: their gender, as they said it
 
 Rules for the `value` field:
 - Copy the patient's own words for that one item. Keep it under 15 words.
@@ -66,6 +119,28 @@ chest pain since this morning."
 
 Note that "chest pain" appears twice on purpose: it is both why they came and
 the symptom itself. Never emit only reason_for_visit for a sentence like that.
+
+Every medicine the patient names goes in allergies_medications, and so does
+every allergy — including when naming it is the whole of what they said.
+
+One introduction usually carries name, age and gender at once. Split it, and
+emit only the ones they actually said.
+
+Example. The patient said: "I'm Dev Sharma, I'm 34, male."
+{"facts": [
+  {"kind": "name", "value": "Dev Sharma", "confidence": 1.0},
+  {"kind": "age", "value": "34", "confidence": 1.0},
+  {"kind": "gender", "value": "male", "confidence": 1.0}
+], "allergies_medications": []}
+
+Example. The patient said: "I have asthma. I take a salbutamol inhaler twice a
+day, and I'm allergic to penicillin."
+{"facts": [
+  {"kind": "history", "value": "asthma", "confidence": 1.0}
+], "allergies_medications": [
+  {"kind": "medication", "name": "salbutamol inhaler", "reaction_or_dose": "twice a day"},
+  {"kind": "allergy", "name": "penicillin", "reaction_or_dose": ""}
+]}
 
 A fact you leave out is one the assistant has to ask the patient about again."""
 
@@ -171,4 +246,7 @@ async def extract_facts(
         entry_count += 1
 
     db.commit()
+
+    if fact_count:
+        sync_demographics(db, case_id)
     return {"facts": fact_count, "allergies_medications": entry_count}

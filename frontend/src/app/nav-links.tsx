@@ -6,6 +6,7 @@ import { icons } from "@/lib/ui";
 
 const LINKS = [
   { href: "/ops", label: "AI Operations", Icon: icons.pulse },
+  { href: "/simulation", label: "Simulation", Icon: icons.play },
   { href: "/", label: "Patients", Icon: icons.users },
   { href: "/dashboard", label: "Staff Dashboard", Icon: icons.grid },
   { href: "/hospital", label: "Hospital Builder", Icon: icons.building },

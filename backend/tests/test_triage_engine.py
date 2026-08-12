@@ -10,6 +10,7 @@ from dataclasses import dataclass
 
 import pytest
 
+from agents import question_planner, urgency_evaluator
 from services import hospital_config, triage_engine
 
 
@@ -110,6 +111,39 @@ def test_allergy_medication_conflict_raises_a_warning():
     assert outcome.warnings[0]["type"] == "allergy_medication_conflict"
     assert outcome.priority == "high"
     assert "TR-HIGH-002" in outcome.rule_codes
+
+
+def test_placeholder_answers_cannot_conflict_with_each_other():
+    """A patient who answered both questions unusably is not an escalation.
+
+    Intake closes a field it could not extract by writing the same sentence
+    into the row — so an allergy row and a medication row can both read
+    "Answered - see the intake transcript". The conflict check is a name
+    overlap, and that sentence overlaps itself: left in, it escalated cases to
+    high priority on a conflict between two placeholders. The filter runs
+    before the engine, so the rows still stand in the record.
+    """
+    entries = [
+        A("allergy", question_planner.NOT_CAPTURED),
+        A("medication", question_planner.NOT_CAPTURED),
+    ]
+    assert triage_engine.evaluate([F("symptom", "mild headache")], entries, RULES).priority == "high"
+
+    kept = urgency_evaluator.clinical_entries(entries)
+    assert kept == []
+    outcome = triage_engine.evaluate([F("symptom", "mild headache")], kept, RULES)
+    assert outcome.warnings == []
+    assert outcome.priority == "low"
+
+
+def test_a_real_allergy_survives_the_placeholder_filter():
+    entries = [
+        A("allergy", "Penicillin"),
+        A("medication", question_planner.NONE_REPORTED),
+    ]
+    assert [entry.name for entry in urgency_evaluator.clinical_entries(entries)] == [
+        "Penicillin"
+    ]
 
 
 def test_unrelated_medication_does_not_warn():

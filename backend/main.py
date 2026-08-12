@@ -6,6 +6,7 @@ from api.cases import router as cases_router
 from api.hospital import router as hospital_router
 from api.intake import router as intake_router
 from api.review import router as review_router
+from api.simulation import router as simulation_router
 from api.voice import router as voice_router
 from config import settings
 
@@ -54,3 +55,6 @@ app.include_router(hospital_router, prefix=API_PREFIX)
 # Voice is an input channel for intake, not a workflow of its own — see
 # services/voice.py. Mounting it last keeps that reading order.
 app.include_router(voice_router, prefix=API_PREFIX)
+# Likewise the patient simulator: a synthetic patient talking to the routers
+# above, never a step inside them. See api/simulation.py.
+app.include_router(simulation_router, prefix=API_PREFIX)

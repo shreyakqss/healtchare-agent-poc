@@ -23,6 +23,24 @@ class MessageResponse(BaseModel):
     missing_fields: list[str]
     intake_complete: bool
     transcript: list[dict[str, str]]
+    # Which required field the question above is for. Recorded on the message
+    # row either way; returned here so the client can offer one-tap answers for
+    # it without having to infer the field from the wording.
+    asks_field: str | None = None
+
+
+class AnswerOptionsResponse(BaseModel):
+    """One-tap answers offered beside a question. Never required to proceed."""
+
+    field: str | None
+    options: list[str]
+    #: "static" for a fixed list, "llm" for generated, "none" when there are
+    #: none — shown in the operations view so a degraded model is visible.
+    source: str
+    #: Option -> what to type after tapping it ("Phone" -> "Your phone number").
+    #: Only the contact question uses this; the tapped option and what is typed
+    #: still leave as one ordinary patient message.
+    follow_ups: dict[str, str] = {}
 
 
 class TurnEvent(BaseModel):

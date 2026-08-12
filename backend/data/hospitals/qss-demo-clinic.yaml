@@ -137,11 +137,17 @@ priority_appointment_map:
   medium: in_person_consult
   low: routine_followup
 
-# Fields the intake assistant must collect before pre-screening can run.
+# Fields the intake assistant must collect before pre-screening can run, asked
+# in this order. The complaint comes first because that is what the patient
+# opened the chat to talk about; the identifying details follow, and one
+# introduction ("I'm Dev Sharma, 34, male") usually closes all three at once.
 required_intake_fields:
   - reason_for_visit
   - symptom
   - duration
+  - name
+  - age
+  - gender
   - history
   - medication
   - allergy

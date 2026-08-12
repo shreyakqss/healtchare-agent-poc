@@ -1,0 +1,121 @@
+# Synthetic patient records for the simulation.
+#
+# Shaped after Synthea (github.com/synthetichealth/synthea), which is where
+# these patients come from conceptually: a generated population of records, not
+# hand-written dialogue. Each `record` block below mirrors one patient across
+# Synthea's CSV exports —
+#
+#   record.*            -> patients.csv     (BIRTHDATE, FIRST, LAST, GENDER)
+#   record.conditions   -> conditions.csv   (CODE = SNOMED CT, DESCRIPTION)
+#   record.medications  -> medications.csv  (CODE = RxNorm, DESCRIPTION)
+#   record.allergies    -> allergies.csv    (CODE, DESCRIPTION)
+#   record.encounter    -> encounters.csv   (REASONDESCRIPTION, START)
+#
+# — so a real Synthea export maps onto this file field for field. The codes are
+# genuine SNOMED/RxNorm identifiers for the concepts named; the patients are
+# invented. No real person is represented.
+#
+# `duration_days` stands in for the encounter START timestamp. Synthea writes
+# an absolute date; a fixture cannot, because "three weeks ago" written as a
+# date silently becomes "eight months ago" by the next demo. It is measured
+# back from now instead, which is also what makes the two-week triage rule fire
+# on a real number rather than on a sentence.
+#
+# What Synthea does not model is how a patient talks, so `persona` carries the
+# only three things not derivable from the record: the manner, the opening
+# line, and how they describe the symptom in their own words. Everything else
+# the patient says is derived from the record above it — see
+# `answers_for()` in services/patient_agent.py.
+
+patients:
+  - id: sim_arjun
+    headline: Chest pain since this morning
+    expectation: High priority, cardiology
+    record:
+      first: Arjun
+      last: Mehta
+      birthdate: 1963-04-11
+      gender: M
+      conditions:
+        - code: "59621000"
+          description: Essential hypertension (disorder)
+      medications:
+        - code: "308136"
+          description: Amlodipine 5 MG Oral Tablet
+      allergies: []
+      encounter:
+        reason: Chest pain
+        duration_days: 0.25
+    persona:
+      style: worried and to the point; answers in short sentences
+      opening: I've been having chest pain since this morning.
+      symptom: a tight, heavy chest pain that comes and goes
+      contact_preference: phone
+
+  - id: sim_priya
+    headline: Persistent cough for three weeks
+    expectation: Medium priority, pulmonology
+    record:
+      first: Priya
+      last: Nair
+      birthdate: 1974-11-02
+      gender: F
+      conditions:
+        - code: "195967001"
+          description: Asthma (disorder)
+      medications:
+        - code: "745679"
+          description: Albuterol 0.83 MG/ML Inhalation Solution
+      allergies: []
+      encounter:
+        reason: Persistent cough
+        duration_days: 21
+    persona:
+      style: matter-of-fact, mildly frustrated that it has dragged on
+      opening: I've had a persistent cough that just won't go away.
+      symptom: a persistent cough, mostly dry, and some wheezing at night
+      contact_preference: email
+
+  - id: sim_dev
+    headline: Itchy rash on the forearm
+    expectation: Low priority, dermatology
+    record:
+      first: Dev
+      last: Sharma
+      birthdate: 1991-06-23
+      gender: M
+      conditions: []
+      medications: []
+      allergies: []
+      encounter:
+        reason: Localised rash
+        duration_days: 2
+    persona:
+      style: relaxed, not worried, slightly apologetic for taking up the time
+      opening: I have a mild rash on my forearm that itches a bit.
+      symptom: a mild rash with some itching, no pain
+      contact_preference: email
+
+  - id: sim_meera
+    headline: Sore throat while taking a medicine she is allergic to
+    expectation: High priority, allergy and medication conflict
+    record:
+      first: Meera
+      last: Iyer
+      birthdate: 1980-09-15
+      gender: F
+      conditions: []
+      medications:
+        - code: "834061"
+          description: Penicillin V Potassium 250 MG Oral Tablet
+      allergies:
+        - code: "7980"
+          description: Penicillin V
+      encounter:
+        reason: Sore throat and fever
+        duration_days: 4
+    persona:
+      style: apologetic, unsure whether the medicine matters
+      opening: I have a sore throat and a mild fever.
+      symptom: a sore throat and a mild fever, and it hurts to swallow
+      contact_preference: phone

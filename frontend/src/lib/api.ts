@@ -24,6 +24,22 @@ export type MessageResponse = {
   missing_fields: string[];
   intake_complete: boolean;
   transcript: TranscriptTurn[];
+  /** Which required field `next_question` is for, when it is for one. */
+  asks_field: string | null;
+};
+
+/**
+ * One-tap answers offered beside a question. Mirrors `AnswerOptionsResponse`.
+ *
+ * Always optional: tapping one sends an ordinary patient message, and the
+ * composer is never taken away. `follow_ups` maps an option to what to type
+ * after choosing it — "Phone" wants a number — and both leave as one turn.
+ */
+export type AnswerOptions = {
+  field: string | null;
+  options: string[];
+  source: "static" | "llm" | "none";
+  follow_ups: Record<string, string>;
 };
 
 /**
@@ -236,6 +252,47 @@ export type TranscriptResponse = {
   model: string;
 };
 
+export type CodedEntry = { code: string; description: string };
+
+/**
+ * One synthetic patient — a Synthea record. Mirrors `PatientProfile` in
+ * backend/api/simulation.py.
+ *
+ * `answers` is what the record says for each intake field, derived server-side
+ * from the conditions/medications/allergies above it. The UI shows it beside
+ * what the extractor recovered from the conversation: the record is the ground
+ * truth of a simulated run, so the two being comparable is the point.
+ */
+export type PatientProfile = {
+  id: string;
+  name: string;
+  age: number;
+  gender: string;
+  headline: string;
+  expectation: string;
+  style: string;
+  opening: string;
+  reason: string;
+  duration_days: number;
+  conditions: CodedEntry[];
+  medications: CodedEntry[];
+  allergies: CodedEntry[];
+  answers: Record<string, string>;
+};
+
+export type PatientRoster = {
+  /** "synthea-export" when a real Synthea CSV export is loaded. */
+  source: "synthea-export" | "fixture";
+  patients: PatientProfile[];
+};
+
+export type PatientReply = {
+  content: string;
+  field: string | null;
+  /** "script" means the model was unavailable and the fixture line was sent. */
+  source: "llm" | "script";
+};
+
 export class ApiError extends Error {
   constructor(
     message: string,
@@ -372,7 +429,36 @@ export const api = {
     return result;
   },
 
+  /**
+   * One-tap answers for the question that just arrived.
+   *
+   * Fetched after the reply has been read rather than as part of the turn, so
+   * it cannot delay a single token of it. Failing is not an error worth
+   * showing: the patient simply types instead.
+   */
+  suggestions: (sessionId: string, question: string, field: string | null) =>
+    request<AnswerOptions>(`/intake-sessions/${sessionId}/suggestions`, {
+      method: "POST",
+      body: JSON.stringify({ question, field }),
+    }),
+
   voiceStatus: () => request<VoiceStatus>("/voice/status"),
+
+  /** The Synthea records the simulation can run. */
+  simulationPatients: () => request<PatientRoster>("/simulation/patients"),
+
+  /**
+   * What a simulated patient says in reply to the assistant's question.
+   *
+   * The only simulation-specific call there is: everything else a simulated
+   * patient does is the calls above, which is the point — the workflow cannot
+   * tell a simulated turn from a typed one, because there is no difference.
+   */
+  patientReply: (profileId: string, question: string, missingFields: string[]) =>
+    request<PatientReply>(`/simulation/patients/${profileId}/reply`, {
+      method: "POST",
+      body: JSON.stringify({ question, missing_fields: missingFields }),
+    }),
 
   /** Speech -> text. The transcript is then sent through `streamMessage`. */
   transcribe: (audio: Blob, caseId: string) => {

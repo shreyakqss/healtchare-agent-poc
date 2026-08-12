@@ -47,7 +47,6 @@ class SpeechRequest(BaseModel):
     # the index is what makes "time to first audio" answerable afterwards.
     segment: int | None = None
 
-
 class TranscriptResponse(BaseModel):
     transcript: str
     stt_ms: float

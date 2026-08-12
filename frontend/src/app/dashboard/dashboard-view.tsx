@@ -41,11 +41,22 @@ function responseMs(item: CaseListItem) {
 }
 
 function patientLabel(item: CaseListItem) {
-  const { fixture_id: id, age, sex } = item.demographics as Record<string, unknown>;
+  const {
+    name,
+    fixture_id: id,
+    age,
+    sex,
+    simulated,
+  } = item.demographics as Record<string, unknown>;
   const descriptor = [age && `${age}`, sex].filter(Boolean).join(" ");
   return {
-    name: (id as string) ?? "Synthetic patient",
+    // `name` is what intake collected; `fixture_id` is what a seeded or
+    // simulated case was labelled with before anyone said anything.
+    name: (name as string) ?? (id as string) ?? "Synthetic patient",
     descriptor: descriptor || "demographics not recorded",
+    // Set by the simulation when it opens a case. Nothing branches on it
+    // beyond this label — a simulated case is an ordinary case.
+    simulated: simulated === true,
   };
 }
 
@@ -116,10 +127,19 @@ export default function DashboardView({
         title="Patient queue & operations"
         subtitle="Every case currently moving through intake, AI pre-screening, clinician review and consultation."
         actions={
-          <Button onClick={() => void refresh()} disabled={busy}>
-            <icons.refresh className={busy ? "animate-spin text-[15px]" : "text-[15px]"} />
-            {busy ? "Refreshing" : "Refresh"}
-          </Button>
+          <>
+            <Link
+              href="/simulation"
+              className="inline-flex items-center gap-2 rounded border border-line px-3 py-1.5 text-sm text-dim transition-colors hover:border-faint hover:text-text"
+            >
+              <icons.play className="text-[13px]" />
+              Fill the queue
+            </Link>
+            <Button onClick={() => void refresh()} disabled={busy}>
+              <icons.refresh className={busy ? "animate-spin text-[15px]" : "text-[15px]"} />
+              {busy ? "Refreshing" : "Refresh"}
+            </Button>
+          </>
         }
       />
 
@@ -318,7 +338,10 @@ export default function DashboardView({
                         </Link>
                       </td>
                       <td className="px-4 py-3">
-                        <p className="font-mono text-xs text-text">{patient.name}</p>
+                        <p className="flex items-center gap-1.5 font-mono text-xs text-text">
+                          {patient.name}
+                          {patient.simulated && <Tag tone="info">sim</Tag>}
+                        </p>
                         <p className="text-[11px] text-faint">{patient.descriptor}</p>
                       </td>
                       <td className="max-w-[18rem] truncate px-4 py-3 text-dim">

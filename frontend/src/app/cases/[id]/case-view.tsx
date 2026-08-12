@@ -114,7 +114,11 @@ export default function CaseView({
             [
               [
                 "Patient",
-                (demographics.fixture_id as string) ?? "Synthetic patient",
+                // What intake collected, else the label the case was created
+                // with.
+                (demographics.name as string) ??
+                  (demographics.fixture_id as string) ??
+                  "Synthetic patient",
                 [demographics.age && `${demographics.age}`, demographics.sex]
                   .filter(Boolean)
                   .join(" · "),
