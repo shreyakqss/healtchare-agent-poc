@@ -127,11 +127,17 @@ export type Review = {
   created_at: string;
 };
 
+/** How the doctor saw the patient. Recorded, never branched on. */
+export type ConsultationMode = "in_person" | "virtual";
+
 export type ConsultationNote = {
   id: string;
   doctor_id: string;
   notes: string;
   follow_up_instructions: string | null;
+  consultation_mode: ConsultationMode;
+  /** What the doctor prescribed, in their own words. Never agent-written. */
+  prescription: string | null;
   created_at: string;
 };
 
@@ -250,47 +256,6 @@ export type TranscriptResponse = {
   transcript: string;
   stt_ms: number;
   model: string;
-};
-
-export type CodedEntry = { code: string; description: string };
-
-/**
- * One synthetic patient — a Synthea record. Mirrors `PatientProfile` in
- * backend/api/simulation.py.
- *
- * `answers` is what the record says for each intake field, derived server-side
- * from the conditions/medications/allergies above it. The UI shows it beside
- * what the extractor recovered from the conversation: the record is the ground
- * truth of a simulated run, so the two being comparable is the point.
- */
-export type PatientProfile = {
-  id: string;
-  name: string;
-  age: number;
-  gender: string;
-  headline: string;
-  expectation: string;
-  style: string;
-  opening: string;
-  reason: string;
-  duration_days: number;
-  conditions: CodedEntry[];
-  medications: CodedEntry[];
-  allergies: CodedEntry[];
-  answers: Record<string, string>;
-};
-
-export type PatientRoster = {
-  /** "synthea-export" when a real Synthea CSV export is loaded. */
-  source: "synthea-export" | "fixture";
-  patients: PatientProfile[];
-};
-
-export type PatientReply = {
-  content: string;
-  field: string | null;
-  /** "script" means the model was unavailable and the fixture line was sent. */
-  source: "llm" | "script";
 };
 
 export class ApiError extends Error {
@@ -444,22 +409,6 @@ export const api = {
 
   voiceStatus: () => request<VoiceStatus>("/voice/status"),
 
-  /** The Synthea records the simulation can run. */
-  simulationPatients: () => request<PatientRoster>("/simulation/patients"),
-
-  /**
-   * What a simulated patient says in reply to the assistant's question.
-   *
-   * The only simulation-specific call there is: everything else a simulated
-   * patient does is the calls above, which is the point — the workflow cannot
-   * tell a simulated turn from a typed one, because there is no difference.
-   */
-  patientReply: (profileId: string, question: string, missingFields: string[]) =>
-    request<PatientReply>(`/simulation/patients/${profileId}/reply`, {
-      method: "POST",
-      body: JSON.stringify({ question, missing_fields: missingFields }),
-    }),
-
   /** Speech -> text. The transcript is then sent through `streamMessage`. */
   transcribe: (audio: Blob, caseId: string) => {
     const form = new FormData();
@@ -532,6 +481,8 @@ export const api = {
       doctor_id: string;
       notes: string;
       follow_up_instructions?: string | null;
+      consultation_mode?: ConsultationMode;
+      prescription?: string | null;
     },
   ) =>
     request<ConsultationNote>(`/cases/${caseId}/consultation-notes`, {

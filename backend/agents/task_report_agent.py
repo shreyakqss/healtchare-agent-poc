@@ -77,7 +77,8 @@ async def finalise_visit(db: Session, case_id) -> tuple[ClinicalSummary, dict]:
     )
 
     note_text = "\n\n".join(
-        f"[{n.doctor_id}] {n.notes}"
+        f"[{n.doctor_id}, seen {n.consultation_mode.replace('_', ' ')}] {n.notes}"
+        + (f"\nPrescribed: {n.prescription}" if n.prescription else "")
         + (f"\nFollow-up: {n.follow_up_instructions}" if n.follow_up_instructions else "")
         for n in notes
     ) or "(no consultation notes recorded)"

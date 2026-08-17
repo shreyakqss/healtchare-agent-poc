@@ -597,11 +597,22 @@ export default function CaseView({
                       <p className="flex items-center gap-2 text-[11px] text-faint">
                         <icons.stethoscope className="text-[13px]" />
                         {note.doctor_id}
+                        <Tag tone={note.consultation_mode === "virtual" ? "info" : "accent"}>
+                          {note.consultation_mode === "virtual" ? "virtual" : "in person"}
+                        </Tag>
                         <span suppressHydrationWarning>
                           · {new Date(note.created_at).toLocaleString()}
                         </span>
                       </p>
                       <p className="mt-1.5 text-sm leading-6 text-dim">{note.notes}</p>
+                      {note.prescription && (
+                        <p className="mt-1.5 flex gap-2 text-xs">
+                          <icons.pill className="mt-0.5 shrink-0 text-[13px] text-accent" />
+                          <span className="whitespace-pre-wrap text-dim">
+                            {note.prescription}
+                          </span>
+                        </p>
+                      )}
                       {note.follow_up_instructions && (
                         <p className="mt-1.5 text-xs text-accent">
                           Follow-up: {note.follow_up_instructions}

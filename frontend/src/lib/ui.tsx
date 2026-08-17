@@ -413,6 +413,24 @@ export function Empty({ children }: { children: ReactNode }) {
   );
 }
 
+/**
+ * Says the data on screen is invented because the backend is unreachable.
+ *
+ * Deliberately loud and never dismissible. Preview patients in a clinical UI
+ * are indistinguishable from real ones at a glance, so the label has to be the
+ * thing you cannot miss — see `lib/demo.ts`.
+ */
+export function DemoBanner({ children }: { children: ReactNode }) {
+  return (
+    <div className="flex items-start gap-2.5 rounded border border-med/50 bg-med/10 px-4 py-2.5">
+      <span className="mt-0.5 shrink-0 rounded bg-med px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-on-accent">
+        Preview
+      </span>
+      <p className="text-sm leading-6 text-med">{children}</p>
+    </div>
+  );
+}
+
 /* --- formatting ---------------------------------------------------------- */
 
 /** Short case reference. Full UUIDs are unreadable in a queue. */

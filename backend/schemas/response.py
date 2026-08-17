@@ -131,6 +131,10 @@ class ConsultationNoteResponse(BaseModel):
     doctor_id: str
     notes: str
     follow_up_instructions: str | None
+    # "in_person" | "virtual", and whatever the doctor prescribed. Both are
+    # part of what the patient is shown once the visit is released.
+    consultation_mode: str
+    prescription: str | None
     created_at: datetime
 
 

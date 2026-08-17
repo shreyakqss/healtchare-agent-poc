@@ -271,6 +271,8 @@ def get_case(case_id: uuid.UUID, db: Session = Depends(get_db)):
                 doctor_id=n.doctor_id,
                 notes=n.notes,
                 follow_up_instructions=n.follow_up_instructions,
+                consultation_mode=n.consultation_mode,
+                prescription=n.prescription,
                 created_at=n.created_at,
             )
             for n in notes
@@ -401,6 +403,8 @@ def add_consultation_note(
         doctor_id=payload.doctor_id,
         notes=payload.notes,
         follow_up_instructions=payload.follow_up_instructions,
+        consultation_mode=payload.consultation_mode,
+        prescription=payload.prescription,
         attachment_ids=payload.attachment_ids,
     )
     db.add(note)
@@ -409,7 +413,11 @@ def add_consultation_note(
             case_id=case.id,
             actor=f"doctor:{payload.doctor_id}",
             action="consultation.notes_recorded",
-            payload={"has_follow_up": bool(payload.follow_up_instructions)},
+            payload={
+                "has_follow_up": bool(payload.follow_up_instructions),
+                "has_prescription": bool(payload.prescription),
+                "consultation_mode": payload.consultation_mode,
+            },
         )
     )
     db.commit()
@@ -420,6 +428,8 @@ def add_consultation_note(
         doctor_id=note.doctor_id,
         notes=note.notes,
         follow_up_instructions=note.follow_up_instructions,
+        consultation_mode=note.consultation_mode,
+        prescription=note.prescription,
         created_at=note.created_at,
     )
 

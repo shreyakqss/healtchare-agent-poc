@@ -4,12 +4,16 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { icons } from "@/lib/ui";
 
+/**
+ * One tab per person who uses the platform: the patient, the doctor seeing
+ * them, and the staff running the queue. Hospital configuration is an
+ * administrator's setup task rather than daily work, so it sits apart from
+ * these — see the settings link in the header.
+ */
 const LINKS = [
-  { href: "/ops", label: "AI Operations", Icon: icons.pulse },
-  { href: "/simulation", label: "Simulation", Icon: icons.play },
-  { href: "/", label: "Patients", Icon: icons.users },
+  { href: "/", label: "Patient Intake", Icon: icons.users },
+  { href: "/doctor", label: "Doctor", Icon: icons.stethoscope },
   { href: "/dashboard", label: "Staff Dashboard", Icon: icons.grid },
-  { href: "/hospital", label: "Hospital Builder", Icon: icons.building },
 ];
 
 export default function NavLinks() {
@@ -41,5 +45,29 @@ export default function NavLinks() {
         );
       })}
     </div>
+  );
+}
+
+/**
+ * Hospital configuration, kept out of the main tabs. It is administrator
+ * setup — departments, doctors, triage rules — not something a patient or a
+ * clinician on shift should be steered into.
+ */
+export function AdminLink() {
+  const pathname = usePathname();
+  const active = pathname.startsWith("/hospital");
+
+  return (
+    <Link
+      href="/hospital"
+      aria-current={active ? "page" : undefined}
+      title="Hospital configuration"
+      className={`flex items-center gap-2 rounded px-2.5 py-1.5 text-xs transition-colors ${
+        active ? "bg-raised text-text" : "text-faint hover:bg-raised/60 hover:text-dim"
+      }`}
+    >
+      <icons.building className="text-[14px]" />
+      <span className="hidden lg:inline">Configuration</span>
+    </Link>
   );
 }
