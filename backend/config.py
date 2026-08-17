@@ -15,12 +15,16 @@ class Settings(BaseSettings):
     DATABASE_URL: str
 
     # LLM provider. Everything goes through services/llm_client.py, so swapping
-    # providers means editing that one file plus these two settings.
-    OLLAMA_BASE_URL: str = "http://localhost:11434"
-    # OLLAMA_MODEL: str = "llama3.1:8b"
-    OLLAMA_MODEL: str = "gemma3:1b"
+    # providers means editing that one file plus these settings.
+    LLM_BASE_URL: str = "https://api.openai.com/v1"
+    LLM_MODEL: str = "gpt-5.4-nano"
     LLM_TIMEOUT_SECONDS: float = 120.0
     OPENAI_API_KEY: str | None = None
+    # Reasoning models (gpt-5.x) take `reasoning_effort` and reject
+    # `temperature`; older chat models are the other way round. This picks
+    # which one the client sends, so changing model family is a settings change.
+    LLM_SUPPORTS_EFFORT: bool = True
+    LLM_EFFORT: str = "low"
 
     # Uploaded medical documents and images. Synthetic fixtures only.
     UPLOAD_DIR: Path = BASE_DIR / "data" / "uploads"

@@ -3,7 +3,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import Link from "next/link";
 import { api } from "@/lib/api";
 import { Dot, icons } from "@/lib/ui";
-import NavLinks from "./nav-links";
+import NavLinks, { AdminLink } from "./nav-links";
 import ThemeToggle from "./theme-toggle";
 import "./globals.css";
 
@@ -50,7 +50,7 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
       <body className="flex min-h-full flex-col">
         <header className="sticky top-0 z-30 border-b border-line bg-ink/85 backdrop-blur-md">
           <nav className="mx-auto flex max-w-[112rem] items-center gap-6 px-6 py-2.5">
-            <Link href="/ops" className="flex items-center gap-2.5">
+            <Link href="/" className="flex items-center gap-2.5">
               <span className="grid size-7 place-items-center rounded bg-accent/12 text-accent ring-1 ring-accent/30">
                 <icons.stethoscope className="text-[16px]" />
               </span>
@@ -73,6 +73,7 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
                 <icons.shield />
                 Synthetic data only
               </span>
+              <AdminLink />
               <ThemeToggle />
             </div>
           </nav>

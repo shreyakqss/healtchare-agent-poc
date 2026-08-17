@@ -13,17 +13,17 @@ A local, synthetic-data POC for an AI-assisted patient care workflow: intake →
 Backend — **run from `backend/`**, imports are top-level absolute (`from config import settings`):
 
 ```powershell
-activatevenv AI-POC                  # venv lives at D:\Python\virtual_envs\AI-POC
+.\.venv\Scripts\Activate.ps1         # venv lives at backend\.venv (Python 3.14)
 python scripts/seed.py --reset       # create tables + seed rules and 5 synthetic cases
 pytest tests/                        # triage engine, hospital config, voice audio + speech segmentation, patient agent
 uvicorn main:app --reload            # http://localhost:8000, docs at /docs
 ```
 
-Voice intake is optional and installed second: `pip install -r requirements-voice.txt` (read the file first — it explains the pins fastrtc relaxes). The models download on first use, so warm one before a demo rather than during it.
+Voice intake is optional and installed second: `pip install "fastrtc[stt,tts]==0.0.34"`. It is **not installed** in the current venv — the core requirements were installed without it, so `/voice/status` reports unavailable, the portal hides voice mode, and text intake is untouched. The models download on first use, so warm one before a demo rather than during it.
 
-Frontend (from `frontend/`): `npm run dev` · `npm run build` · `npm run lint`.
+Frontend (from `frontend/`): `npm run dev` · `npm run build` · `npm run lint`. **Never run `next build` while `next dev` is live on the same `.next`** — Turbopack panics on the HMR state. Stop the dev server first.
 
-Postgres runs on localhost:5432 (`docker compose up -d db` starts a container if you don't have a local instance). Ollama runs on the host: `ollama serve`, `ollama pull llama3.1:8b`.
+Postgres runs on localhost:5432 (`docker compose up -d db` starts a container if you don't have a local instance). The local instance is shared with other POCs on this machine; this project owns the `healthcare_agent` database only.
 
 There is no Alembic — the schema is created from the models, so `seed.py --reset` is how you pick up a model change.
 
@@ -32,7 +32,7 @@ There is no Alembic — the schema is created from the models, so `seed.py --res
 These are enforced in code, not just documented. Don't refactor them away:
 
 - **The rule engine is authoritative.** `services/triage_engine.py` is pure (no LLM, no DB, no I/O) and is the only thing that decides a priority. `agents/urgency_evaluator.py` makes zero LLM calls. Every priority traces to a `TriageRule` row plus an evidence item; a hospital config must always contain a fallback rule with an empty condition or `evaluate()` raises rather than guessing — `hospital_config.validate()` enforces this before any config is written or activated.
-- **Human review gates every output.** `POST /cases/{id}/consultation-notes` and `/finalize` return 409 unless a `ClinicalReview` with decision `approve` or `edit` exists.
+- **Human review gates every output.** `POST /cases/{id}/consultation-notes` and `/finalize` return 409 unless a `ClinicalReview` with decision `approve` or `edit` exists. The patient-facing half of that gate is `patient-results.tsx` — see **Frontend**.
 - **Reviewer edits stay separate.** They go to `ClinicalReview.edits`; `PatientFact` rows are never overwritten, so patient statements stay distinguishable from clinician corrections.
 - **Uploads are stored and displayed only.** PDFs/text get `extracted_text`; images get `None`. Attachment content is deliberately not passed to `triage_engine.evaluate()` — that's what makes "an attachment can't change a priority" true by construction, not by convention.
 - Synthetic fixtures only. No real PHI, no EMR/FHIR integration. Out of scope: diagnosis, treatment or medication recommendations, emergency decisions, image interpretation, real appointment booking.
@@ -78,11 +78,20 @@ what was said; this is a copy for display.
 
 The extractor's system prompt carries a **worked example** showing one sentence split into reason_for_visit + symptom + duration. Without it llama3.1:8b collapsed all three into a single `reason_for_visit` on every opener tested, so a patient who said "chest pain since this morning" was asked for both again. Prose instructions did not move it; the example did. Keep the example.
 
-**Agents** (`agents/`) are plain async functions taking `(db, ...)` — LangGraph nodes, not classes. Only four touch the LLM: `question_planner`, `symptom_extractor`, `summary_agent`, `task_report_agent`. Each catches `LLMError` and degrades to a documented fallback rather than blocking the workflow, which is also how `seed.py` works with Ollama switched off.
+**Agents** (`agents/`) are plain async functions taking `(db, ...)` — LangGraph nodes, not classes. Only four touch the LLM: `question_planner`, `symptom_extractor`, `summary_agent`, `task_report_agent`. Each catches `LLMError` and degrades to a documented fallback rather than blocking the workflow, which is also how `seed.py` works with no API key set.
 
-**LLM access** is confined to `services/llm_client.py` (httpx → Ollama `/api/chat`, JSON schema in `format`, tenacity retries). No provider SDK is imported anywhere else — swapping providers is a one-file change. Schemas come from `schemas/agent_outputs.py` via `json_schema()`, which inlines `$defs` because Ollama's grammar compiler handles `$ref` poorly.
+**LLM access** is confined to `services/llm_client.py` — httpx against the **OpenAI** chat-completions API, tenacity retries. No provider SDK is installed or imported anywhere; swapping providers is still a one-file change, and that promise was cashed in when this moved off Ollama. Configured by `LLM_BASE_URL` / `LLM_MODEL` in `backend/.env`; currently `gpt-5.4-nano`.
 
-`stream_text()` is the same call with `stream: true`, yielding Ollama's NDJSON chunks. It is deliberately **not** retried: by the time a stream breaks the patient has read half a sentence, and a silent replay would duplicate it. Only `question_planner` uses it — see below.
+Two things bite when changing model:
+
+- **Reasoning models reject `temperature`; older chat models reject `reasoning_effort`.** `LLM_SUPPORTS_EFFORT` picks which one is sent, so a family change is a settings change. Getting it wrong is a 400 on every agent call.
+- **Strict structured output is fussier than Ollama's grammar was.** `json_schema()` in `schemas/agent_outputs.py` already inlines `$defs` and forces every property into `required` — two of the three conditions strict mode wants. `_strict()` in the client adds `additionalProperties: false` and strips the constraint keywords OpenAI refuses (`minimum`, `maxLength`, `format`, …), which Pydantic emits from ordinary `Field(ge=…)` declarations. If the API still rejects a schema, `chat_json` retries once in plain JSON mode with the schema in the prompt rather than failing the turn.
+
+`health()` retrieves the single configured model rather than listing all of them: the list endpoint read-timed-out on a cold connection and reported a false negative, and asking for `LLM_MODEL` by name also catches a typo in it.
+
+**The model upgrade closed a documented gap.** The extraction table below was measured on local models; on `gpt-5.4-nano` the one-turn introduction "I'm Priya Nair, 51, female. Chest pain since this morning." fills name, age, gender, reason, symptom and duration in a single turn, which is what the worked example in the extractor prompt was fighting for. Keep the example anyway — it costs nothing and the fallback path still matters.
+
+`stream_text()` is the same call with `stream: true`, reading SSE frames (`data: {…}`, terminated by `data: [DONE]`) and yielding `choices[].delta.content`. It is deliberately **not** retried: by the time a stream breaks the patient has read half a sentence, and a silent replay would duplicate it. Only `question_planner` uses it — see below.
 
 **Streaming.** One reply, generated once, delivered two ways. `plan_next_question` takes an `on_token` callback (threaded through `run_config`, beside the DB session, because it is a live callable rather than serialisable state), and `api/intake.py:process_turn` is an async generator emitting `TurnEvent` frames: `token` for the screen, `segment` for speech, `done` for the record. `POST /messages/stream` yields those as SSE (FastAPI 0.141's `EventSourceResponse` — the endpoint is an async generator, not a hand-rolled `StreamingResponse`); `POST /messages` drains the same generator to `done` and returns it. There is no second pipeline and no second LLM call — voice is a consumer of the same frames.
 
@@ -92,10 +101,14 @@ Chunks are transport. The **`done` frame is the record**: one `IntakeMessage` pe
 
 `services/voice.split_for_speech()` cuts the growing reply at sentence, then clause, then a hard character ceiling. It is pure text and loads no model, so intake imports it without dragging in ONNX. A boundary only counts when whitespace follows, so "2.5 days" is not two sentences — hence the `final=True` flush.
 
-**The patient simulator is a patient, not an agent.** `/simulation` runs two or
-three synthetic patients through the whole workflow at once so the multi-agent
-system can be watched handling them independently. Patients are **Synthea**
-records (`services/synthea.py`): a real CSV export dropped in
+**The patient simulator is a patient, not an agent.** It runs synthetic
+patients through the whole workflow so the multi-agent system can be watched
+handling them independently. **It is backend-only now** — `api/simulation.py`
+and `services/patient_agent.py` remain, but the `/simulation` UI was removed
+when the frontend was cut down to its user-facing surfaces (see **Frontend**),
+so the endpoints have no in-repo caller. Drive them with an HTTP client, or
+rebuild a driver against the same public calls the portal makes. Patients are
+**Synthea** records (`services/synthea.py`): a real CSV export dropped in
 `backend/data/synthea/csv/` wins, otherwise the bundled `data/patients.yaml`,
 whose comments map each block to the export column it mirrors. Only what a
 patient could actually say is read — demographics, active conditions, active
@@ -110,18 +123,15 @@ answers "do you take any medication?" with a fluent, useless "Yes." and the
 field then never fills. `source: "script"` on the reply says that happened, and
 the simulation shows it.
 
-The **whole driver is in the browser** (`frontend/src/lib/simulation.ts`): start
-session, consent, turns, prescreen, review, notes, finalise are the calls the
-portal and dashboard already make, and `POST /simulation/patients/{id}/reply` is
-the only simulation-specific endpoint there is. `api/simulation.py` imports no
-agent, no graph and no workflow, exactly like `api/voice.py`. A simulated case
-is an ordinary case: it appears in the dashboard and the operations centre, and
-`demographics.simulated` is a UI label no backend code branches on. Concurrency
-is plain concurrent promises — nothing is shared but the pause/stop flags, so
-the interleaving on screen is real. Statuses and timings per lane come from
-`buildPipeline` over the audit trail like every other surface; the one thing
-overlaid is the step currently executing, which has not been audited yet
-because the request making it happen is still in flight.
+The driver was **entirely a client** of the ordinary API (it lived at
+`frontend/src/lib/simulation.ts`, now deleted): start session, consent, turns,
+prescreen, review, notes, finalise are the calls the portal and dashboard
+already make, and `POST /simulation/patients/{id}/reply` is the only
+simulation-specific endpoint there is. That is what makes it re-creatable
+anywhere. `api/simulation.py` imports no agent, no graph and no workflow,
+exactly like `api/voice.py`. A simulated case is an ordinary case: it appears
+in the dashboard, and `demographics.simulated` is a UI label no backend code
+branches on — the dashboard still renders it as a `sim` tag when present.
 
 Two defects the first end-to-end run found, both pre-existing and both fixed:
 intake's placeholder answers (`NOT_CAPTURED` and friends) were reaching the
@@ -133,21 +143,22 @@ allergies or medications, so a stated medicine produced no row at all; there is
 now a second example, per this file's own lesson that prose does not move it.
 
 **Extraction quality is bounded by the configured model**, and it is the
-extractor that feels it first. Measured on the same prompts, `llama3.1:8b`
-against `gemma3:1b` (the current `OLLAMA_MODEL`):
+extractor that feels it first. Measured on the same prompts, back when this ran
+on local Ollama models — kept because it is the clearest statement of what
+degrades, and of what to re-test after any model change:
 
-| The patient said | llama3.1:8b | gemma3:1b |
-|---|---|---|
-| "I'm allergic to Penicillin V." | allergy | **medication** |
-| "I take Amlodipine 5 MG Oral Tablet." | medication | nothing, plus an invented hypertension history |
-| "I'm male." | gender | **name** |
-| "I'm Priya Nair, 51, female." | name + age + gender | name only |
+| The patient said | `gpt-5.4-nano` (current) | `llama3.1:8b` | `gemma3:1b` |
+|---|---|---|---|
+| "I'm allergic to Penicillin V." | allergy | allergy | **medication** |
+| "I take Amlodipine 5 MG Oral Tablet." | medication | medication | nothing, plus an invented hypertension history |
+| "I'm male." | gender | gender | **name** |
+| "I'm Priya Nair, 51, female." | name + age + gender | name + age + gender | name only |
 
 Nothing here is guessed around: a field the extractor could not read closes as
 `NOT_CAPTURED` and the clinician is pointed at the transcript, which is the
-documented behaviour. But the `sim_meera` fixture exists to demonstrate the
-allergy/medication conflict escalation, and one-turn introductions only collapse
-into a single question, on 8b.
+documented behaviour. The `sim_meera` fixture exists to demonstrate the
+allergy/medication conflict escalation, and it needs a model that can tell an
+allergy from a medication — which is the row above that used to fail.
 
 **Configurable hospital:** `backend/data/hospitals/*.yaml` — one file per clinic, holding departments, doctors, appointment types, the specialty keyword map, and the triage rules. **The file stem is the hospital id**; `hospital.id` inside the YAML is display metadata only. Read it through `services/hospital_config.py` (cached; call `reload()` after editing).
 
@@ -185,7 +196,70 @@ Every state-changing endpoint writes an `AuditEvent`; that's what makes `/cases/
 
 Next.js 16 App Router + React 19 + Tailwind v4 (PostCSS plugin, no `tailwind.config`), TypeScript strict, `@/*` → `./src/*`.
 
-Four surfaces: `/` patient portal, `/dashboard` staff queue, `/cases/[id]` case detail, `/ops` AI Operations Center, plus `/hospital` (the builder) and `/simulation` (synthetic patients running the whole pipeline).
+**The frontend ships only what an actual user touches.** One surface per role,
+plus one for setup:
+
+| Route | Who it is for |
+|---|---|
+| `/` | the patient — chat, their records, their results |
+| `/doctor` | one doctor — their own worklist and the consultation |
+| `/dashboard` | clinic staff — queue, patients, doctors, clinic-wide data |
+| `/cases/[id]` | anyone who needs one case in full, agent trace included |
+| `/hospital` | an administrator — departments, doctors, triage rules |
+
+`/hospital` is deliberately **not** in the main tabs: it is setup, not shift
+work, so it sits as a quiet "Configuration" link in the header (`AdminLink` in
+`nav-links.tsx`). The main tabs are patient, doctor and staff.
+
+**The patient surface has no start step.** `patient-portal.tsx` is a shell with
+a sidebar over three views — `patient-chat.tsx`, `patient-records.tsx`,
+`patient-results.tsx`. The patient lands in a live chat with the assistant
+already speaking; `ensureSession()` opens the `IntakeSession` and posts consent
+on their *first message or upload*, so nothing is created for someone who only
+looked at the page. The consent notice above the composer is what they act on.
+That is a deliberate trade of a click-through gate for a direct screen — if a
+deployment needs affirmative consent, `ensureSession` is the one place to put
+it back. **The chat is never unmounted**; switching tabs hides it with a class,
+because unmounting would discard the transcript, the in-flight stream and the
+session id.
+
+**`patient-results.tsx` is the review gate made visible**, and it is the one
+file where "what may a patient see" is decided. It reads summary fields *by
+name*, never by iteration, so a new backend key cannot leak into it: the
+pre-screening summary never appears (it is written before any clinician has
+read the case), the triage priority never appears in any form (a patient
+reading "HIGH" hears a clinical verdict nobody gave them), department and
+doctor appear only once `review.decision` is `approve`/`edit`, and
+`draft_care_task` is skipped because it carries the priority. Keep that shape.
+
+**There is no patient account.** The backend has no patient table and
+`GET /cases` returns the whole clinic, so "my visits" cannot be asked of the
+server. `lib/patient-history.ts` remembers case ids in `localStorage` and the
+portal loads each with `getCase`; the UI says so rather than pretending
+otherwise. Replacing it means a patient id on `PatientCase` plus
+`GET /patients/{id}/cases`, after which every caller in that module becomes an
+API call and the screens above it do not change. The staff Patients view groups
+by `demographics.name` for the same reason, and deliberately does *not* merge
+unnamed patients into one row.
+
+**The doctor surface is the clinical loop in the order the backend enforces**:
+review → record the consultation → release. `/doctor` has no auth — picking a
+name from the roster is the whole of it, and every action is audited against
+that name. Cases are matched to a doctor by `doctor_name`, because that is what
+`CaseListItem` carries. A consultation records `consultation_mode`
+(`in_person` | `virtual`) and a `prescription` alongside the notes; both are
+columns on `ConsultationNote`, deliberately not stuffed into the notes text, so
+the patient's copy can render a prescription as a prescription. **Adding them
+needs `seed.py --reset`** — there is no Alembic.
+
+The internal-facing `/ops` (AI Operations Center) and `/simulation` surfaces
+were **removed** — they were built to watch the system work, not to use it.
+Recover them from git history if you need them again; don't add a third tab
+back into the patient/staff nav. `lib/agents.ts` was trimmed to what the case
+detail still needs (`buildPipeline`, `timeline`), and the cross-case rollups
+those two surfaces owned — `aggregate`, `streamMetrics`, `voiceMetrics`,
+`currentStep`, `mean` — went with them; the audit rows they read are all still
+written, so they are re-derivable.
 
 Three things this Next version does differently from most training data:
 
@@ -197,9 +271,7 @@ Three things this Next version does differently from most training data:
 
 **Theming.** A theme is a palette swap and nothing else — light is the `@theme` default and `[data-theme="dark"]` is the single override block, so components never carry two sets of colours. Style against the semantic tokens, never `zinc-*`/`red-*` or a bare `dark:` colour pair. An inline script in the layout resolves `prefers-color-scheme` once and **always stamps `data-theme` on `<html>`** before first paint; that is what lets the CSS have one override block instead of two, and `@custom-variant dark` binds the `dark:` variant to the same attribute so it follows the toggle rather than the OS. `ink` is recessed relative to `surface` in both themes, so an inset block reads as inset either way; type on an accent fill uses `on-accent`, never `ink`.
 
-**Agent trace.** `lib/agents.ts` derives the whole agent view — per-case pipeline, statuses, timeline, aggregate performance — from `AuditEvent` rows plus the artefacts each agent wrote. There is no telemetry table, so "latency" is usually the real elapsed time between consecutive audit events and is **sub-millisecond on seeded rows**. The planner is the exception — it times its own generation and reports `generation_ms` from `llm.response_streamed`. The extractor still writes no audit row and reports as not recorded rather than being estimated. Don't substitute plausible-looking numbers, and don't surface anything beyond structured inputs, outputs, evidence ids and timings.
-
-`/ops` fans out one `getCase` + `audit` per case server-side. Fine at POC scale; batch it before it ever serves a real queue.
+**Agent trace.** `lib/agents.ts` derives the per-case agent view — pipeline, statuses, timeline — from `AuditEvent` rows plus the artefacts each agent wrote. It is read by the case detail page's agent rail, which is how a clinician sees *why* a priority and department were suggested; that traceability is the product's safety claim, so keep it. There is no telemetry table, so "latency" is usually the real elapsed time between consecutive audit events and is **sub-millisecond on seeded rows**. The planner is the exception — it times its own generation and reports `generation_ms` from `llm.response_streamed`. The extractor still writes no audit row and reports as not recorded rather than being estimated. Don't substitute plausible-looking numbers, and don't surface anything beyond structured inputs, outputs, evidence ids and timings.
 
 `frontend/AGENTS.md` (aliased by `frontend/CLAUDE.md`) is regenerated by `next dev` — commit it with your changes rather than deleting it.
 

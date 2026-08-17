@@ -51,4 +51,8 @@ class ConsultationNoteRequest(BaseModel):
     doctor_id: str = Field(max_length=64)
     notes: str = Field(min_length=1)
     follow_up_instructions: str | None = None
+    # "in_person" | "virtual". Defaulted rather than required so existing
+    # callers keep working; nothing in the workflow branches on it.
+    consultation_mode: Literal["in_person", "virtual"] = "in_person"
+    prescription: str | None = None
     attachment_ids: list[str] = Field(default_factory=list)
