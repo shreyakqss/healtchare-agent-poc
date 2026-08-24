@@ -1,0 +1,8 @@
+line-length = 120
+target-version = "py312"
+extend-exclude = ["_legacy", "venv", ".venv"]
+
+[lint]
+select = ["E", "F", "I", "B", "UP"]
+# B008: FastAPI Depends() in defaults is the framework idiom. UP047: PEP 695 generics not adopted yet.
+ignore = ["B008", "UP047", "E501"]

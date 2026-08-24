@@ -1,5 +1,4 @@
-# Postgres only. The backend, frontend, and Ollama run on the host for fast
-# iteration during Phase 1.
+# Postgres only. Backend and frontend run on the host for fast iteration.
 services:
   db:
     image: postgres:16

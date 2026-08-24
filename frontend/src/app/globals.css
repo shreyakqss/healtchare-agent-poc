@@ -1,151 +1,120 @@
 @import "tailwindcss";
 
-/* `dark:` follows the toggle, not the OS. The inline script in the layout
- * resolves the OS preference once and always stamps `data-theme` on <html>,
- * so one attribute drives both these utilities and the palette below. */
+/* `dark:` follows the data-theme attribute (stamped before first paint by the
+ * inline script in layout.tsx), not the OS directly. */
 @custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
 
-/* Design tokens for the clinical operations console.
+/* ------------------------------------------------------------------------
+ * Design tokens. Semantic roles, never raw shades, in components.
  *
- * Light is the default palette and dark is the single override block further
- * down — every component references these semantic names, so a theme is a
- * palette swap and nothing else. Roles, not shades:
- *
- *   ink      page background      surface  panels
- *   raised   hover / elevation    line     hairline borders
- *   text/dim/faint                primary / secondary / tertiary type
- *
- * `ink` stays recessed relative to `surface` in both themes, which is why an
- * inset block reads as inset either way. */
+ *   canvas    page background          surface     cards, panels
+ *   sunken    inset areas, table heads line/line-strong  hairlines
+ *   fg        primary text             fg-muted    secondary text
+ *   fg-subtle tertiary / placeholders  brand       primary action (teal)
+ *   danger / warning / success / info  + their -soft backgrounds
+ * ---------------------------------------------------------------------- */
 @theme {
-  --color-ink: #f2f5f8;
+  --color-canvas: #f6f7f8;
   --color-surface: #ffffff;
-  --color-raised: #eaeff5;
-  --color-line: #d5dfe8;
-  --color-line-soft: #e6ecf2;
+  --color-sunken: #f0f2f4;
+  --color-line: #e4e7eb;
+  --color-line-strong: #cfd5dc;
 
-  --color-text: #0d1a24;
-  --color-dim: #4a6072;
-  --color-faint: #647d90;
+  --color-fg: #16202a;
+  --color-fg-muted: #55616e;
+  --color-fg-subtle: #7c8794;
 
-  --color-accent: #0f766e;
-  --color-accent-dim: #2dd4bf;
-  /* Type laid directly on `accent` — the two swap independently. */
-  --color-on-accent: #ffffff;
-  --color-info: #2563eb;
+  --color-brand: #0e6b64;
+  --color-brand-hover: #0b5852;
+  --color-brand-fg: #ffffff;
+  --color-brand-soft: #e3f2f0;
+  --color-brand-ring: #2a9d93;
 
-  --color-high: #d92038;
-  --color-med: #b45309;
-  --color-low: #047857;
+  --color-danger: #b42318;
+  --color-danger-soft: #fef3f2;
+  --color-warning: #b54708;
+  --color-warning-soft: #fffaeb;
+  --color-success: #067647;
+  --color-success-soft: #ecfdf3;
+  --color-info: #175cd3;
+  --color-info-soft: #eff6ff;
+  --color-neutral-soft: #f2f4f7;
 
-  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
-  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
+  /* System stack only - no next/font/google, so the build never needs network access.
+   * -apple-system/Segoe UI/Roboto cover macOS, Windows and Android; the rest is a safe tail. */
+  --font-sans: ui-sans-serif, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "Cascadia Code", "SFMono-Regular", Menlo, Consolas, monospace;
+
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+
+  --shadow-card: 0 1px 2px rgb(16 24 40 / 0.04), 0 1px 3px rgb(16 24 40 / 0.06);
+  --shadow-pop: 0 8px 24px rgb(16 24 40 / 0.12), 0 2px 6px rgb(16 24 40 / 0.06);
 }
 
-:root {
-  color-scheme: light;
-}
+:root { color-scheme: light; }
 
-/* The whole dark theme. Unlayered, so it wins over Tailwind's theme layer
- * without needing a specificity fight. */
 [data-theme="dark"] {
   color-scheme: dark;
+  --color-canvas: #0d1117;
+  --color-surface: #151b23;
+  --color-sunken: #10161d;
+  --color-line: #252d38;
+  --color-line-strong: #343e4b;
 
-  --color-ink: #05080c;
-  --color-surface: #0a1017;
-  --color-raised: #101923;
-  --color-line: #1c2836;
-  --color-line-soft: #141d27;
+  --color-fg: #e8edf2;
+  --color-fg-muted: #a3adb8;
+  --color-fg-subtle: #6f7b88;
 
-  --color-text: #e7eef6;
-  --color-dim: #93a6b8;
-  --color-faint: #5d7186;
+  --color-brand: #2fb3a6;
+  --color-brand-hover: #45c4b7;
+  --color-brand-fg: #06201d;
+  --color-brand-soft: #12302d;
+  --color-brand-ring: #2fb3a6;
 
-  --color-accent: #2ee6c5;
-  --color-accent-dim: #0f5f55;
-  --color-on-accent: #05080c;
-  --color-info: #4aa8ff;
+  --color-danger: #f97066;
+  --color-danger-soft: #2c1513;
+  --color-warning: #fdb022;
+  --color-warning-soft: #2b1f0c;
+  --color-success: #47cd89;
+  --color-success-soft: #0e2519;
+  --color-info: #84caff;
+  --color-info-soft: #0f1f33;
+  --color-neutral-soft: #1c242e;
 
-  --color-high: #ff4d5e;
-  --color-med: #f5a524;
-  --color-low: #34d399;
+  --shadow-card: 0 1px 2px rgb(0 0 0 / 0.4);
+  --shadow-pop: 0 8px 24px rgb(0 0 0 / 0.5);
 }
 
-body {
-  background:
-    radial-gradient(
-      70rem 40rem at 15% -10%,
-      color-mix(in oklab, var(--color-accent) 7%, transparent),
-      transparent
-    ),
-    radial-gradient(
-      55rem 35rem at 95% 0%,
-      color-mix(in oklab, var(--color-info) 6%, transparent),
-      transparent
-    ),
-    var(--color-ink);
-  background-attachment: fixed;
-  color: var(--color-text);
-  font-family: var(--font-sans);
-}
-
-/* Section eyebrow — the small uppercase label above a block of content. */
-.eyebrow {
-  font-size: 0.6875rem;
-  font-weight: 600;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--color-faint);
-}
-
-/* Tabular figures keep metric rows from shifting as numbers tick. */
-.nums {
-  font-variant-numeric: tabular-nums;
-}
-
-::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
-}
-::-webkit-scrollbar-thumb {
-  background: var(--color-line);
-  border: 3px solid transparent;
-  background-clip: content-box;
-  border-radius: 99px;
-}
-::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-@keyframes pulse-ring {
-  0% {
-    box-shadow: 0 0 0 0 color-mix(in oklab, var(--color-info) 55%, transparent);
+@layer base {
+  html { font-size: 16px; -webkit-text-size-adjust: 100%; }
+  body {
+    @apply bg-canvas text-fg font-sans antialiased;
+    font-feature-settings: "cv11", "ss01";
+    line-height: 1.5;
   }
-  70% {
-    box-shadow: 0 0 0 7px transparent;
+  ::selection { background: var(--color-brand-soft); }
+  :focus-visible {
+    outline: 2px solid var(--color-brand-ring);
+    outline-offset: 2px;
+    border-radius: 4px;
   }
-  100% {
-    box-shadow: 0 0 0 0 transparent;
+  button, [role="button"], a { cursor: pointer; touch-action: manipulation; }
+  button:disabled { cursor: not-allowed; }
+  h1, h2, h3, h4 { @apply text-fg tracking-[-0.01em]; }
+  input, textarea, select { @apply bg-surface text-fg; }
+  ::placeholder { color: var(--color-fg-subtle); }
+  .tabular { font-variant-numeric: tabular-nums; }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
   }
 }
-.running-dot {
-  animation: pulse-ring 1.6s ease-out infinite;
-}
 
-/* Dashed edge that travels between two graph nodes while one is executing. */
-@keyframes flow-dash {
-  to {
-    stroke-dashoffset: -16;
-  }
-}
-.edge-live {
-  stroke-dasharray: 4 4;
-  animation: flow-dash 0.7s linear infinite;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .running-dot,
-  .edge-live {
-    animation: none;
-  }
+@layer utilities {
+  .scrollbar-thin { scrollbar-width: thin; scrollbar-color: var(--color-line-strong) transparent; }
+  .animate-in { animation: fade-up 220ms ease-out both; }
+  @keyframes fade-up { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+  .animate-pulse-soft { animation: pulse-soft 1.6s ease-in-out infinite; }
+  @keyframes pulse-soft { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
 }

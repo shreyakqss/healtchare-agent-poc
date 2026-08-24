@@ -1,0 +1,1 @@
+"""Pure business rules: no DB, no LLM, no I/O. Everything here is unit-testable in isolation."""

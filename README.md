@@ -1,76 +1,65 @@
-# Healthcare Agentic POC
+# CareFlow: AI-assisted patient intake and administrative triage (POC)
 
-A local, synthetic-data proof of concept for an AI-assisted patient care workflow — from patient intake through clinician preparation and post-consultation documentation.
+A local, synthetic-data proof of concept for a clinic: the intake assistant collects the patient's story once,
+approved rules set an **administrative** priority, a care navigator proposes a department/doctor/slot from the
+hospital management system, and **nothing reaches the patient before a clinician has reviewed it**.
 
-This is workflow and decision support only. It does not diagnose, prescribe, handle emergencies, interpret medical images, or release anything to a patient without authorized human review.
+Workflow and decision support only. It does not diagnose, prescribe, handle emergencies, interpret images, or book
+appointments. `healthcare-agentic-poc-plan.md` is the plan this implements; `docs/ARCHITECTURE.md` explains the shape.
 
-See `PROJECT_FOUNDATION.md` for the full vision and phased plan.
+## Stack
 
-## What It Demonstrates
+| Layer | Choice |
+|---|---|
+| Frontend | Next.js 16 (App Router), React 19, Tailwind v4, one surface per role |
+| Backend | Python 3.12, FastAPI, SQLAlchemy 2, Pydantic v2 |
+| Agent layer | [agno](https://docs.agno.com) `Agent`s with typed outputs + `Workflow`s of function steps |
+| LLM | any OpenAI-compatible model (`gpt-5.4-nano` default); runs on deterministic fallbacks without a key |
+| Storage | PostgreSQL; uploads on local disk |
+| HMS | in-process mock adapter (FHIR-shaped) behind `HMSClient` |
 
-- Guided patient intake with adaptive follow-up questions
-- Structured symptom, history, allergy and medication capture
-- Upload of medical records — lab reports, radiology and pathology images, prescriptions
-- Rule-based administrative triage with rule IDs and evidence
-- Department and doctor recommendation from a configurable hospital
-- Clinician-facing pre-screening summary
-- Clinician review: approve, edit, or reject
-- Consultation notes and an AI-generated final visit summary
-- Consent and audit timeline for the whole case
-- A staff dashboard of incoming patients and case progress
+## Run it
 
-## Technical Stack
-
-- **Frontend:** Next.js 16 / React 19 / Tailwind v4
-- **Backend:** Python 3.12 / FastAPI / SQLAlchemy 2
-- **Orchestration:** LangGraph `StateGraph` — three graphs split at the human-review boundaries
-- **Storage:** PostgreSQL; uploaded files on the local filesystem
-- **LLM:** local Ollama behind an `LLMClient` interface (one file to swap providers)
-
-## Running It
-
-Prerequisites: PostgreSQL on `localhost:5432`, [Ollama](https://ollama.com), Node 20+, Python 3.12.
+Prerequisites: PostgreSQL, Node 20+, Python 3.12.
 
 ```powershell
-# 1. Database — use your own Postgres, or start one:
+# 1. database (or use your own Postgres and point DATABASE_URL at it)
 docker compose up -d db
 
-# 2. Local model
-ollama serve
-ollama pull llama3.1:8b
-
-# 3. Backend
+# 2. backend
 cd backend
-copy .env.example .env          # then set DATABASE_URL if yours differs
+python -m venv venv; .\venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-python scripts/seed.py --reset  # creates tables, seeds rules + 5 synthetic cases
-pytest tests/
-uvicorn main:app --reload       # http://localhost:8000/docs
+copy .env.example .env          # set DATABASE_URL and, optionally, OPENAI_API_KEY
+python scripts/seed.py --reset  # tables + triage rules + 5 demo cases at different stages
+uvicorn app.main:app --reload   # http://localhost:8000/docs
 
-# 4. Frontend
+# 3. frontend
 cd ../frontend
 npm install
 npm run dev                     # http://localhost:3000
 ```
 
-`seed.py --reset` is repeatable — run it any time to reset the demo.
+`python scripts/smoke.py` walks one case through the whole API (needs the API running). `pytest` runs unit tests
+plus one integration test against the configured database.
 
-## Demo Flow
+## Surfaces
 
-1. **Patient intake** (`/`) — grant consent, answer the assistant's questions, optionally upload a report or image, then submit for review.
-2. **Staff dashboard** (`/dashboard`) — see incoming cases with status, priority, department and assigned doctor.
-3. **Case view** (`/cases/{id}`) — the clinician sees the patient's facts, the priority with its rule evidence, the routing recommendation, attachments, and the pre-screening summary.
-4. **Review** — approve, approve with an edit, or reject. Edits are recorded separately from the patient's original statements.
-5. **Consultation** — record notes and follow-up instructions, then finalise.
-6. **Final visit summary** — generated from the clinician's notes, with a *draft* scheduling task. Nothing is booked.
-7. **Audit timeline** — every consent, status change, and decision on the case.
+| Route | Who | What |
+|---|---|---|
+| `/patient` | patient | streamed intake chat, optional HMS record link, documents, results after review |
+| `/doctor` | one doctor | worklist → review (approve / edit / reject) → consultation → release summary |
+| `/clinic` | clinic desk | queue, patients, doctor load, HMS requests |
+| `/cases/[id]` | anyone | full record, audit trail, agent trace |
+| `/admin` | administrator | visual builder for departments, doctors, routing keywords, triage rules, intake fields |
 
-The seeded cases cover low / medium / high priority, an incomplete intake, and an allergy-medication conflict with attached synthetic reports.
+## Guarantees enforced in code
 
-## Configuring the Hospital
+- `app/domain/triage_engine.py` is the only thing that sets a priority. Pure, no LLM, every result carries a rule code and evidence.
+- `POST /cases/{id}/consultation-notes` and `/finalize` return **409** until a `ClinicalReview` with `approve`/`edit` exists.
+- Reviewer edits live in `ClinicalReview.edits`; patient statements (`PatientFact`) are never rewritten; HMS imports are tagged `source=hms`.
+- Uploads are stored and displayed only; they never reach the triage engine.
+- The HMS adapter only ever receives an appointment *request* (`CareTask.status = draft`).
+- Every state change writes an `AuditEvent`; `/cases/{id}/audit` is the timeline the UI renders.
 
-`backend/hospital.yaml` defines departments, doctors, appointment types, the specialty keyword map, and the triage rules. Edit it and re-run `python scripts/seed.py --reset` to simulate a different clinic — no agent code changes.
-
-## Scope
-
-Synthetic or de-identified fixtures only, intended for local or QSS-controlled use. Excluded from this POC: autonomous diagnosis, treatment or medication recommendations, emergency-care decisions, medical image interpretation, EMR/FHIR integration, real appointment booking, and production deployment.
+Synthetic fixtures only. No real PHI.

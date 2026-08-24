@@ -1,37 +1,36 @@
 import Link from "next/link";
-import { ApiError, api, type AuditEvent, type CaseDetail } from "@/lib/api";
-import { Banner, icons } from "@/lib/ui";
-import CaseView from "./case-view";
+import { notFound } from "next/navigation";
+import { ApiError, casesApi, safe } from "@/lib/api";
+import { shortId } from "@/lib/utils";
+import { AppShell } from "@/components/layout/app-shell";
+import { CaseView } from "@/features/case/case-view";
 
-// Live case state — never prerendered.
-export const dynamic = "force-dynamic";
-
-// `params` is a Promise in this Next.js version — await it before use.
-export default async function CasePage({ params }: PageProps<"/cases/[id]">) {
+export default async function CasePage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
 
-  let detail: CaseDetail;
-  let audit: AuditEvent[];
+  let detail;
   try {
-    [detail, audit] = await Promise.all([api.getCase(id), api.audit(id)]);
+    detail = await casesApi.get(id);
   } catch (err) {
-    return (
-      <div>
-        <Link
-          href="/dashboard"
-          className="inline-flex items-center gap-1.5 text-xs text-faint hover:text-dim"
-        >
-          <icons.chevron className="rotate-180 text-[14px]" />
-          Patient queue
-        </Link>
-        <div className="mt-6">
-          <Banner tone="error">
-            {err instanceof ApiError ? err.message : String(err)}
-          </Banner>
-        </div>
-      </div>
-    );
+    if (err instanceof ApiError && err.status === 404) notFound();
+    throw err;
   }
+  const audit = await safe(casesApi.audit(id), []);
 
-  return <CaseView caseId={id} initialDetail={detail} initialAudit={audit} />;
+  const name = detail.demographics?.name || "Case";
+
+  return (
+    <AppShell
+      title={name}
+      subtitle={`Case ${shortId(id)}`}
+      wide
+      actions={
+        <Link href="/clinic" className="hidden h-9 items-center rounded-md px-3 text-sm font-medium text-fg-muted hover:bg-sunken hover:text-fg sm:inline-flex">
+          Back to queue
+        </Link>
+      }
+    >
+      <CaseView initialCase={detail} initialAudit={audit} />
+    </AppShell>
+  );
 }
