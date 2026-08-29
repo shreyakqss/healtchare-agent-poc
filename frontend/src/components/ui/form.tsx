@@ -1,6 +1,6 @@
 "use client";
 
-import { forwardRef, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from "react";
+import { cloneElement, forwardRef, isValidElement, useId, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from "react";
 import { cn } from "@/lib/utils";
 
 const base =
@@ -17,10 +17,7 @@ export const Textarea = forwardRef<HTMLTextAreaElement, TextareaHTMLAttributes<H
 
 export const Select = forwardRef<HTMLSelectElement, SelectHTMLAttributes<HTMLSelectElement>>(function Select({ className, children, ...rest }, ref) {
   return (
-    <select ref={ref} className={cn(base, "h-10 appearance-none bg-no-repeat pr-9", className)}
-      style={{ backgroundImage: "url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%237c8794' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='m6 9 6 6 6-6'/></svg>\")", backgroundPosition: "right 0.6rem center" }}
-      {...rest}
-    >
+    <select ref={ref} className={cn(base, "select-chevron h-10 appearance-none bg-no-repeat pr-9", className)} {...rest}>
       {children}
     </select>
   );
@@ -29,14 +26,25 @@ export const Select = forwardRef<HTMLSelectElement, SelectHTMLAttributes<HTMLSel
 export function Field({ label, hint, error, required, htmlFor, children, className }: {
   label: string; hint?: ReactNode; error?: string | null; required?: boolean; htmlFor?: string; children: ReactNode; className?: string;
 }) {
+  const messageId = `${useId()}-message`;
+  const message = error || hint;
+  const control = isValidElement<{ required?: boolean; "aria-invalid"?: boolean; "aria-describedby"?: string }>(children)
+    ? cloneElement(children, {
+        required: required || children.props.required,
+        "aria-invalid": error ? true : children.props["aria-invalid"],
+        "aria-describedby": message
+          ? [children.props["aria-describedby"], messageId].filter(Boolean).join(" ")
+          : children.props["aria-describedby"],
+      })
+    : children;
   return (
     <div className={cn("space-y-1.5", className)}>
       <label htmlFor={htmlFor} className="block text-sm font-medium text-fg">
         {label}
         {required ? <span className="ml-0.5 text-danger" aria-hidden="true">*</span> : null}
       </label>
-      {children}
-      {error ? <p role="alert" className="text-xs text-danger">{error}</p> : hint ? <p className="text-xs text-fg-subtle">{hint}</p> : null}
+      {control}
+      {error ? <p id={messageId} role="alert" className="text-xs text-danger">{error}</p> : hint ? <p id={messageId} className="text-xs text-fg-subtle">{hint}</p> : null}
     </div>
   );
 }

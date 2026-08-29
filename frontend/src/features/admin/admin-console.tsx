@@ -107,22 +107,24 @@ export function AdminConsole({ initialHospitals, initialConfig, initialActiveId,
                   <p className="font-mono text-xs text-fg-subtle">{selectedId}{selected?.active ? " · active" : ""}</p>
                 </div>
               </div>
-              <Tabs tabs={TABS} value={tab} onChange={setTab} className="mb-5 overflow-x-auto" />
+              <Tabs idPrefix="admin-config" tabs={TABS} value={tab} onChange={setTab} className="mb-5 overflow-x-auto" />
               {issues.length ? (
                 <Alert tone="warning" title="Fix these before saving" className="mb-4">
                   <ul className="list-disc pl-4">{issues.map((i, k) => <li key={k}>{i.message}</li>)}</ul>
                 </Alert>
               ) : null}
               {serverError ? <Alert tone="danger" title="The server rejected the configuration" className="mb-4">{serverError}</Alert> : null}
-              {loading ? <div className="space-y-3"><Skeleton className="h-10 w-1/2" /><Skeleton className="h-48" /></div>
-                : !editor.config ? <EmptyState title="Configuration unavailable" description="Could not load this clinic." />
-                : tab === "general" ? <GeneralTab editor={editor} hospitalId={selectedId} />
-                : tab === "departments" ? <DepartmentsTab editor={editor} />
-                : tab === "appointments" ? <AppointmentsTab editor={editor} />
-                : tab === "routing" ? <RoutingTab editor={editor} />
-                : tab === "rules" ? <TriageRulesTab editor={editor} />
-                : tab === "fields" ? <IntakeFieldsTab editor={editor} />
-                : <AdvancedYamlTab hospitalId={selectedId} onSaved={async () => { editor.load(await hospitalApi.getJson(selectedId)); await refreshList(); }} />}
+              <div id={`admin-config-panel-${tab}`} role="tabpanel" aria-labelledby={`admin-config-tab-${tab}`}>
+                {loading ? <div className="space-y-3"><Skeleton className="h-10 w-1/2" /><Skeleton className="h-48" /></div>
+                  : !editor.config ? <EmptyState title="Configuration unavailable" description="Could not load this clinic." />
+                  : tab === "general" ? <GeneralTab editor={editor} hospitalId={selectedId} />
+                  : tab === "departments" ? <DepartmentsTab editor={editor} />
+                  : tab === "appointments" ? <AppointmentsTab editor={editor} />
+                  : tab === "routing" ? <RoutingTab editor={editor} />
+                  : tab === "rules" ? <TriageRulesTab editor={editor} />
+                  : tab === "fields" ? <IntakeFieldsTab editor={editor} />
+                  : <AdvancedYamlTab hospitalId={selectedId} onSaved={async () => { editor.load(await hospitalApi.getJson(selectedId)); await refreshList(); }} />}
+              </div>
             </>
           )}
         </div>

@@ -4,6 +4,7 @@ import { useState } from "react";
 import { ApiError, casesApi, type CaseDetail, type ReviewDecision } from "@/lib/api";
 import { Alert, Button, Card, CardBody, CardHeader, Field, Icons, Segmented, Textarea, useToast } from "@/components/ui";
 import { briefingOf } from "@/features/doctor/briefing";
+import { CredentialFields, useClinicianCredentials } from "@/features/doctor/credential-fields";
 import type { Me } from "@/features/doctor/use-doctor";
 
 const EDITABLE: Array<{ key: keyof ReturnType<typeof briefingOf>; label: string }> = [
@@ -24,6 +25,7 @@ export function ReviewForm({ c, me, onDone }: { c: CaseDetail; me: Me; onDone: (
   const [decision, setDecision] = useState<ReviewDecision>("approve");
   const [values, setValues] = useState(initial);
   const [comment, setComment] = useState("");
+  const { credentials, setCredentials, missing: missingCredentials, clearPassword } = useClinicianCredentials(me.username ?? "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const toast = useToast();
@@ -37,10 +39,11 @@ export function ReviewForm({ c, me, onDone }: { c: CaseDetail; me: Me; onDone: (
     setError(null);
     try {
       await casesApi.review(c.case_id, {
-        decision, reviewer_id: me.id, reviewer_role: "doctor",
+        decision, reviewer_username: credentials.username.trim(), reviewer_password: credentials.password,
         edits: decision === "edit" ? edits : {}, comment: comment.trim() || undefined,
       });
       toast.push({ tone: "success", message: decision === "reject" ? "Case rejected" : "Case approved" });
+      clearPassword();
       await onDone();
     } catch (e) {
       setError(e instanceof ApiError ? e.message : "Could not record the review. Please try again.");
@@ -69,19 +72,23 @@ export function ReviewForm({ c, me, onDone }: { c: CaseDetail; me: Me; onDone: (
           </div>
         ) : null}
 
-        <Field label={decision === "reject" ? "Reason for rejection" : "Comment"} required={decision === "reject"} htmlFor="review-comment"
-          error={rejectMissingComment && comment.length === 0 ? null : undefined}>
+        <Field label={decision === "reject" ? "Reason for rejection" : "Comment"} required={decision === "reject"} htmlFor="review-comment">
           <Textarea id="review-comment" rows={2} value={comment} onChange={(e) => setComment(e.target.value)} className="min-h-0"
             placeholder={decision === "reject" ? "Why this case is being returned" : "Optional note for the record"} />
         </Field>
 
         {editNothingChanged ? <Alert tone="info">No field differs from the briefing yet. Change something, or switch to Approve.</Alert> : null}
+
+        <CredentialFields idPrefix="reviewer" value={credentials} onChange={setCredentials}
+          signingInAs={me.username ? `${me.name} (${me.username})` : null}
+          hint="Verified against the hospital system to record who approved this case" />
+
         {error ? <Alert tone="danger">{error}</Alert> : null}
 
         <div className="flex justify-end gap-2">
           <Button
             variant={decision === "reject" ? "danger" : "primary"} loading={busy}
-            disabled={rejectMissingComment || editNothingChanged} onClick={submit}
+            disabled={rejectMissingComment || editNothingChanged || missingCredentials} onClick={submit}
             icon={decision === "reject" ? <Icons.x size={16} /> : <Icons.check size={16} />}
           >
             {decision === "approve" ? "Approve case" : decision === "edit" ? "Approve with edits" : "Reject case"}

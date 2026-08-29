@@ -1,29 +1,34 @@
 import type { Metadata } from "next";
-import { healthApi, hospitalApi, intakeApi, safe } from "@/lib/api";
+import { requireRole } from "@/lib/auth";
+import { serverApi } from "@/lib/api/server";
 import { AppShell } from "@/components/layout/app-shell";
 import { PatientPortal } from "@/features/intake/patient-portal";
 
 export const metadata: Metadata = { title: "Patient intake" };
 
-const DEFAULT_GREETING =
+const FALLBACK_GREETING =
   "Hello, I am the clinic's intake assistant. Tell me what brings you in today, in your own words.";
 
 export default async function PatientPage() {
-  const [greeting, config, health] = await Promise.all([
-    safe(intakeApi.greeting(), null),
-    safe(hospitalApi.config(), null),
-    safe(healthApi.get(), null),
+  const user = await requireRole("patient", "/patient");
+  const [config, greeting, visits, activeIntake] = await Promise.all([
+    serverApi.patient.config(),
+    serverApi.patient.greeting().catch(() => ({ text: FALLBACK_GREETING })),
+    serverApi.patient.visits(),
+    serverApi.patient.activeIntake(),
   ]);
   const clinicName = config?.hospital?.name ?? "Clinic";
 
   return (
-    <AppShell title="Patient intake" subtitle={clinicName}>
+    <AppShell title="Patient intake" subtitle={clinicName} user={user}>
       <PatientPortal
-        initialGreeting={greeting?.text ?? DEFAULT_GREETING}
         initialRequiredFields={config?.required_intake_fields ?? []}
-        initialClinicName={clinicName}
-        initialApiOnline={health !== null}
-        initialLlmConfigured={health?.llm.configured ?? false}
+        initialRequiredAttachmentKinds={config?.required_attachment_kinds ?? []}
+        initialApiOnline
+        initialLlmConfigured={config.llm_configured}
+        initialGreeting={greeting.text}
+        initialVisits={visits}
+        initialActiveIntake={activeIntake}
       />
     </AppShell>
   );

@@ -10,7 +10,9 @@ from app.core.errors import NotFound
 from app.domain import intake_fields
 from app.models import (
     AllergyMedication,
+    AuditEvent,
     CareTask,
+    ClinicalDiscrepancy,
     ClinicalReview,
     ClinicalSummary,
     ConsultationNote,
@@ -79,6 +81,26 @@ def attachments(db: Session, case_id: uuid.UUID) -> list[MedicalAttachment]:
     return db.query(MedicalAttachment).filter(MedicalAttachment.case_id == case_id).order_by(MedicalAttachment.created_at).all()
 
 
+def skipped_attachment_kinds(db: Session, case_id: uuid.UUID) -> set[str]:
+    """Required attachment kinds the patient explicitly skipped, from `attachment.skipped`
+    audit events - no dedicated table for what is really just a small set membership."""
+    rows = (
+        db.query(AuditEvent)
+        .filter(AuditEvent.case_id == case_id, AuditEvent.action == "attachment.skipped")
+        .all()
+    )
+    return {row.payload.get("kind") for row in rows if row.payload and row.payload.get("kind")}
+
+
+def discrepancies(db: Session, case_id: uuid.UUID) -> list[ClinicalDiscrepancy]:
+    return (
+        db.query(ClinicalDiscrepancy)
+        .filter(ClinicalDiscrepancy.case_id == case_id)
+        .order_by(ClinicalDiscrepancy.created_at)
+        .all()
+    )
+
+
 def latest_triage(db: Session, case_id: uuid.UUID) -> TriageResult | None:
     return db.query(TriageResult).filter(TriageResult.case_id == case_id).order_by(TriageResult.created_at.desc()).first()
 
@@ -117,6 +139,39 @@ def missing_fields(db: Session, case_id: uuid.UUID) -> list[str]:
     return intake_fields.missing_fields(
         hospital_config.required_intake_fields(), facts(db, case_id), entries(db, case_id)
     )
+
+
+def pending_attachment_kinds(db: Session, case_id: uuid.UUID) -> list[str]:
+    """Required attachment kinds neither uploaded nor explicitly skipped."""
+    required = hospital_config.required_attachment_kinds()
+    if not required:
+        return []
+    uploaded = {a.kind for a in attachments(db, case_id)}
+    skipped = skipped_attachment_kinds(db, case_id)
+    return [k for k in required if k not in uploaded and k not in skipped]
+
+
+def ready_for_prescreen(db: Session, case_id: uuid.UUID) -> bool:
+    """The intake completeness gate: every required field present AND every required
+    attachment kind uploaded or skipped."""
+    return not missing_fields(db, case_id) and not pending_attachment_kinds(db, case_id)
+
+
+# Identity fields are collected by the one-shot form; everything else in
+# `required_intake_fields()` is collected by the chat turn loop. Both gates read from the
+# SAME hospital-config field list so a hospital that drops a required field (e.g. no
+# contact_preference) still needs nothing extra typed anywhere else.
+IDENTITY_FIELDS = {"name", "age", "gender", "contact_preference"}
+
+
+def missing_identity_fields(db: Session, case_id: uuid.UUID) -> list[str]:
+    required = [f for f in hospital_config.required_intake_fields() if f in IDENTITY_FIELDS]
+    return intake_fields.missing_fields(required, facts(db, case_id), entries(db, case_id))
+
+
+def missing_clinical_fields(db: Session, case_id: uuid.UUID) -> list[str]:
+    required = [f for f in hospital_config.required_intake_fields() if f not in IDENTITY_FIELDS]
+    return intake_fields.missing_fields(required, facts(db, case_id), entries(db, case_id))
 
 
 def next_turn_index(db: Session, session_id: uuid.UUID) -> int:

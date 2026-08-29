@@ -22,7 +22,7 @@ export function DepartmentsTab({ editor }: { editor: ConfigEditor }) {
           action={<Button size="sm" variant="secondary" icon={<Icons.plus size={14} />}
             onClick={() => setDeps([...deps, { id: `department_${deps.length + 1}`, name: "", default: deps.length === 0 }])}>Add department</Button>} />
         {deps.length === 0 ? <EmptyState title="No departments yet" description="Add at least one so cases have somewhere to go." /> : (
-          <Table>
+          <Table regionLabel="Departments">
             <thead><tr><Th>Id</Th><Th>Name</Th><Th className="w-28">Default</Th><Th className="w-16"><span className="sr-only">Actions</span></Th></tr></thead>
             <tbody>
               {deps.map((d, i) => (
@@ -49,7 +49,7 @@ export function DepartmentsTab({ editor }: { editor: ConfigEditor }) {
           action={<Button size="sm" variant="secondary" icon={<Icons.plus size={14} />} disabled={deps.length === 0}
             onClick={() => setDocs([...docs, { id: `dr_${docs.length + 1}`, name: "", department_id: deps[0]?.id ?? "", working_days: ["mon", "tue", "wed", "thu", "fri"] }])}>Add doctor</Button>} />
         {docs.length === 0 ? <EmptyState title="No doctors on the roster" description="Cases can still be routed to a department without a doctor." /> : (
-          <Table>
+          <Table regionLabel="Doctors">
             <thead><tr><Th>Id</Th><Th>Name</Th><Th>Department</Th><Th>Working days</Th><Th className="w-16"><span className="sr-only">Actions</span></Th></tr></thead>
             <tbody>
               {docs.map((d, i) => (

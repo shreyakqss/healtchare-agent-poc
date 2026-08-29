@@ -1,2 +1,8 @@
 __pycache__/
 .ruff_cache/
+data/
+# Playwright MCP session artifacts (snapshots, console logs, screenshots)
+.playwright-mcp/
+# docker compose reads this automatically for credential overrides; never commit real values.
+.env
+!.env.example

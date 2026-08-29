@@ -57,10 +57,16 @@ export function CaseView({ initialCase, initialAudit }: { initialCase: CaseDetai
       />
 
       <div className="-mx-4 overflow-x-auto px-4 scrollbar-thin sm:mx-0 sm:px-0">
-        <Tabs tabs={tabs} value={tab} onChange={setTab} className="min-w-max sm:min-w-0" />
+        <Tabs idPrefix="case-detail" tabs={tabs} value={tab} onChange={setTab} className="min-w-max sm:min-w-0" />
       </div>
 
-      <div className="animate-in" key={tab}>
+      <div
+        id={`case-detail-panel-${tab}`}
+        role="tabpanel"
+        aria-labelledby={`case-detail-tab-${tab}`}
+        className="animate-in"
+        key={tab}
+      >
         {tab === "overview" && <OverviewTab detail={detail} />}
         {tab === "conversation" && <TranscriptTab detail={detail} />}
         {tab === "records" && <RecordsTab detail={detail} />}

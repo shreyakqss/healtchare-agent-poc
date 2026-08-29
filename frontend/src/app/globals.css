@@ -1,7 +1,7 @@
 @import "tailwindcss";
 
-/* `dark:` follows the data-theme attribute (stamped before first paint by the
- * inline script in layout.tsx), not the OS directly. */
+/* `dark:` follows the data-theme attribute (stamped by the theme-init script in
+ * layout.tsx, which runs via next/script beforeInteractive), not the OS directly. */
 @custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
 
 /* ------------------------------------------------------------------------
@@ -22,7 +22,7 @@
 
   --color-fg: #16202a;
   --color-fg-muted: #55616e;
-  --color-fg-subtle: #7c8794;
+  --color-fg-subtle: #64707d;
 
   --color-brand: #0e6b64;
   --color-brand-hover: #0b5852;
@@ -55,6 +55,19 @@
 
 :root { color-scheme: light; }
 
+/* Pre-script paint only. The theme-init script runs after HTML parse (next/script
+ * beforeInteractive queues it), so until it stamps data-theme the page would flash
+ * light for OS-dark users. Match the OS for the few tokens that dominate first paint;
+ * `:not([data-theme])` stops matching the instant the script sets the attribute. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    color-scheme: dark;
+    --color-canvas: #0d1117;
+    --color-surface: #151b23;
+    --color-fg: #e8edf2;
+  }
+}
+
 [data-theme="dark"] {
   color-scheme: dark;
   --color-canvas: #0d1117;
@@ -65,7 +78,7 @@
 
   --color-fg: #e8edf2;
   --color-fg-muted: #a3adb8;
-  --color-fg-subtle: #6f7b88;
+  --color-fg-subtle: #8995a3;
 
   --color-brand: #2fb3a6;
   --color-brand-hover: #45c4b7;
@@ -104,6 +117,10 @@
   button:disabled { cursor: not-allowed; }
   h1, h2, h3, h4 { @apply text-fg tracking-[-0.01em]; }
   input, textarea, select { @apply bg-surface text-fg; }
+  .select-chevron {
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%237c8794' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='m6 9 6 6 6-6'/></svg>");
+    background-position: right 0.6rem center;
+  }
   ::placeholder { color: var(--color-fg-subtle); }
   .tabular { font-variant-numeric: tabular-nums; }
   @media (prefers-reduced-motion: reduce) {

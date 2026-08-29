@@ -74,7 +74,7 @@ export function RecordsTab({ detail }: { detail: CaseDetail }) {
           {!detail.facts.length ? (
             <EmptyState title="No facts recorded" />
           ) : (
-            <Table>
+            <Table regionLabel="Patient-reported facts">
               <thead><tr><Th className="w-44">Kind</Th><Th>Value</Th><Th className="w-44">Source</Th><Th className="w-24 text-right">Confidence</Th></tr></thead>
               <tbody>
                 {groups.map(([kind, facts]) =>
@@ -99,7 +99,7 @@ export function RecordsTab({ detail }: { detail: CaseDetail }) {
           {!entries.length ? (
             <EmptyState title="None recorded" />
           ) : (
-            <Table>
+            <Table regionLabel="Allergies and medications">
               <thead><tr><Th className="w-32">Type</Th><Th>Name</Th><Th>Reaction / dose</Th><Th className="w-44">Source</Th></tr></thead>
               <tbody>
                 {entries.map((e) => (

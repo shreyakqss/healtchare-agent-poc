@@ -1,16 +1,24 @@
 "use client";
 
 import { useState } from "react";
-import { ApiError, casesApi, type CaseDetail, type CaseListItem, type HospitalConfig } from "@/lib/api";
+import { ApiError, casesApi, type CaseDetail, type CaseListItem, type HospitalConfig, type Roster } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { Alert, Avatar, Button, EmptyState, Icons, useToast } from "@/components/ui";
 import { CasePanel, CasePanelSkeleton } from "@/features/doctor/case-panel";
-import { DoctorPicker } from "@/features/doctor/doctor-picker";
-import { useDoctor } from "@/features/doctor/use-doctor";
+import { resolveMe } from "@/features/doctor/use-doctor";
 import { Worklist, bucketOf, isMine } from "@/features/doctor/worklist";
 
-export function DoctorWorkspace({ initialCases, initialConfig }: { initialCases: CaseListItem[]; initialConfig: HospitalConfig | null }) {
-  const { me, setMe } = useDoctor(initialConfig);
+export function DoctorWorkspace({ initialCases, initialConfig, initialRoster, authenticatedHmsUsername }: {
+  initialCases: CaseListItem[]; initialConfig: HospitalConfig | null; initialRoster: Roster | null;
+  authenticatedHmsUsername: string | null;
+}) {
+  // The roster endpoint merges live hospital-system practitioners over the clinic config; if
+  // it is unavailable, fall back to whatever doctors the config itself declares (usually none).
+  const roster: Roster = initialRoster ?? {
+    source: "config",
+    doctors: (initialConfig?.doctors ?? []).map((d) => ({ ...d, specialty: null, working_days: d.working_days ?? [], username: d.username ?? null })),
+  };
+  const me = resolveMe(authenticatedHmsUsername, roster.doctors, initialConfig?.departments ?? []);
   const [cases, setCases] = useState(initialCases);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<CaseDetail | null>(null);
@@ -23,7 +31,13 @@ export function DoctorWorkspace({ initialCases, initialConfig }: { initialCases:
   if (!initialConfig) {
     return <Alert tone="danger" title="Clinic configuration unavailable">The API did not return a hospital configuration. Start the backend and reload.</Alert>;
   }
-  if (!me) return <DoctorPicker config={initialConfig} onPick={setMe} />;
+  if (!me) {
+    return (
+      <Alert tone="danger" title="Hospital identity is not linked">
+        Ask an administrator to set your Keycloak <code>hms_username</code> attribute to your OpenEMR username.
+      </Alert>
+    );
+  }
 
   async function refreshList() {
     setRefreshing(true);
@@ -68,8 +82,7 @@ export function DoctorWorkspace({ initialCases, initialConfig }: { initialCases:
           <p className="text-sm font-semibold leading-5">{me.name}</p>
           <p className="text-xs text-fg-muted">{me.department_name}</p>
         </div>
-        <Button variant="ghost" size="sm" onClick={() => { setMe(null); setSelectedId(null); setDetail(null); }}>Switch</Button>
-        <p className="ml-auto hidden text-xs text-fg-subtle sm:block">No sign-in in this POC. Actions are audited under the selected name.</p>
+        <p className="ml-auto hidden text-xs text-fg-subtle sm:block">Reviews, notes and releases are verified against your hospital-system login.</p>
       </div>
 
       <div className="grid gap-6 lg:grid-cols-[380px_minmax(0,1fr)]">

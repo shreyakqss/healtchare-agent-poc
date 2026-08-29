@@ -1,7 +1,6 @@
-/** Thin fetch wrapper. Server components and client components share it. */
+/** Browser requests stay same-origin; the fixed BFF route owns the backend boundary. */
 
-const BASE = (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000").replace(/\/$/, "");
-export const API_ROOT = `${BASE}/api/v1/healthcare`;
+export const API_ROOT = "/api/careflow";
 
 export class ApiError extends Error {
   constructor(public status: number, message: string) {
@@ -10,7 +9,7 @@ export class ApiError extends Error {
   }
 }
 
-async function parseError(res: Response): Promise<ApiError> {
+export async function parseError(res: Response): Promise<ApiError> {
   let detail = res.statusText;
   try {
     const body = (await res.json()) as { detail?: unknown };
@@ -24,14 +23,28 @@ async function parseError(res: Response): Promise<ApiError> {
 
 export async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const isForm = init.body instanceof FormData;
+  const method = (init.method ?? "GET").toUpperCase();
+  const csrf = method === "GET" || method === "HEAD" ? null : readCookie("careflow_csrf");
   const res = await fetch(`${API_ROOT}${path}`, {
     cache: "no-store",
+    credentials: "same-origin",
     ...init,
-    headers: { ...(isForm ? {} : { "Content-Type": "application/json" }), ...(init.headers ?? {}) },
+    headers: {
+      ...(isForm || init.body === undefined ? {} : { "Content-Type": "application/json" }),
+      ...(csrf ? { "x-csrf-token": csrf } : {}),
+      ...(init.headers ?? {}),
+    },
   });
   if (!res.ok) throw await parseError(res);
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
+}
+
+export function readCookie(name: string): string | null {
+  if (typeof document === "undefined") return null;
+  const prefix = `${name}=`;
+  const value = document.cookie.split("; ").find((part) => part.startsWith(prefix));
+  return value ? decodeURIComponent(value.slice(prefix.length)) : null;
 }
 
 export const http = {
@@ -52,25 +65,24 @@ export async function* readSse<T>(res: Response): AsyncGenerator<T> {
     const { value, done } = await reader.read();
     if (done) break;
     buffer += decoder.decode(value, { stream: true });
+    buffer = buffer.replace(/\r\n/g, "\n");
     let idx: number;
     while ((idx = buffer.indexOf("\n\n")) !== -1) {
       const frame = buffer.slice(0, idx);
       buffer = buffer.slice(idx + 2);
-      const data = frame
-        .split("\n")
-        .filter((l) => l.startsWith("data:"))
-        .map((l) => l.slice(5).trimStart())
-        .join("\n");
+      const data = sseData(frame);
       if (data) yield JSON.parse(data) as T;
     }
   }
+  buffer += decoder.decode();
+  const finalData = sseData(buffer.replace(/\r\n/g, "\n").trim());
+  if (finalData) yield JSON.parse(finalData) as T;
 }
 
-/** Server-side helper: swallow network errors so a page still renders when the API is down. */
-export async function safe<T>(promise: Promise<T>, fallback: T): Promise<T> {
-  try {
-    return await promise;
-  } catch {
-    return fallback;
-  }
+function sseData(frame: string): string {
+  return frame
+    .split("\n")
+    .filter((line) => line.startsWith("data:"))
+    .map((line) => line.slice(5).trimStart())
+    .join("\n");
 }

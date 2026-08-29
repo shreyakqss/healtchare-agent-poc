@@ -1,12 +1,6 @@
 import { FIELD_LABEL } from "@/lib/constants";
 import { Icons } from "@/components/ui/icons";
-import { cn } from "@/lib/utils";
-
-const NEXT_STEPS = [
-  { title: "Answer a few questions", body: "The assistant asks only for what is still missing." },
-  { title: "A clinician reviews", body: "Nothing is decided automatically." },
-  { title: "You get your plan", body: "Department, doctor and next step, once approved." },
-];
+import { cn, progressWidth } from "@/lib/utils";
 
 export function IntakeProgress({ requiredFields, missingFields, complete, fallbackMode }: {
   requiredFields: string[]; missingFields: string[] | null; complete: boolean; fallbackMode: boolean;
@@ -23,7 +17,7 @@ export function IntakeProgress({ requiredFields, missingFields, complete, fallba
         </div>
         {requiredFields.length ? (
           <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-sunken" aria-hidden="true">
-            <div className="h-full rounded-full bg-brand transition-[width] duration-300" style={{ width: `${(done / requiredFields.length) * 100}%` }} />
+            <div className={cn("h-full rounded-full bg-brand transition-[width] duration-300", progressWidth(done, requiredFields.length))} />
           </div>
         ) : null}
         <ul className="mt-3 space-y-1.5">
@@ -42,21 +36,6 @@ export function IntakeProgress({ requiredFields, missingFields, complete, fallba
           {!requiredFields.length ? <li className="text-sm text-fg-muted">Checklist unavailable.</li> : null}
         </ul>
         {complete ? <p className="mt-3 text-xs text-success">All set. Your answers are with the care team.</p> : null}
-      </section>
-
-      <section aria-labelledby="next-title">
-        <h2 id="next-title" className="text-sm font-semibold">What happens next</h2>
-        <ol className="mt-3 space-y-3">
-          {NEXT_STEPS.map((s, i) => (
-            <li key={s.title} className="flex gap-3">
-              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-sunken text-[11px] font-semibold text-fg-muted" aria-hidden="true">{i + 1}</span>
-              <div>
-                <p className="text-sm font-medium leading-6">{s.title}</p>
-                <p className="text-xs leading-5 text-fg-muted">{s.body}</p>
-              </div>
-            </li>
-          ))}
-        </ol>
       </section>
 
       {fallbackMode ? (

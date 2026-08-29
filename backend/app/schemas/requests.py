@@ -1,46 +1,82 @@
 from __future__ import annotations
 
+from datetime import UTC, date, datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class StartSessionRequest(BaseModel):
-    # Link to a known HMS patient; their record pre-fills demographics and history.
-    mrn: str | None = None
-    channel: Literal["web", "kiosk", "staff"] = "web"
-    demographics: dict[str, Any] = Field(default_factory=dict)
-
-
-class QuickStartRequest(BaseModel):
-    """Demo shortcut: fill a whole intake instantly instead of typing it. See
-    app/services/quick_start.py for the fixed set of keys this accepts."""
-
-    key: str
+    model_config = ConfigDict(extra="forbid")
 
 
 class ConsentRequest(BaseModel):
     granted: bool
 
 
+class IdentityFormRequest(BaseModel):
+    """Step 1 of intake: who the patient is. Submitted at once, before the clinical
+    conversation starts. Field names match app/domain/intake_fields.py::FIELD_SATISFIED_BY."""
+
+    # Every required field carries min_length=1 so a blank one is a 422 from the request
+    # schema, before the hospital system is asked to store it.
+    name: str = Field(min_length=1, max_length=200)
+    birth_date: date
+    gender: str = Field(min_length=1, max_length=40)
+    phone: str | None = None
+    email: str | None = None
+    address_line1: str = Field(min_length=1, max_length=200)
+    address_line2: str | None = None
+    city: str = Field(min_length=1, max_length=100)
+    state: str = Field(min_length=1, max_length=100)
+    postal_code: str = Field(min_length=1, max_length=20)
+    country: str = Field(min_length=1, max_length=100)
+    contact_preference: str = Field(min_length=1, max_length=40)
+
+    @field_validator("birth_date")
+    @classmethod
+    def birth_date_must_not_be_future(cls, value: date) -> date:
+        if value > datetime.now(UTC).date():
+            raise ValueError("Date of birth cannot be in the future.")
+        return value
+
+
 class MessageRequest(BaseModel):
+    """Step 2 of intake: one turn of the clinical conversation (reason for visit,
+    symptoms, duration, history, medications, allergies)."""
+
     content: str = Field(min_length=1, max_length=4000)
+
+
+class AttachmentSkipRequest(BaseModel):
+    kind: str
+    reason: str | None = None
 
 
 class ReviewRequest(BaseModel):
     decision: Literal["approve", "edit", "reject"]
-    reviewer_id: str = Field(min_length=1, max_length=64)
-    reviewer_role: str = "clinician"
+    reviewer_username: str = Field(min_length=1, max_length=64)
+    reviewer_password: str = Field(min_length=1)
     edits: dict[str, Any] = Field(default_factory=dict)
     comment: str | None = None
 
 
 class ConsultationNoteRequest(BaseModel):
-    doctor_id: str
+    doctor_username: str = Field(min_length=1, max_length=64)
+    doctor_password: str = Field(min_length=1)
     consultation_mode: Literal["in_person", "virtual"] = "in_person"
     notes: str = Field(min_length=1)
     prescription: str | None = None
     follow_up_instructions: str | None = None
+
+
+class FinalizeRequest(BaseModel):
+    """Same clinician-credential-verification pattern as ReviewRequest/ConsultationNoteRequest -
+    finalize triggers HMS writes (request_appointment, push_document) and previously ran with
+    zero identity check."""
+
+    finalizer_username: str = Field(min_length=1, max_length=64)
+    finalizer_password: str = Field(min_length=1)
 
 
 class NewHospitalRequest(BaseModel):

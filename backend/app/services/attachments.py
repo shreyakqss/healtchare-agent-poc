@@ -21,6 +21,49 @@ DOCUMENT_EXTENSIONS = {".pdf", ".txt", ".md"}
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 ALLOWED_EXTENSIONS = DOCUMENT_EXTENSIONS | IMAGE_EXTENSIONS
 ATTACHMENT_KINDS = {"lab_report", "radiology", "prescription", "referral", "discharge_summary", "other"}
+KIND_LABELS: dict[str, str] = {
+    "lab_report": "Lab Report",
+    "radiology": "Radiology Report",
+    "prescription": "Prescription",
+    "referral": "Referral",
+    "discharge_summary": "Discharge Summary",
+    "other": "Attachment",
+}
+
+
+def kind_label(kind: str) -> str:
+    """Human title for an attachment kind (used as the HMS document title)."""
+    return KIND_LABELS.get(kind, "Attachment")
+
+
+# Coarse, advisory-only sanity check on extracted text vs. the declared attachment kind -
+# NOT real document classification. A short list of words/phrases that would plausibly
+# appear in a genuine document of that kind; if a document has extracted text but matches
+# none of its kind's keywords, that's a signal worth a clinician's attention, never a
+# reason to block the upload (this codebase's established "required-with-skip, never
+# hard-block" philosophy for uploads - see AttachmentSkipRequest). "other" has no keyword
+# set (nothing plausible to check against) and is skipped entirely.
+KIND_KEYWORDS: dict[str, list[str]] = {
+    "lab_report": [
+        "result", "reference range", "specimen", "normal", "abnormal", "panel",
+        "mg/dl", "mmol/l", "g/dl", "units/l", "positive", "negative", "test",
+    ],
+    "prescription": [
+        "mg", "mcg", "tablet", "capsule", "dose", "dosage", "twice daily", "once daily",
+        "rx", "refill", "prescri",  # matches "prescribe"/"prescription"/"prescribed"
+    ],
+    "radiology": [
+        "x-ray", "xray", "ct scan", "mri", "ultrasound", "impression", "findings",
+        "radiolog", "contrast", "imaging",
+    ],
+    "discharge_summary": [
+        "discharge", "admission", "admitted", "hospital course", "diagnosis",
+        "follow-up", "discharged on",
+    ],
+    "referral": [
+        "referral", "referring", "refer to", "please see", "consult", "specialist",
+    ],
+}
 
 
 class UploadRejected(DomainError):
@@ -56,7 +99,9 @@ def _extract_text(path: Path, ext: str) -> str | None:
         if ext in DOCUMENT_EXTENSIONS:
             return path.read_text(encoding="utf-8", errors="replace").strip() or None
     except Exception as exc:  # extraction is best effort; the file is still stored
-        logger.warning("Text extraction failed for %s: %s", path.name, exc)
+        # path.name is a random uuid, not PHI; exc could echo extracted document
+        # text in some parser error messages, so only its type is logged.
+        logger.warning("Text extraction failed (%s)", type(exc).__name__)
     return None
 
 
@@ -77,4 +122,20 @@ def store(case_id: uuid.UUID, filename: str, content: bytes, kind: str) -> Store
 
 
 def absolute_path(storage_uri: str) -> Path:
-    return settings.UPLOAD_DIR / storage_uri
+    root = settings.UPLOAD_DIR.resolve()
+    path = (root / storage_uri).resolve()
+    if path != root and root not in path.parents:
+        raise FileNotFoundError("Stored file path is outside the upload directory.")
+    return path
+
+
+def kind_mismatch_suspected(kind: str, extracted_text: str | None) -> bool:
+    """True when extracted text exists but contains none of the declared kind's plausible
+    keywords - advisory only (see KIND_KEYWORDS comment). Never used to block an upload;
+    the caller (api/v1/cases.py) decides what to do with a True result (write an advisory
+    record for the clinician)."""
+    keywords = KIND_KEYWORDS.get(kind)
+    if not keywords or not extracted_text:
+        return False
+    haystack = extracted_text.lower()
+    return not any(kw in haystack for kw in keywords)

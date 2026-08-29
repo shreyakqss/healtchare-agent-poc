@@ -1,8 +1,17 @@
-"""Patient intake: session lifecycle and the adaptive question loop.
+"""Patient intake: session lifecycle, the one-shot identity form, and the adaptive
+clinical question loop.
 
-`process_turn` is the only path a patient statement takes into the system. It
-is an async generator so the reply can be streamed; the `done` frame is the
-record, the `token` frames are transport.
+Two steps, in order:
+1. `submit_identity_form` - name/age/gender/contact_preference, submitted at once (plain
+   form UX, nothing to ask one at a time about).
+2. `process_turn` - the clinical fields (reason_for_visit, symptom, duration, history,
+   medications, allergies), asked one at a time by the LLM. It is an async generator so
+   the reply can be streamed; the `done` frame is the record, the `token` frames are
+   transport.
+
+Both steps write through the same session/case rows and the same fact/entry tables; only
+the *required field subset* each one is scored against differs (see
+app/services/case_repo.py::missing_identity_fields / missing_clinical_fields).
 """
 
 from __future__ import annotations
@@ -12,21 +21,35 @@ import logging
 import time
 import uuid
 from collections.abc import AsyncIterator
+from datetime import timedelta
 
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.agents import AgentUnavailable, fact_extractor, question_planner
 from app.agents.question_planner import PlannerContext
 from app.agents.schemas import ExtractedFact
-from app.core.errors import Conflict, Forbidden, NotFound
+from app.core.config import settings
+from app.core.errors import Conflict, Forbidden
 from app.db import utcnow
 from app.domain import intake_fields
+from app.domain.demographics import age_from_birth_date
 from app.domain.intake_fields import PLACEHOLDERS
 from app.domain.lifecycle import TERMINAL, CaseStatus
 from app.integrations.hms import get_hms
-from app.models import AllergyMedication, IntakeMessage, IntakeSession, PatientCase, PatientFact
-from app.models.facts import NO_TURN, SOURCE_HMS
-from app.schemas.requests import StartSessionRequest
+from app.integrations.hms.schemas import PatientRegistration
+from app.models import (
+    AllergyMedication,
+    ApplicationUser,
+    AuditEvent,
+    CaseOwner,
+    IntakeMessage,
+    IntakeSession,
+    PatientCase,
+    PatientFact,
+)
+from app.models.facts import SOURCE_HMS
+from app.schemas.requests import IdentityFormRequest
 from app.schemas.responses import MessageResponse, TranscriptMessage, TurnEvent
 from app.services import audit, case_repo, hospital_config, lifecycle
 
@@ -52,49 +75,52 @@ GREETING = (
 
 # --- session ---------------------------------------------------------------
 
-def start_session(db: Session, payload: StartSessionRequest) -> tuple[IntakeSession, PatientCase]:
-    session = IntakeSession(status=CaseStatus.CREATED, started_at=utcnow(), channel=payload.channel)
+def active_session(db: Session, owner_user_id: uuid.UUID) -> tuple[IntakeSession, PatientCase] | None:
+    cutoff = utcnow() - timedelta(minutes=settings.SESSION_TIMEOUT_MINUTES)
+    last_message_at = (
+        select(func.max(IntakeMessage.created_at))
+        .where(IntakeMessage.session_id == IntakeSession.id)
+        .correlate(IntakeSession)
+        .scalar_subquery()
+    )
+    last_activity_at = func.coalesce(last_message_at, IntakeSession.started_at, IntakeSession.created_at)
+    return (
+        db.query(IntakeSession, PatientCase)
+        .join(PatientCase, PatientCase.session_id == IntakeSession.id)
+        .join(CaseOwner, CaseOwner.case_id == PatientCase.id)
+        .filter(
+            CaseOwner.user_id == owner_user_id,
+            PatientCase.hospital_id == hospital_config.active_id(),
+            IntakeSession.status.in_([CaseStatus.CREATED, CaseStatus.INGESTING]),
+            last_activity_at >= cutoff,
+        )
+        .order_by(IntakeSession.created_at.desc())
+        .first()
+    )
+
+
+def start_session(db: Session, owner_user_id: uuid.UUID) -> tuple[IntakeSession, PatientCase]:
+    db.query(ApplicationUser).filter(ApplicationUser.id == owner_user_id).with_for_update().one()
+    active = active_session(db, owner_user_id)
+    if active is not None:
+        return active
+    session = IntakeSession(status=CaseStatus.CREATED, started_at=utcnow(), channel="web")
     db.add(session)
     db.flush()
 
-    demographics = dict(payload.demographics)
-    hms_patient = get_hms().get_patient(payload.mrn) if payload.mrn else None
-    if payload.mrn and hms_patient is None:
-        raise NotFound(f"No HMS patient with MRN {payload.mrn}.")
-    if hms_patient:
-        demographics.update({"name": hms_patient.name, "age": str(hms_patient.age), "sex": hms_patient.sex, "mrn": hms_patient.mrn})
-
     case = PatientCase(
         session_id=session.id,
-        demographics=demographics,
-        hms_patient_id=hms_patient.mrn if hms_patient else None,
+        demographics={},
+        hms_patient_id=None,
         hospital_id=hospital_config.active_id(),
     )
     db.add(case)
     db.flush()
+    db.add(CaseOwner(case_id=case.id, user_id=owner_user_id))
 
-    audit.record(db, case.id, "patient", "intake.session_started", {"channel": payload.channel, "hms_linked": bool(hms_patient)})
-    if hms_patient:
-        _import_hms_record(db, case, hms_patient)
+    audit.record(db, case.id, "patient", "intake.session_started", {"channel": "web", "hms_linked": False})
     db.commit()
     return session, case
-
-
-def _import_hms_record(db: Session, case: PatientCase, patient) -> None:
-    """Copy what the hospital already knows, tagged `source=hms` so it is never mistaken for a patient statement."""
-    for kind, value in (("name", patient.name), ("age", str(patient.age)), ("gender", patient.sex)):
-        db.add(PatientFact(case_id=case.id, kind=kind, value=value, source=SOURCE_HMS, source_turn=NO_TURN))
-    for condition in patient.conditions:
-        db.add(PatientFact(case_id=case.id, kind="history", value=condition, source=SOURCE_HMS, source_turn=NO_TURN))
-    for med in patient.medications:
-        db.add(AllergyMedication(case_id=case.id, kind="medication", name=med, source=SOURCE_HMS, source_turn=NO_TURN))
-    for allergy in patient.allergies:
-        db.add(AllergyMedication(case_id=case.id, kind="allergy", name=allergy, source=SOURCE_HMS, source_turn=NO_TURN))
-    audit.record(
-        db, case.id, "system:hms", "hms.record_linked",
-        {"mrn": patient.mrn, "conditions": len(patient.conditions), "medications": len(patient.medications), "allergies": len(patient.allergies)},
-    )
-
 
 def record_consent(db: Session, session: IntakeSession, case: PatientCase, granted: bool) -> IntakeSession:
     if session.consent_status != "PENDING":
@@ -109,7 +135,114 @@ def record_consent(db: Session, session: IntakeSession, case: PatientCase, grant
     return session
 
 
-# --- the turn --------------------------------------------------------------
+def sync_demographics(db: Session, case: PatientCase) -> None:
+    """Copy name/age/gender facts onto the case header. First value stated wins."""
+    merged = dict(case.demographics or {})
+    for f in case_repo.facts(db, case.id):
+        if f.kind in DEMOGRAPHIC_KEYS and f.value not in PLACEHOLDERS:
+            merged.setdefault(DEMOGRAPHIC_KEYS[f.kind], f.value.strip())
+    if merged != case.demographics:
+        case.demographics = merged  # reassigned: SQLAlchemy does not track in-place JSON edits
+        db.commit()
+
+
+def _guard_open(db: Session, session: IntakeSession, case: PatientCase) -> None:
+    """Consent granted, session not terminal/closed/expired. Shared by the identity form and the chat turn loop."""
+    if session.consent_status != "GRANTED":
+        raise Forbidden("Consent must be granted before intake can proceed.")
+    if session.status in TERMINAL:
+        raise Conflict(f"This session is {session.status.lower()}.")
+    if session.status not in {CaseStatus.INGESTING, CaseStatus.CREATED}:
+        raise Conflict("Intake is closed for this case - it is already being reviewed.")
+    latest_message_at = (
+        db.query(IntakeMessage.created_at)
+        .filter(IntakeMessage.session_id == session.id)
+        .order_by(IntakeMessage.created_at.desc())
+        .limit(1)
+        .scalar()
+    )
+    last_activity_at = latest_message_at or session.started_at
+    if last_activity_at is not None and utcnow() - last_activity_at > timedelta(minutes=settings.SESSION_TIMEOUT_MINUTES):
+        already_audited = (
+            db.query(AuditEvent.id)
+            .filter(AuditEvent.case_id == case.id, AuditEvent.action == "session.expired")
+            .first()
+        )
+        if not already_audited:
+            audit.record(
+                db, case.id, "system:session_timeout", "session.expired",
+                {"status": session.status, "timeout_minutes": settings.SESSION_TIMEOUT_MINUTES},
+            )
+            db.commit()
+        raise Conflict(
+            f"This intake session has been inactive for more than {settings.SESSION_TIMEOUT_MINUTES} minutes "
+            "and can no longer accept answers. Please start a new session."
+        )
+
+
+# --- step 1: identity form ---------------------------------------------------------------
+
+def _identity_transcript_text(payload: IdentityFormRequest) -> str:
+    return (
+        f"Name: {payload.name}\n"
+        f"Date of birth: {payload.birth_date.isoformat()}\n"
+        f"Gender: {payload.gender}\n"
+        f"Phone: {payload.phone or 'Not provided'}\n"
+        f"Email: {payload.email or 'Not provided'}\n"
+        f"Address: {payload.address_line1}, {payload.city}, {payload.state}, {payload.postal_code}, {payload.country}\n"
+        f"Contact preference: {payload.contact_preference}"
+    )
+
+
+def submit_identity_form(db: Session, session: IntakeSession, case: PatientCase, payload: IdentityFormRequest) -> None:
+    """Writes the identity fields as facts. Does not raise on an empty required value - the
+    caller (api layer) checks case_repo.missing_identity_fields() afterward and 422s the same
+    way the old one-shot form did."""
+    _guard_open(db, session, case)
+    already_submitted = (
+        db.query(AuditEvent.id)
+        .filter(AuditEvent.case_id == case.id, AuditEvent.action == "intake.identity_submitted")
+        .first()
+    )
+    if already_submitted:
+        raise Conflict("Identity details have already been submitted for this intake.")
+
+    # Patient matching happens before this point in the UI. An explicit linked MRN updates
+    # that record; otherwise OpenEMR creates one and returns its identifier for this case.
+    registered = get_hms().register_patient(
+        case.hms_patient_id,
+        PatientRegistration(
+            name=payload.name.strip(), birth_date=payload.birth_date, gender=payload.gender.strip(),
+            phone=payload.phone.strip() if payload.phone else None, email=payload.email.strip() if payload.email else None,
+            address_line1=payload.address_line1.strip(), address_line2=payload.address_line2.strip() if payload.address_line2 else None,
+            city=payload.city.strip(), state=payload.state.strip(), postal_code=payload.postal_code.strip(),
+            country=payload.country.strip(), contact_preference=payload.contact_preference.strip(),
+        ),
+    )
+    case.hms_patient_id = registered.mrn
+
+    turn_index = case_repo.next_turn_index(db, session.id)
+    db.add(IntakeMessage(session_id=session.id, role="patient", content=_identity_transcript_text(payload), turn_index=turn_index))
+
+    for kind, value in (
+        ("name", payload.name),
+        ("age", str(age_from_birth_date(payload.birth_date, utcnow().date()))),
+        ("gender", payload.gender),
+        ("contact_preference", payload.contact_preference),
+    ):
+        value = value.strip()[:MAX_FACT_CHARS]
+        if value:
+            db.add(PatientFact(case_id=case.id, kind=kind, value=value, source_turn=turn_index))
+
+    db.commit()
+    sync_demographics(db, case)
+
+    audit.record(db, case.id, "system:intake", "intake.identity_submitted", {"turn_index": turn_index})
+    audit.record(db, case.id, "system:hms_sync", "patient.created_or_updated", {"mrn": registered.mrn})
+    db.commit()
+
+
+# --- step 2: the clinical turn loop -----------------------------------------------------
 
 def _settle_last_question(db: Session, case: PatientCase, session: IntakeSession) -> None:
     """Close the field the previous question asked about if the answer produced no fact."""
@@ -127,8 +260,10 @@ def _settle_last_question(db: Session, case: PatientCase, session: IntakeSession
         .order_by(IntakeMessage.turn_index)
         .first()
     )
-    if reply is None or asked.asks_field not in case_repo.missing_fields(db, case.id):
+    if reply is None or asked.asks_field not in case_repo.missing_clinical_fields(db, case.id):
         return
+    if intake_fields.is_off_topic(reply.content):
+        return  # not an answer at all - leave the field open rather than settling it with junk
     value = intake_fields.settle_value(reply.content)
     field = asked.asks_field
     if field in intake_fields.ENTRY_FIELDS:
@@ -138,25 +273,44 @@ def _settle_last_question(db: Session, case: PatientCase, session: IntakeSession
     db.commit()
 
 
-async def _extract_and_store(db: Session, case: PatientCase, message: str, turn_index: int) -> dict[str, int]:
+async def _extract_and_store(db: Session, case: PatientCase, message: str, turn_index: int, is_opening: bool) -> dict[str, int]:
+    """`is_opening` is true for the patient's first CLINICAL statement - not necessarily
+    turn_index 0, since the identity form now takes turn_index 0. It is computed from
+    whether any assistant question has been asked yet, not from the raw index."""
     try:
         result = await fact_extractor.extract(message)
     except AgentUnavailable as exc:
         # Losing structure is bad; losing the statement is worse. Keep the raw text.
-        logger.warning("Extraction unavailable on turn %s: %s", turn_index, exc)
+        logger.warning("Extraction unavailable on turn %s (%s)", turn_index, type(exc).__name__)
         if intake_fields.is_empty_answer(message) or intake_fields.is_denial(message):
             return {"facts": 0, "entries": 0, "mode": "fallback"}  # settled by the next turn
-        kind = "reason_for_visit" if turn_index == 0 else "symptom"
-        db.add(PatientFact(case_id=case.id, kind=kind, value=message.strip()[:MAX_FACT_CHARS], source_turn=turn_index, confidence=0.3))
+        kind = "reason_for_visit" if is_opening else "symptom"
+        value = message.strip()[:MAX_FACT_CHARS]
+        db.add(PatientFact(case_id=case.id, kind=kind, value=value, source_turn=turn_index, confidence=0.3))
+        added = 1
+        # "I have fever" is the reason for the visit AND the symptom. Filing it as the reason
+        # alone leaves the symptom field open, so the very next question asks the patient to
+        # describe what they have just described. An errand ("I need a refill") states no
+        # symptom, so it is left alone.
+        if kind == "reason_for_visit" and not intake_fields.is_administrative_request(message) \
+                and "symptom" in case_repo.missing_clinical_fields(db, case.id):
+            db.add(PatientFact(case_id=case.id, kind="symptom", value=value, source_turn=turn_index, confidence=0.3))
+            added += 1
+        # "I've had a headache for three weeks" answers the duration question too. Without this
+        # the whole sentence lands as one fact and the assistant asks for something already said.
+        duration = intake_fields.extract_duration(message)
+        if duration and "duration" in case_repo.missing_clinical_fields(db, case.id):
+            db.add(PatientFact(case_id=case.id, kind="duration", value=duration[:MAX_FACT_CHARS], source_turn=turn_index, confidence=0.3))
+            added += 1
         db.commit()
-        return {"facts": 1, "entries": 0, "mode": "fallback"}
+        return {"facts": added, "entries": 0, "mode": "fallback"}
 
     existing = {(f.kind, f.value.strip().lower()) for f in case_repo.facts(db, case.id)}
     existing_entries = {(e.kind, e.name.strip().lower()) for e in case_repo.entries(db, case.id)}
     facts = list(result.facts)
 
-    # The opening statement *is* the reason for the visit, whatever the model tagged it as.
-    if turn_index == 0 and not any(f.kind == "reason_for_visit" for f in facts) and not any(k == "reason_for_visit" for k, _ in existing):
+    # The opening clinical statement *is* the reason for the visit, whatever the model tagged it as.
+    if is_opening and not any(f.kind == "reason_for_visit" for f in facts) and not any(k == "reason_for_visit" for k, _ in existing):
         facts.insert(0, ExtractedFact(kind="reason_for_visit", value=message.strip()[:MAX_FACT_CHARS], confidence=0.9))
     has_reason = any(k == "reason_for_visit" for k, _ in existing)
 
@@ -184,19 +338,8 @@ async def _extract_and_store(db: Session, case: PatientCase, message: str, turn_
 
     db.commit()
     if added:
-        _sync_demographics(db, case)
+        sync_demographics(db, case)
     return {"facts": added, "entries": added_entries, "mode": "llm"}
-
-
-def _sync_demographics(db: Session, case: PatientCase) -> None:
-    """Copy name/age/gender facts onto the case header. First value stated wins."""
-    merged = dict(case.demographics or {})
-    for f in case_repo.facts(db, case.id):
-        if f.kind in DEMOGRAPHIC_KEYS and f.value not in PLACEHOLDERS:
-            merged.setdefault(DEMOGRAPHIC_KEYS[f.kind], f.value.strip())
-    if merged != case.demographics:
-        case.demographics = merged  # reassigned: SQLAlchemy does not track in-place JSON edits
-        db.commit()
 
 
 def _on_file(db: Session, case_id: uuid.UUID) -> list[str]:
@@ -210,23 +353,36 @@ def _transcript(db: Session, session_id: uuid.UUID) -> list[TranscriptMessage]:
 
 
 async def process_turn(db: Session, session: IntakeSession, case: PatientCase, content: str) -> AsyncIterator[TurnEvent]:
-    if session.consent_status != "GRANTED":
-        raise Forbidden("Consent must be granted before intake can proceed.")
-    if session.status in TERMINAL:
-        raise Conflict(f"This session is {session.status.lower()}.")
-    if session.status not in {CaseStatus.INGESTING, CaseStatus.CREATED}:
-        raise Conflict("Intake is closed for this case - it is already being reviewed.")
+    """One turn of the clinical conversation. Requires the identity form to already be
+    submitted - not enforced here (that would need an extra query on every turn); the caller
+    only opens the chat UI once the identity step reports nothing missing."""
+    _guard_open(db, session, case)
+    missing_identity = case_repo.missing_identity_fields(db, case.id)
+    if missing_identity:
+        raise Conflict(f"Complete the identity form before clinical intake ({', '.join(missing_identity)} missing).")
 
     started = time.perf_counter()
+    is_opening = not any(
+        m.role == "assistant" and m.asks_field is not None for m in case_repo.messages(db, session.id)
+    )
     turn_index = case_repo.next_turn_index(db, session.id)
     db.add(IntakeMessage(session_id=session.id, role="patient", content=content, turn_index=turn_index))
     db.commit()
 
     _settle_last_question(db, case, session)
-    extraction = await _extract_and_store(db, case, content, turn_index)
 
-    outstanding = case_repo.missing_fields(db, case.id)
-    asked_so_far = sum(1 for m in case_repo.messages(db, session.id) if m.role == "assistant")
+    # A message phrased as a question to the assistant is not an answer - skip the extractor
+    # (nothing to extract) and skip the planner too (there is nothing new to ask about, and a
+    # fixed redirect costs zero LLM calls instead of two).
+    off_topic = intake_fields.is_off_topic(content)
+    extraction = {"facts": 0, "entries": 0, "mode": "off_topic"} if off_topic else await _extract_and_store(
+        db, case, content, turn_index, is_opening
+    )
+
+    outstanding = case_repo.missing_clinical_fields(db, case.id)
+    asked_so_far = sum(
+        1 for m in case_repo.messages(db, session.id) if m.role == "assistant" and m.asks_field is not None
+    )
     asks_field: str | None = None
     planner_mode = "code"
 
@@ -234,6 +390,11 @@ async def process_turn(db: Session, session: IntakeSession, case: PatientCase, c
         reply, complete = CLOSING, True
     elif asked_so_far >= MAX_ASSISTANT_QUESTIONS:
         reply, complete = CLOSING_WITH_GAPS, True
+    elif off_topic:
+        asks_field, complete = outstanding[0], False
+        planner_mode = "redirect"
+        reply = f"I can only help with your intake right now. {question_planner.fallback_question(PlannerContext(field=asks_field, outstanding=outstanding, transcript=[]))}"
+        yield TurnEvent(type="token", text=reply)
     else:
         asks_field, complete = outstanding[0], False
         ctx = PlannerContext(
@@ -254,7 +415,7 @@ async def process_turn(db: Session, session: IntakeSession, case: PatientCase, c
             planner_mode = "llm"
         except AgentUnavailable as exc:
             # Whatever was streamed is replaced client-side by the `done` frame.
-            logger.warning("Planner unavailable: %s", exc)
+            logger.warning("Planner unavailable (%s)", type(exc).__name__)
             reply = question_planner.fallback_question(ctx)
             planner_mode = "fallback"
             yield TurnEvent(type="token", text=reply)

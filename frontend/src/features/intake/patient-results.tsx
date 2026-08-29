@@ -1,16 +1,12 @@
 import type { ReactNode } from "react";
-import type { CaseDetail } from "@/lib/api";
+import type { PatientCase } from "@/lib/api";
 import { cn, formatDateTime } from "@/lib/utils";
 import { Icons } from "@/components/ui/icons";
 import { Badge } from "@/components/ui/badge";
 
-/**
- * The review gate, made visible. Fields are read BY NAME so a new backend key
- * can never leak to a patient. Never shown here: triage priority, the
- * pre-screening briefing, rule evidence, draft task internals.
- */
-export function PatientResults({ detail }: { detail: CaseDetail }) {
-  const approved = detail.review?.decision === "approve" || detail.review?.decision === "edit";
+/** Render only the backend's patient-safe visit projection. */
+export function PatientResults({ detail }: { detail: PatientCase }) {
+  const approved = detail.review_decision === "approve" || detail.review_decision === "edit";
 
   if (detail.status === "REJECTED") {
     return (
@@ -29,12 +25,12 @@ export function PatientResults({ detail }: { detail: CaseDetail }) {
 
   const routing = detail.routing;
   const completed = detail.status === "COMPLETED";
-  const sections = detail.final_summary?.sections ?? {};
+  const sections = detail.final_summary ?? {};
   const friendly = asString(sections.patient_friendly_summary);
   const prescription = asString(sections.prescription);
   const followUps = asStringList(sections.follow_up_instructions);
-  const mode = asString(sections.consultation_mode) ?? detail.consultation_notes.at(-1)?.consultation_mode ?? null;
-  const reference = detail.care_tasks[0]?.hms_reference ?? null;
+  const mode = asString(sections.consultation_mode) ?? detail.consultation_mode;
+  const reference = detail.appointment_reference;
 
   return (
     <div className="space-y-4">

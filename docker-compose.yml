@@ -1,13 +1,14 @@
-# Postgres only. Backend and frontend run on the host for fast iteration.
+# Postgres, OpenEMR (+ its own MariaDB), and Keycloak; backend/frontend run on the host. See README.md setup.
+name: healthcare-agent-poc  # pins container prefix regardless of checkout folder name
 services:
   db:
     image: postgres:16
     environment:
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+      POSTGRES_PASSWORD: ${APP_DB_PASSWORD:-Careflow@2026}
       POSTGRES_DB: healthcare_agent
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5435:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -16,5 +17,86 @@ services:
       timeout: 5s
       retries: 10
 
+  # OpenEMR requires its own MySQL/MariaDB - it does NOT share the Postgres `db` service.
+  openemr-mariadb:
+    image: mariadb:10.11
+    environment:
+      MYSQL_ROOT_PASSWORD: ${OPENEMR_DB_ROOT_PASSWORD:-Careflow@2026}
+      MYSQL_DATABASE: openemr
+      MYSQL_USER: openemr
+      MYSQL_PASSWORD: ${OPENEMR_DB_PASSWORD:-Careflow@2026}
+    volumes:
+      - openemr_mariadb_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  openemr:
+    # 8.3.0 is the current stable release (openemr/downloads, checked Aug 2026).
+    image: openemr/openemr:8.3.0
+    depends_on:
+      openemr-mariadb:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8300:80"
+      - "127.0.0.1:8443:443"
+    environment:
+      MYSQL_HOST: openemr-mariadb
+      MYSQL_ROOT_PASS: ${OPENEMR_DB_ROOT_PASSWORD:-Careflow@2026}
+      MYSQL_USER: openemr
+      MYSQL_PASS: ${OPENEMR_DB_PASSWORD:-Careflow@2026}
+      MYSQL_DATABASE: openemr
+      OE_USER: admin
+      OE_PASS: ${OPENEMR_ADMIN_PASSWORD:-Careflow@2026}  # only applies on a fresh install; change via OpenEMR UI after
+      # These flags enable REST/FHIR + OAuth2 password grant on first boot (values from OpenEMR's own example).
+      OPENEMR_SETTING_rest_api: "1"
+      OPENEMR_SETTING_rest_fhir_api: "1"
+      OPENEMR_SETTING_rest_system_scopes_api: "1"
+      OPENEMR_SETTING_oauth_password_grant: "3"
+      OPENEMR_SETTING_ccda_alt_service_enable: "3"
+      OPENEMR_SETTING_site_addr_oath: "http://localhost:8300"  # "oath" is OpenEMR's own spelling, not a typo
+    volumes:
+      - openemr_sites:/var/www/localhost/htdocs/openemr/sites
+
+  keycloak-db:
+    image: postgres:16
+    profiles: ["auth"]
+    environment:
+      POSTGRES_USER: keycloak
+      POSTGRES_PASSWORD: ${KEYCLOAK_DB_PASSWORD:-Careflow@2026}
+      POSTGRES_DB: keycloak
+    volumes:
+      - keycloak_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U keycloak -d keycloak"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.7.2
+    profiles: ["auth"]
+    command: start-dev --import-realm
+    depends_on:
+      keycloak-db:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8500:8080"
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://keycloak-db:5432/keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:-Careflow@2026}
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN_USERNAME:-admin}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-Careflow@2026}
+      KC_HOSTNAME: http://localhost:8500
+    volumes:
+      - ./infra/keycloak:/opt/keycloak/data/import:ro
+
 volumes:
   pgdata:
+  openemr_mariadb_data:
+  openemr_sites:
+  keycloak_pgdata:

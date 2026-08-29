@@ -5,6 +5,7 @@ import type { CaseDetail } from "@/lib/api";
 import { Avatar, Badge, Button, Icons, Skeleton, StatusBadge } from "@/components/ui";
 import { Briefing } from "@/features/doctor/briefing";
 import { ConsultationForm } from "@/features/doctor/consultation-form";
+import { DiscrepancyFlags } from "@/features/doctor/discrepancy-flags";
 import { FinalSummary } from "@/features/doctor/final-summary";
 import { PatientRecord } from "@/features/doctor/patient-record";
 import { ReviewForm } from "@/features/doctor/review-form";
@@ -50,6 +51,7 @@ export function CasePanel({ c, me, onBack, onChanged }: { c: CaseDetail; me: Me;
 
       <Briefing c={c} />
       <TriageEvidence c={c} />
+      <DiscrepancyFlags c={c} />
       <RoutingCard c={c} />
       <PatientRecord c={c} />
     </div>

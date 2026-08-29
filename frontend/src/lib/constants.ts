@@ -46,6 +46,7 @@ export const ACTOR_LABEL: Record<string, string> = {
   patient: "Patient",
 };
 
+/** Mirrors backend `services/attachments.py::ATTACHMENT_KINDS`. */
 export const ATTACHMENT_KINDS = [
   { id: "lab_report", label: "Lab report" },
   { id: "radiology", label: "Radiology report" },
@@ -54,3 +55,7 @@ export const ATTACHMENT_KINDS = [
   { id: "discharge_summary", label: "Discharge summary" },
   { id: "other", label: "Other document" },
 ] as const;
+
+export function attachmentKindLabel(kind: string): string {
+  return ATTACHMENT_KINDS.find((k) => k.id === kind)?.label ?? kind;
+}

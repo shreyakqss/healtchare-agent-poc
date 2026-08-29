@@ -1,11 +1,9 @@
 import type { HTMLAttributes, ReactNode, TdHTMLAttributes, ThHTMLAttributes } from "react";
-import { cn, initials } from "@/lib/utils";
+import { cn, initials, progressWidth } from "@/lib/utils";
 
-/* ---------- Table ---------- */
-
-export function Table({ className, ...rest }: HTMLAttributes<HTMLTableElement>) {
+export function Table({ className, regionLabel, ...rest }: HTMLAttributes<HTMLTableElement> & { regionLabel: string }) {
   return (
-    <div className="w-full overflow-x-auto">
+    <div className="w-full overflow-x-auto focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand" role="region" aria-label={regionLabel} tabIndex={0}>
       <table className={cn("w-full border-collapse text-sm", className)} {...rest} />
     </div>
   );
@@ -72,7 +70,7 @@ export function BarList({ items, total }: { items: Array<{ label: string; value:
             <span className="tabular ml-3 text-fg-muted">{i.value}</span>
           </div>
           <div className="h-1.5 w-full overflow-hidden rounded-full bg-sunken">
-            <div className={cn("h-full rounded-full", i.tone ?? "bg-brand")} style={{ width: `${Math.round((i.value / max) * 100)}%` }} />
+            <div className={cn("h-full rounded-full", progressWidth(i.value, max), i.tone ?? "bg-brand")} />
           </div>
         </li>
       ))}

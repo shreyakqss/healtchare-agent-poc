@@ -119,7 +119,7 @@ export function OverviewTab({ detail }: { detail: CaseDetail }) {
                 {t.evidence.length ? (
                   <div>
                     <SectionTitle className="mb-2">Evidence</SectionTitle>
-                    <Table>
+                    <Table regionLabel="Triage evidence">
                       <thead><tr><Th>Matched on</Th><Th>Detail</Th></tr></thead>
                       <tbody>
                         {t.evidence.map((e, i) => (

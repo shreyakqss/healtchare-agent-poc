@@ -2,30 +2,43 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { Icons, type IconName } from "@/components/ui/icons";
 import { IconButton } from "@/components/ui/button";
 import { ThemeToggle } from "@/components/layout/theme-toggle";
 import { ToastProvider } from "@/components/ui/feedback";
+import type { AuthUser } from "@/lib/api/types";
 
 export interface NavItem { href: string; label: string; icon: IconName }
 
 const PRIMARY: NavItem[] = [
   { href: "/patient", label: "Patient intake", icon: "user" },
   { href: "/doctor", label: "Doctor", icon: "stethoscope" },
-  { href: "/clinic", label: "Clinic desk", icon: "building" },
 ];
 const SECONDARY: NavItem[] = [{ href: "/admin", label: "Configuration", icon: "settings" }];
 
-export function AppShell({ children, title, subtitle, actions, wide }: {
-  children: ReactNode; title?: ReactNode; subtitle?: ReactNode; actions?: ReactNode; wide?: boolean;
+export function AppShell({ children, title, subtitle, actions, wide, user }: {
+  children: ReactNode; title?: ReactNode; subtitle?: ReactNode; actions?: ReactNode; wide?: boolean; user: AuthUser;
 }) {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
+  const navigationDialog = useRef<HTMLDialogElement>(null);
 
+  useEffect(() => {
+    const dialog = navigationDialog.current;
+    if (!dialog) return;
+    if (open && !dialog.open) dialog.showModal();
+    if (!open && dialog.open) dialog.close();
+  }, [open]);
+
+  const visible = (item: NavItem) => (
+    (item.href === "/patient" && user.roles.includes("patient"))
+    || (item.href === "/doctor" && user.roles.includes("clinician"))
+    || (item.href === "/admin" && user.roles.includes("admin"))
+  );
   const nav = (items: NavItem[]) =>
-    items.map((item) => {
+    items.filter(visible).map((item) => {
       const Icon = Icons[item.icon];
       const active = pathname === item.href || pathname.startsWith(item.href + "/");
       return (
@@ -51,10 +64,10 @@ export function AppShell({ children, title, subtitle, actions, wide }: {
       </Link>
       <nav className="flex-1 space-y-6 px-3 pt-2" aria-label="Primary">
         <div className="space-y-0.5">{nav(PRIMARY)}</div>
-        <div>
+        {SECONDARY.some(visible) ? <div>
           <p className="mb-1 px-3 text-[11px] font-semibold uppercase tracking-wider text-fg-subtle">Setup</p>
           <div className="space-y-0.5">{nav(SECONDARY)}</div>
-        </div>
+        </div> : null}
       </nav>
       <div className="border-t border-line px-4 py-3 text-[11px] leading-4 text-fg-subtle">
         Synthetic data only. Every AI output is reviewed by a clinician before release.
@@ -67,12 +80,22 @@ export function AppShell({ children, title, subtitle, actions, wide }: {
       <div className="flex min-h-dvh">
         <aside className="hidden w-60 shrink-0 border-r border-line bg-surface lg:block">{sidebar}</aside>
 
-        {open ? (
-          <div className="fixed inset-0 z-40 lg:hidden">
-            <div className="absolute inset-0 bg-black/50" onClick={() => setOpen(false)} aria-hidden="true" />
-            <aside className="absolute inset-y-0 left-0 w-64 bg-surface shadow-pop">{sidebar}</aside>
-          </div>
-        ) : null}
+        <dialog
+          ref={navigationDialog}
+          aria-label="Navigation"
+          onClose={() => setOpen(false)}
+          onClick={(event) => { if (event.target === event.currentTarget) setOpen(false); }}
+          className="fixed inset-y-0 left-0 z-40 m-0 h-dvh max-h-none w-64 max-w-none border-0 bg-surface p-0 text-fg shadow-pop backdrop:bg-black/50 lg:hidden"
+        >
+          <IconButton
+            autoFocus
+            label="Close navigation"
+            className="absolute right-2 top-2 z-10"
+            onClick={() => setOpen(false)}
+            icon={<Icons.x size={20} />}
+          />
+          <aside className="h-full">{sidebar}</aside>
+        </dialog>
 
         <div className="flex min-w-0 flex-1 flex-col">
           <header className="sticky top-0 z-30 flex h-14 items-center gap-3 border-b border-line bg-surface/90 px-4 backdrop-blur sm:px-6">
@@ -83,6 +106,14 @@ export function AppShell({ children, title, subtitle, actions, wide }: {
             </div>
             <div className="flex items-center gap-1">
               {actions}
+              <span className="hidden max-w-40 truncate px-2 text-xs text-fg-muted sm:inline">
+                {user.username ?? "Signed in"}
+              </span>
+              <form action="/api/auth/logout" method="post">
+                <button type="submit" className="rounded-md px-2 py-1.5 text-xs font-medium text-fg-muted hover:bg-sunken hover:text-fg">
+                  Sign out
+                </button>
+              </form>
               <ThemeToggle />
             </div>
           </header>

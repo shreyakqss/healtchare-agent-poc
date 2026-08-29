@@ -5,6 +5,15 @@ export type CaseStatus =
 export type Priority = "high" | "medium" | "low";
 export type ReviewDecision = "approve" | "edit" | "reject";
 
+export interface AuthUser {
+  user_id: string;
+  subject: string;
+  username: string | null;
+  roles: Array<"patient" | "clinician" | "admin">;
+  clinic_id: string | null;
+  hms_username: string | null;
+}
+
 export interface SessionResponse {
   session_id: string;
   case_id: string;
@@ -13,9 +22,26 @@ export interface SessionResponse {
   demographics: Record<string, string>;
   hms_linked: boolean;
   missing_fields: string[];
+  required_attachment_kinds: string[];
+  pending_attachment_kinds: string[];
 }
 
 export interface TranscriptMessage { role: "patient" | "assistant"; content: string; turn_index: number }
+
+export interface IdentityFormRequest {
+  name: string;
+  birth_date: string;
+  gender: string;
+  phone?: string;
+  email?: string;
+  address_line1: string;
+  address_line2?: string;
+  city: string;
+  state: string;
+  postal_code: string;
+  country: string;
+  contact_preference: string;
+}
 
 export interface MessageResponse {
   session_id: string;
@@ -32,6 +58,23 @@ export type TurnEvent =
   | { type: "token"; text: string }
   | { type: "done"; response: MessageResponse }
   | { type: "error"; status: number; detail: string };
+
+export interface AttachmentSkipResponse {
+  ok: boolean;
+}
+
+/** Every clinician action carries the clinician's own HMS login; the backend verifies it per action. */
+export interface ClinicianCredentials { username: string; password: string }
+
+export interface ReviewRequest {
+  decision: ReviewDecision; reviewer_username: string; reviewer_password: string;
+  edits?: Record<string, string>; comment?: string;
+}
+export interface ConsultationNoteRequest {
+  doctor_username: string; doctor_password: string; consultation_mode: "in_person" | "virtual";
+  notes: string; prescription?: string; follow_up_instructions?: string;
+}
+export interface FinalizeRequest { finalizer_username: string; finalizer_password: string }
 
 export interface Fact { id: string; kind: string; value: string; source: "patient" | "hms"; source_turn: number; confidence: number }
 export interface Entry { id: string; kind: "allergy" | "medication"; name: string; reaction_or_dose: string | null; source: "patient" | "hms"; source_turn: number }
@@ -62,6 +105,11 @@ export interface ConsultationNote {
   notes: string; prescription: string | null; follow_up_instructions: string | null; created_at: string;
 }
 export interface CareTask { id: string; task_type: string; status: string; priority: Priority; payload: Record<string, unknown>; hms_reference: string | null; notes: string | null; created_at: string }
+export interface Discrepancy {
+  id: string; field_or_topic: string; patient_stated: string; document_says: string;
+  source_kind: "document" | "hms"; attachment_id: string | null; severity: "info" | "review";
+  requested_document_kind: string | null; generated_by: "llm" | "fallback" | "heuristic"; created_at: string;
+}
 export interface AuditEvent { id: string; actor: string; action: string; payload: Record<string, unknown>; created_at: string }
 
 export interface CaseListItem {
@@ -70,31 +118,61 @@ export interface CaseListItem {
   chief_complaint: string | null; demographics: Record<string, string>; hms_patient_id: string | null;
   review_decision: ReviewDecision | null; missing_count: number; created_at: string; updated_at: string | null;
 }
+export interface ActiveIntake extends SessionResponse {
+  identity_complete: boolean;
+  intake_complete: boolean;
+  transcript: TranscriptMessage[];
+  attachments: Attachment[];
+  skipped_attachment_kinds: string[];
+}
+
+export interface PatientVisitItem {
+  case_id: string; status: CaseStatus; review_decision: ReviewDecision | null;
+  department_name: string | null; doctor_name: string | null;
+  created_at: string; updated_at: string | null;
+}
+
+export interface PatientCase {
+  case_id: string; status: CaseStatus; review_decision: ReviewDecision | null;
+  routing: Routing | null; final_summary: Record<string, unknown> | null;
+  consultation_mode: "in_person" | "virtual" | null;
+  appointment_reference: string | null; created_at: string;
+}
 
 export interface CaseDetail {
   case_id: string; session_id: string; status: CaseStatus; consent_status: string; channel: string; hospital_id: string;
   demographics: Record<string, string>; hms_patient_id: string | null; transcript: TranscriptMessage[];
   facts: Fact[]; allergies_medications: Entry[]; attachments: Attachment[]; missing_fields: string[];
-  triage: Triage | null; routing: Routing | null; prescreening_summary: Summary | null; review: Review | null;
+  required_attachment_kinds: string[]; pending_attachment_kinds: string[];
+  triage: Triage | null; routing: Routing | null; discrepancies: Discrepancy[]; prescreening_summary: Summary | null; review: Review | null;
   consultation_notes: ConsultationNote[]; final_summary: Summary | null; care_tasks: CareTask[]; created_at: string;
-}
-
-export interface ClinicOverview {
-  total: number; by_status: Record<string, number>; by_priority: Record<string, number>;
-  by_department: Record<string, number>; awaiting_review: number; completed_today: number;
 }
 
 /* Hospital configuration (mirrors data/hospitals/*.yaml) */
 export interface Department { id: string; name: string; default?: boolean }
-export interface Doctor { id: string; name: string; department_id: string; working_days?: string[] }
+export interface Doctor { id: string; name: string; department_id: string; working_days?: string[]; username?: string | null }
 export interface AppointmentType { id: string; label: string; duration_minutes?: number }
 export interface TriageRuleConfig {
   code: string; priority: Priority;
   condition: { any_symptom?: string[]; all_symptoms?: string[]; any_history?: string[]; min_duration_days?: number; allergy_conflict?: boolean };
   action: string; explanation: string; specialty_hint?: string;
 }
+/** `/hospital/config` returns the clinic's own details from the hospital system's facility
+ * record (`source: "hms"`), falling back to the YAML block (`source: "config"`). The admin
+ * editor loads the raw YAML instead, so what it saves is never the overlaid copy. */
+export interface HospitalIdentity {
+  id: string;
+  name: string;
+  timezone?: string;
+  phone?: string | null;
+  email?: string | null;
+  website?: string | null;
+  address?: HMSAddress | null;
+  source?: "hms" | "config";
+}
+
 export interface HospitalConfig {
-  hospital: { id: string; name: string; timezone?: string };
+  hospital: HospitalIdentity;
   appointment_types: AppointmentType[];
   departments: Department[];
   doctors: Doctor[];
@@ -102,13 +180,33 @@ export interface HospitalConfig {
   triage_rules: { version: string; rules: TriageRuleConfig[] };
   priority_appointment_map: Record<Priority, string>;
   required_intake_fields: string[];
+  required_attachment_kinds?: string[];
+}
+export interface IntakeConfig {
+  hospital: Pick<HospitalIdentity, "id" | "name" | "timezone">;
+  required_intake_fields: string[];
+  required_attachment_kinds: string[];
+  llm_configured: boolean;
 }
 export interface HospitalSummary { id: string; name: string; active: boolean; departments: number; doctors: number; rules: number }
 
+/** GET /hospital/roster - the doctors a case can be routed to (live HMS practitioners where known, YAML elsewhere). */
+/** `username` is the clinician's hospital-system login. `id` is a practitioner record id and is
+ * never a valid credential, so it must never be offered as one. Null for YAML-only doctors. */
+export interface RosterDoctor { id: string; name: string; department_id: string; specialty: string | null; working_days: string[]; username: string | null }
+export interface Roster { source: "hms" | "config"; doctors: RosterDoctor[] }
+
 /* HMS */
-export interface HMSPatient { mrn: string; name: string; age: number; sex: string; phone: string | null; conditions: string[]; medications: string[]; allergies: string[]; last_visit: string | null }
-export interface HMSPractitioner { id: string; name: string; department_id: string; working_days: string[] }
+export interface HMSAddress { line1: string; line2: string | null; city: string; state: string; postal_code: string; country: string }
+export interface HMSPatient {
+  mrn: string; name: string; age: number; sex: string; birth_date: string | null;
+  phone: string | null; email: string | null; address: HMSAddress | null;
+  contact_preference: string | null;
+  conditions: string[]; medications: string[]; allergies: string[]; last_visit: string | null;
+}
+export interface HMSPractitioner { id: string; name: string; department_id: string; specialty: string | null; working_days: string[]; username: string | null }
 export interface HMSStatus { provider: string; connected: boolean; patients: number; practitioners: number; pending_requests: number }
+export interface HMSDocument { reference: string; title: string; content_type: string; created: string | null }
 export interface AppointmentRequestResult { reference: string; status: string; slot: Slot | null }
 
-export interface Health { status: string; version: string; hospital: string; llm: { configured: boolean; model: string }; hms: HMSStatus }
+export interface Health { status: string; version: string }

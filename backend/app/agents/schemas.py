@@ -40,6 +40,22 @@ class PrescreeningSummary(BaseModel):
     )
 
 
+class Discrepancy(BaseModel):
+    field_or_topic: str = Field(description="Short label for what mismatches, e.g. 'medications' or 'symptom duration'.")
+    patient_stated: str = Field(description="What the patient said, in their own words.")
+    document_or_hms_says: str = Field(description="What the document or HMS record says instead.")
+    source_kind: Literal["document", "hms"]
+    attachment_id: str | None = Field(default=None, description="Id of the MedicalAttachment this came from, if source_kind is 'document'.")
+    severity: Literal["info", "review"]
+    requested_document_kind: str | None = Field(
+        default=None, description="An attachment kind worth requesting from the patient to resolve this, if any."
+    )
+
+
+class DiscrepancyResult(BaseModel):
+    discrepancies: list[Discrepancy] = Field(default_factory=list)
+
+
 class VisitSummary(BaseModel):
     visit_reason: str
     consultation_overview: str

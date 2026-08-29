@@ -1,17 +1,22 @@
 import Link from "next/link";
-import { healthApi, safe } from "@/lib/api";
+import { currentUser } from "@/lib/auth";
+import { serverApi } from "@/lib/api/server";
 import { Logo } from "@/components/layout/app-shell";
 import { Icons } from "@/components/ui/icons";
 import { Badge } from "@/components/ui/badge";
 
 const ROLES = [
-  { href: "/patient", icon: Icons.user, title: "I am a patient", body: "Tell the intake assistant what brings you in. A clinician reviews everything before any decision is made." },
-  { href: "/doctor", icon: Icons.stethoscope, title: "I am a doctor", body: "Review pre-screened cases, record consultations and release visit summaries." },
-  { href: "/clinic", icon: Icons.building, title: "I work the clinic desk", body: "Live queue, priorities, routing and the audit trail for every case." },
+  { role: "patient" as const, href: "/patient", icon: Icons.user, title: "Patient sign in", body: "Tell the intake assistant what brings you in. A clinician reviews everything before any decision is made." },
+  { role: "clinician" as const, href: "/doctor", icon: Icons.stethoscope, title: "Clinician sign in", body: "Review pre-screened cases, record consultations and release visit summaries." },
+  { role: "admin" as const, href: "/admin", icon: Icons.settings, title: "Administrator sign in", body: "Manage clinic configuration without receiving access to clinical case content." },
 ];
 
 export default async function HomePage() {
-  const health = await safe(healthApi.get(), null);
+  const [user, health] = await Promise.all([
+    currentUser(),
+    serverApi.health().catch(() => null),
+  ]);
+  const roles = user ? ROLES.filter((entry) => user.roles.includes(entry.role)) : ROLES;
 
   return (
     <div className="flex min-h-dvh flex-col">
@@ -20,7 +25,14 @@ export default async function HomePage() {
           <Logo />
           <span className="text-[15px] font-semibold tracking-tight">CareFlow</span>
         </div>
-        <Link href="/admin" className="text-sm text-fg-muted hover:text-fg">Configuration</Link>
+        <div className="flex items-center gap-3">
+          {user?.roles.includes("admin") ? <Link href="/admin" className="text-sm text-fg-muted hover:text-fg">Configuration</Link> : null}
+          {user ? (
+            <form action="/api/auth/logout" method="post">
+              <button type="submit" className="text-sm text-fg-muted hover:text-fg">Sign out</button>
+            </form>
+          ) : null}
+        </div>
       </header>
 
       <main id="main" className="mx-auto flex w-full max-w-5xl flex-1 flex-col justify-center px-6 pb-16 pt-8">
@@ -35,9 +47,9 @@ export default async function HomePage() {
           </p>
         </div>
 
-        <div className="mt-10 grid gap-4 sm:grid-cols-3">
-          {ROLES.map((r) => (
-            <Link key={r.href} href={r.href}
+        <div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {roles.map((r) => (
+            <Link key={r.href} href={user ? r.href : `/api/auth/login?return_to=${encodeURIComponent(r.href)}`}
               className="group rounded-lg border border-line bg-surface p-5 shadow-card transition-colors hover:border-brand-ring">
               <div className="flex h-10 w-10 items-center justify-center rounded-md bg-brand-soft text-brand">
                 <r.icon size={20} />
@@ -53,19 +65,8 @@ export default async function HomePage() {
 
         <div className="mt-10 flex flex-wrap items-center gap-x-5 gap-y-2 text-xs text-fg-subtle">
           <span className="flex items-center gap-1.5"><Icons.shield size={14} /> Synthetic data only, no real patient information</span>
-          {health ? (
-            <>
-              <span>Clinic: <span className="text-fg-muted">{health.hospital}</span></span>
-              <span className="flex items-center gap-1.5">
-                AI model <Badge tone={health.llm.configured ? "success" : "warning"}>{health.llm.configured ? health.llm.model : "fallback mode"}</Badge>
-              </span>
-              <span className="flex items-center gap-1.5">
-                HMS <Badge tone={health.hms.connected ? "success" : "danger"}>{health.hms.provider}</Badge>
-              </span>
-            </>
-          ) : (
-            <Badge tone="danger">API offline</Badge>
-          )}
+          <Badge tone={health ? "success" : "danger"}>{health ? "Service online" : "Service offline"}</Badge>
+          {user ? <span>Signed in as <span className="text-fg-muted">{user.username ?? "CareFlow user"}</span></span> : null}
         </div>
       </main>
     </div>

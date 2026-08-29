@@ -4,23 +4,28 @@ export function cn(...parts: unknown[]): string {
 
 export function formatDateTime(iso: string | null | undefined, opts: Intl.DateTimeFormatOptions = {}): string {
   if (!iso) return "–";
-  return new Date(iso).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short", ...opts });
+  const value = new Date(iso);
+  return Number.isNaN(value.getTime()) ? "–" : value.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short", ...opts });
 }
 
 export function formatDate(iso: string | null | undefined): string {
   if (!iso) return "–";
-  return new Date(iso).toLocaleDateString(undefined, { dateStyle: "medium" });
+  const value = new Date(iso);
+  return Number.isNaN(value.getTime()) ? "–" : value.toLocaleDateString(undefined, { dateStyle: "medium" });
 }
 
 export function formatTime(iso: string | null | undefined): string {
   if (!iso) return "–";
-  return new Date(iso).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+  const value = new Date(iso);
+  return Number.isNaN(value.getTime()) ? "–" : value.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
 }
 
 /** "3 min ago" style, computed against a caller-supplied `now` (render purity). */
 export function timeAgo(iso: string | null | undefined, now: number): string {
   if (!iso) return "–";
-  const diff = Math.max(0, now - new Date(iso).getTime());
+  const timestamp = new Date(iso).getTime();
+  if (Number.isNaN(timestamp)) return "–";
+  const diff = Math.max(0, now - timestamp);
   const m = Math.round(diff / 60000);
   if (m < 1) return "just now";
   if (m < 60) return `${m} min ago`;
@@ -52,4 +57,14 @@ export function bytes(n: number): string {
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
   return `${(n / 1024 / 1024).toFixed(1)} MB`;
+}
+
+const PROGRESS_WIDTHS = [
+  "w-0", "w-[5%]", "w-[10%]", "w-[15%]", "w-[20%]", "w-[25%]", "w-[30%]", "w-[35%]", "w-[40%]", "w-[45%]",
+  "w-[50%]", "w-[55%]", "w-[60%]", "w-[65%]", "w-[70%]", "w-[75%]", "w-[80%]", "w-[85%]", "w-[90%]", "w-[95%]", "w-full",
+];
+
+export function progressWidth(value: number, max: number): string {
+  const index = max > 0 ? Math.round(Math.min(1, Math.max(0, value / max)) * 20) : 0;
+  return PROGRESS_WIDTHS[index];
 }

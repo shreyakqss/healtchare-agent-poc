@@ -12,7 +12,15 @@ from app.models import IntakeSession
 from app.services import audit
 
 
-def transition(db: Session, session: IntakeSession, target: CaseStatus | str, actor: str, case_id: uuid.UUID) -> IntakeSession:
+def transition(
+    db: Session,
+    session: IntakeSession,
+    target: CaseStatus | str,
+    actor: str,
+    case_id: uuid.UUID,
+    *,
+    commit: bool = True,
+) -> IntakeSession:
     target = CaseStatus(target)
     assert_transition(session.status, target)
     previous = session.status
@@ -21,5 +29,6 @@ def transition(db: Session, session: IntakeSession, target: CaseStatus | str, ac
         if target in TERMINAL:
             session.completed_at = utcnow()
         audit.record(db, case_id, actor, "status.changed", {"from": previous, "to": target})
-    db.commit()
+    if commit:
+        db.commit()
     return session

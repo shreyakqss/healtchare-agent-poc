@@ -4,25 +4,34 @@ from app.db.base import Base
 from app.models.audit import AuditEvent
 from app.models.care_task import CareTask
 from app.models.case import PatientCase
-from app.models.clinical import ClinicalReview, ClinicalSummary, ConsultationNote
+from app.models.clinical import ClinicalDiscrepancy, ClinicalReview, ClinicalSummary, ConsultationNote
 from app.models.facts import AllergyMedication, MedicalAttachment, PatientFact
+from app.models.identity import ApplicationUser, AuthSession, CaseOwner, RateLimitBucket
 from app.models.intake import IntakeMessage, IntakeSession
 from app.models.triage import RoutingRecommendation, TriageResult, TriageRule
+from app.models.workflow import WorkflowJob, WorkflowOperation
 
 __all__ = [
     "Base",
     "AuditEvent",
     "CareTask",
     "PatientCase",
+    "ClinicalDiscrepancy",
     "ClinicalReview",
     "ClinicalSummary",
     "ConsultationNote",
     "AllergyMedication",
     "MedicalAttachment",
     "PatientFact",
+    "ApplicationUser",
+    "AuthSession",
+    "CaseOwner",
+    "RateLimitBucket",
     "IntakeMessage",
     "IntakeSession",
     "RoutingRecommendation",
     "TriageResult",
     "TriageRule",
+    "WorkflowJob",
+    "WorkflowOperation",
 ]

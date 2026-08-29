@@ -14,6 +14,8 @@ class SessionResponse(BaseModel):
     demographics: dict[str, Any] = Field(default_factory=dict)
     hms_linked: bool = False
     missing_fields: list[str] = Field(default_factory=list)
+    required_attachment_kinds: list[str] = Field(default_factory=list)
+    pending_attachment_kinds: list[str] = Field(default_factory=list)
 
 
 class TranscriptMessage(BaseModel):
@@ -31,6 +33,10 @@ class MessageResponse(BaseModel):
     missing_fields: list[str]
     intake_complete: bool
     transcript: list[TranscriptMessage]
+
+
+class AttachmentSkipResponse(BaseModel):
+    ok: bool
 
 
 class TurnEvent(BaseModel):
@@ -71,6 +77,14 @@ class AttachmentResponse(BaseModel):
     extracted_text: str | None
     uploaded_by: str
     created_at: datetime
+
+
+class ActiveIntakeResponse(SessionResponse):
+    identity_complete: bool
+    intake_complete: bool
+    transcript: list[TranscriptMessage] = Field(default_factory=list)
+    attachments: list[AttachmentResponse] = Field(default_factory=list)
+    skipped_attachment_kinds: list[str] = Field(default_factory=list)
 
 
 class TriageResponse(BaseModel):
@@ -152,6 +166,38 @@ class AuditEventResponse(BaseModel):
     created_at: datetime
 
 
+class DiscrepancyResponse(BaseModel):
+    id: str
+    field_or_topic: str
+    patient_stated: str
+    document_says: str
+    source_kind: str
+    attachment_id: str | None
+    severity: str
+    requested_document_kind: str | None
+    generated_by: str
+    created_at: datetime
+
+
+class RosterDoctor(BaseModel):
+    id: str
+    name: str
+    department_id: str
+    specialty: str | None = None
+    working_days: list[str] = Field(default_factory=list)
+    # The clinician's hospital-system login, for pre-filling the credential prompt. `id` is a
+    # practitioner record id, which the hospital system never accepts as a username.
+    username: str | None = None
+
+
+class RosterResponse(BaseModel):
+    """Doctors a case can be routed to. `source` says whether at least one department is
+    served by live HMS practitioners ("hms") or the whole list came from the YAML ("config")."""
+
+    source: Literal["hms", "config"]
+    doctors: list[RosterDoctor]
+
+
 class CaseListItem(BaseModel):
     case_id: str
     session_id: str
@@ -170,6 +216,27 @@ class CaseListItem(BaseModel):
     updated_at: datetime | None
 
 
+class PatientVisitItem(BaseModel):
+    case_id: str
+    status: str
+    review_decision: str | None
+    department_name: str | None
+    doctor_name: str | None
+    created_at: datetime
+    updated_at: datetime | None
+
+
+class PatientCaseResponse(BaseModel):
+    case_id: str
+    status: str
+    review_decision: str | None
+    routing: RoutingResponse | None
+    final_summary: dict[str, Any] | None
+    consultation_mode: str | None
+    appointment_reference: str | None
+    created_at: datetime
+
+
 class CaseDetailResponse(BaseModel):
     case_id: str
     session_id: str
@@ -184,20 +251,14 @@ class CaseDetailResponse(BaseModel):
     allergies_medications: list[EntryResponse]
     attachments: list[AttachmentResponse]
     missing_fields: list[str]
+    required_attachment_kinds: list[str] = Field(default_factory=list)
+    pending_attachment_kinds: list[str] = Field(default_factory=list)
     triage: TriageResponse | None
     routing: RoutingResponse | None
+    discrepancies: list[DiscrepancyResponse] = Field(default_factory=list)
     prescreening_summary: SummaryResponse | None
     review: ReviewResponse | None
     consultation_notes: list[ConsultationNoteResponse]
     final_summary: SummaryResponse | None
     care_tasks: list[CareTaskResponse]
     created_at: datetime
-
-
-class ClinicOverview(BaseModel):
-    total: int
-    by_status: dict[str, int]
-    by_priority: dict[str, int]
-    by_department: dict[str, int]
-    awaiting_review: int
-    completed_today: int

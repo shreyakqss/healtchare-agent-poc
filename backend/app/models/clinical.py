@@ -36,6 +36,27 @@ class ClinicalReview(Base):
     comment: Mapped[str | None] = mapped_column(Text)
 
 
+class ClinicalDiscrepancy(Base):
+    """Clinician-facing flag from the discrepancy-checker agent: patient statement vs. document/HMS
+    record. Advisory only - never read by triage_engine.evaluate() and never shown to the patient."""
+
+    __tablename__ = "clinical_discrepancies"
+
+    case_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("patient_cases.id", ondelete="CASCADE"), index=True
+    )
+    field_or_topic: Mapped[str] = mapped_column(String(255))
+    patient_stated: Mapped[str] = mapped_column(Text)
+    document_says: Mapped[str] = mapped_column(Text)
+    source_kind: Mapped[str] = mapped_column(String(16))  # document | hms
+    attachment_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("medical_attachments.id", ondelete="SET NULL"), nullable=True
+    )
+    severity: Mapped[str] = mapped_column(String(16))  # info | review
+    requested_document_kind: Mapped[str | None] = mapped_column(String(64))
+    generated_by: Mapped[str] = mapped_column(String(32), default="llm")  # llm | fallback
+
+
 class ConsultationNote(Base):
     """Authored by a clinician, never by an agent."""
 
@@ -45,6 +66,11 @@ class ConsultationNote(Base):
         Uuid, ForeignKey("patient_cases.id", ondelete="CASCADE"), index=True
     )
     doctor_id: Mapped[str] = mapped_column(String(64))
+    # Captured at write-time from the verified HMS identity (identity.name). doctor_id is now
+    # a real hospital-system identifier (an OpenEMR Practitioner UUID) rather than a local
+    # hospital_config.yaml doctor id, so it can no longer be resolved to a display name via
+    # hospital_config.doctor_by_id() - that lookup only knows the configured fallback roster.
+    doctor_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
     consultation_mode: Mapped[str] = mapped_column(String(16), default="in_person")
     notes: Mapped[str] = mapped_column(Text)
     prescription: Mapped[str | None] = mapped_column(Text)

@@ -6,17 +6,20 @@ import { Icons } from "@/components/ui/icons";
 import type { ChatMessage } from "@/features/intake/use-intake-session";
 
 export function MessageList({ messages, typing }: { messages: ChatMessage[]; typing: boolean }) {
-  const endRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
   const count = messages.length;
   const lastLen = messages[messages.length - 1]?.content.length ?? 0;
 
-  // Keep the newest text in view as it arrives (DOM side effect, no state).
+  // Keep the newest text in view inside the conversation, without pulling the
+  // whole patient portal (and its other sections) down the page.
   useEffect(() => {
-    endRef.current?.scrollIntoView({ block: "end", behavior: "smooth" });
+    const list = scrollRef.current;
+    if (list) list.scrollTo({ top: list.scrollHeight, behavior: "smooth" });
   }, [count, lastLen, typing]);
 
   return (
-    <div role="log" aria-live="polite" aria-relevant="additions text" className="space-y-4">
+    <div ref={scrollRef} role="log" aria-live="polite" aria-relevant="additions text"
+      className="scrollbar-thin min-h-0 flex-1 space-y-4 overflow-y-auto p-4 sm:p-5">
       {messages.map((m) => <Bubble key={m.id} message={m} />)}
       {typing ? (
         <div className="flex items-end gap-2.5">
@@ -24,12 +27,11 @@ export function MessageList({ messages, typing }: { messages: ChatMessage[]; typ
           <div className="rounded-2xl rounded-bl-md border border-line bg-surface px-4 py-3 shadow-card">
             <span className="sr-only">Assistant is typing</span>
             <span className="flex items-center gap-1" aria-hidden="true">
-              <Dot delay="0ms" /><Dot delay="160ms" /><Dot delay="320ms" />
+              <Dot index={0} /><Dot index={1} /><Dot index={2} />
             </span>
           </div>
         </div>
       ) : null}
-      <div ref={endRef} />
     </div>
   );
 }
@@ -64,6 +66,7 @@ function AssistantMark() {
   );
 }
 
-function Dot({ delay }: { delay: string }) {
-  return <span className="h-1.5 w-1.5 animate-pulse-soft rounded-full bg-fg-subtle" style={{ animationDelay: delay }} />;
+function Dot({ index }: { index: 0 | 1 | 2 }) {
+  const delay = ["[animation-delay:0ms]", "[animation-delay:160ms]", "[animation-delay:320ms]"][index];
+  return <span className={cn("h-1.5 w-1.5 animate-pulse-soft rounded-full bg-fg-subtle", delay)} />;
 }

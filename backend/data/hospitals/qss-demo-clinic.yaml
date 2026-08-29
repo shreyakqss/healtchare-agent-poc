@@ -25,46 +25,42 @@ appointment_types:
     label: Routine follow-up
     duration_minutes: 15
 
+# Departments are clinic policy: the hospital system has no equivalent concept, and the
+# routing keywords, triage `specialty_hint`s and appointment map below all reference these
+# ids. `specialty_codes` / `specialty_names` are how a practitioner in the hospital system
+# is recognised as belonging to a department - NUCC taxonomy codes first (exact, stable),
+# their names as a fallback for systems that only send text. The department flagged
+# `default: true` also absorbs practitioners whose only specialty is a generic one.
 departments:
   - id: general_medicine
     name: General Medicine
     default: true
+    specialty_codes: ["207R00000X", "208D00000X", "207Q00000X"]
+    specialty_names: [Internal Medicine, General Practice, Family Medicine]
   - id: cardiology
     name: Cardiology
+    specialty_codes: ["207RC0000X"]
+    specialty_names: [Cardiovascular Disease, Cardiology]
   - id: pulmonology
     name: Pulmonology
+    specialty_codes: ["207RP1001X"]
+    specialty_names: [Pulmonary Disease, Pulmonology, Respiratory Medicine]
   - id: orthopedics
     name: Orthopedics
+    specialty_codes: ["207X00000X"]
+    specialty_names: [Orthopaedic Surgery, Orthopedic Surgery, Orthopaedics]
   - id: dermatology
     name: Dermatology
+    specialty_codes: ["207N00000X"]
+    specialty_names: [Dermatology]
   - id: ent
     name: ENT
+    specialty_codes: ["207Y00000X"]
+    specialty_names: [Otolaryngology, ENT, Ear Nose and Throat]
 
-doctors:
-  - id: dr_mehta
-    name: Dr. A. Mehta
-    department_id: general_medicine
-    working_days: [mon, tue, wed, thu, fri]
-  - id: dr_rao
-    name: Dr. S. Rao
-    department_id: cardiology
-    working_days: [mon, wed, fri]
-  - id: dr_iyer
-    name: Dr. K. Iyer
-    department_id: pulmonology
-    working_days: [tue, thu]
-  - id: dr_banerjee
-    name: Dr. R. Banerjee
-    department_id: orthopedics
-    working_days: [mon, tue, thu, fri]
-  - id: dr_kaur
-    name: Dr. P. Kaur
-    department_id: dermatology
-    working_days: [wed, fri]
-  - id: dr_nair
-    name: Dr. V. Nair
-    department_id: ent
-    working_days: [mon, thu]
+# No `doctors:` list: the roster comes from the hospital system (GET /hospital/roster),
+# matched to the departments above by specialty. Add a `doctors:` block here only to cover
+# a department the hospital system has nobody for.
 
 # Keyword -> department. First match wins; unmatched cases fall back to the
 # department flagged `default: true` above.
@@ -152,3 +148,11 @@ required_intake_fields:
   - medication
   - allergy
   - contact_preference
+
+# Documents the clinic asks patients to bring/upload before submitting intake.
+# Empty by design: attaching is offered from the composer's paperclip whenever the patient
+# has something, and nothing is chased. Listing a kind here brings back the prompt that asks
+# for it by name and holds pre-screening until it is uploaded or explicitly skipped
+# (POST /cases/{id}/attachments/skip) - which reads as nagging to a walk-in carrying no
+# paperwork.
+required_attachment_kinds: []

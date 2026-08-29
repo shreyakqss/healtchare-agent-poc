@@ -1,120 +1,202 @@
-"""Cases: read, attachments, pre-screening, consultation notes, finalisation."""
+"""Cases: read, attachments, pre-screening, consultation notes, finalisation.
+
+Routers stay thin: gates and side effects live in `app/services`, the two agno
+workflows in `app/workflows`.
+"""
 
 from __future__ import annotations
 
 import uuid
+from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, File, Form, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Query, Response, UploadFile
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
 from app.api.v1 import serializers
+from app.core.config import settings
 from app.core.errors import Conflict, Forbidden, NotFound
-from app.models import ConsultationNote, MedicalAttachment
-from app.schemas.requests import ConsultationNoteRequest
+from app.domain.lifecycle import CaseStatus
+from app.models import MedicalAttachment
+from app.schemas.requests import AttachmentSkipRequest, ConsultationNoteRequest, FinalizeRequest
 from app.schemas.responses import (
     AttachmentResponse,
+    AttachmentSkipResponse,
     CaseDetailResponse,
     CaseListItem,
-    ClinicOverview,
     ConsultationNoteResponse,
+    PatientCaseResponse,
+    PatientVisitItem,
 )
-from app.services import attachments as attachment_store
-from app.services import audit, case_repo
-from app.workflows import run_finalize, run_prescreen
+from app.security import (
+    CurrentPrincipal,
+    case_for_principal,
+    cases_for_principal,
+    rate_limits,
+    require_hms_identity,
+    require_roles,
+)
+from app.services import (
+    attachment_service,
+    attachments,
+    case_repo,
+    consultation_service,
+    prescreen_trigger,
+    workflow_jobs,
+)
+from app.services.clinician_identity import verify_clinician_async
 
 router = APIRouter(prefix="/cases", tags=["cases"])
+PatientPrincipal = Annotated[CurrentPrincipal, Depends(require_roles("patient"))]
+ClinicianPrincipal = Annotated[CurrentPrincipal, Depends(require_roles("clinician"))]
+
+PRESCREENABLE = {CaseStatus.INGESTING, CaseStatus.ANALYZING, CaseStatus.FAILED}
 
 
 @router.get("", response_model=list[CaseListItem])
-def list_cases(db: Session = Depends(get_db)):
-    return serializers.case_list(db)
+def list_cases(
+    principal: ClinicianPrincipal,
+    response: Response,
+    limit: int = Query(50, ge=1, le=100),
+    cursor: str | None = Query(None, max_length=256),
+    db: Session = Depends(get_db),
+):
+    page = cases_for_principal(db, principal, "clinician", limit=limit, cursor=cursor)
+    if page.next_cursor:
+        response.headers["X-Next-Cursor"] = page.next_cursor
+    return serializers.case_list(db, page.items)
 
 
-@router.get("/overview", response_model=ClinicOverview)
-def clinic_overview(db: Session = Depends(get_db)):
-    return serializers.overview(serializers.case_list(db))
+@router.get("/my-visits", response_model=list[PatientVisitItem])
+def list_patient_visits(
+    principal: PatientPrincipal,
+    response: Response,
+    limit: int = Query(50, ge=1, le=100),
+    cursor: str | None = Query(None, max_length=256),
+    db: Session = Depends(get_db),
+):
+    page = cases_for_principal(db, principal, "patient", limit=limit, cursor=cursor)
+    if page.next_cursor:
+        response.headers["X-Next-Cursor"] = page.next_cursor
+    return serializers.patient_case_list(db, page.items)
+
+
+@router.get("/{case_id}/patient-view", response_model=PatientCaseResponse)
+def get_patient_case(case_id: uuid.UUID, principal: PatientPrincipal, db: Session = Depends(get_db)):
+    rate_limits.enforce("attachment.upload", principal.user_id)
+    case = case_for_principal(db, case_id, principal, allow_clinician=False)
+    return serializers.patient_case_detail(db, case)
 
 
 @router.get("/{case_id}", response_model=CaseDetailResponse)
-def get_case(case_id: uuid.UUID, db: Session = Depends(get_db)):
-    return serializers.case_detail(db, case_repo.case_or_404(db, case_id))
+def get_case(case_id: uuid.UUID, principal: ClinicianPrincipal, db: Session = Depends(get_db)):
+    case = case_for_principal(db, case_id, principal, allow_patient=False)
+    return serializers.case_detail(db, case)
 
 
 @router.post("/{case_id}/attachments", response_model=AttachmentResponse, status_code=201)
 async def upload_attachment(
     case_id: uuid.UUID,
+    principal: PatientPrincipal,
     file: UploadFile = File(...),
     kind: str = Form("other"),
-    uploaded_by: str = Form("patient"),
+    uploaded_by: Literal["patient"] = Form("patient"),
     db: Session = Depends(get_db),
 ):
-    """Stored and displayed only. Nothing uploaded here can influence a priority."""
-    case = case_repo.case_or_404(db, case_id)
-    stored = attachment_store.store(case.id, file.filename or "upload", await file.read(), kind)
-    row = MedicalAttachment(
-        case_id=case.id, kind=kind, filename=stored.filename, mime_type=stored.mime_type, size_bytes=stored.size_bytes,
-        storage_uri=stored.storage_uri, extracted_text=stored.extracted_text, uploaded_by=uploaded_by,
-    )
-    db.add(row)
-    audit.record(db, case.id, uploaded_by, "attachment.uploaded",
-                 {"kind": kind, "filename": stored.filename, "size_bytes": stored.size_bytes, "text_extracted": bool(stored.extracted_text), "interpreted": False})
-    db.commit()
-    db.refresh(row)
+    """Stored and displayed only. Nothing uploaded here can influence a priority. If this was
+    the last thing intake was waiting on, pre-screening starts in the background."""
+    case = case_for_principal(db, case_id, principal, allow_clinician=False)
+    content = await file.read(settings.MAX_UPLOAD_MB * 1024 * 1024 + 1)
+    row = await attachment_service.upload(db, case, file.filename or "upload", content, kind, uploaded_by)
+    prescreen_trigger.fire_if_ready(db, case.id)
     return serializers.attachment_out(row)
 
 
+@router.post("/{case_id}/attachments/skip", response_model=AttachmentSkipResponse)
+async def skip_attachment(
+    case_id: uuid.UUID,
+    payload: AttachmentSkipRequest,
+    principal: PatientPrincipal,
+    db: Session = Depends(get_db),
+):
+    """Log that the patient chose not to upload a required document (satisfies the gate)."""
+    case = case_for_principal(db, case_id, principal, allow_clinician=False)
+    attachment_service.skip(db, case, payload.kind, payload.reason)
+    prescreen_trigger.fire_if_ready(db, case.id)
+    return AttachmentSkipResponse(ok=True)
+
+
 @router.get("/{case_id}/attachments/{attachment_id}/file")
-def download_attachment(case_id: uuid.UUID, attachment_id: uuid.UUID, db: Session = Depends(get_db)):
+def download_attachment(
+    case_id: uuid.UUID,
+    attachment_id: uuid.UUID,
+    principal: Annotated[CurrentPrincipal, Depends(require_roles("patient", "clinician"))],
+    db: Session = Depends(get_db),
+):
+    case_for_principal(db, case_id, principal)
     row = db.get(MedicalAttachment, attachment_id)
     if row is None or row.case_id != case_id:
         raise NotFound("Attachment not found.")
-    path = attachment_store.absolute_path(row.storage_uri)
+    try:
+        path = attachments.absolute_path(row.storage_uri)
+    except FileNotFoundError:
+        raise NotFound("Stored file is missing.") from None
     if not path.exists():
         raise NotFound("Stored file is missing.")
     return FileResponse(path, media_type=row.mime_type, filename=row.filename)
 
 
-@router.post("/{case_id}/prescreen", response_model=CaseDetailResponse)
-async def prescreen(case_id: uuid.UUID, db: Session = Depends(get_db)):
+@router.post("/{case_id}/prescreen", response_model=PatientCaseResponse)
+async def prescreen(case_id: uuid.UUID, principal: PatientPrincipal, db: Session = Depends(get_db)):
     """Rules -> routing -> briefing. Ends at NEEDS_REVIEW."""
-    case = case_repo.case_or_404(db, case_id)
+    rate_limits.enforce("case.prescreen", principal.user_id)
+    case = case_for_principal(db, case_id, principal, allow_clinician=False)
     session = case_repo.session_for(db, case)
     if session.consent_status != "GRANTED":
         raise Forbidden("Consent must be granted before pre-screening.")
-    if session.status not in {"INGESTING", "ANALYZING", "FAILED"}:
+    if session.status not in PRESCREENABLE:
         raise Conflict(f"Pre-screening cannot run while the case is {session.status}.")
     db.close()  # workflow steps open their own sessions
-    await run_prescreen(case_id)
-    return serializers.case_detail(db, case_repo.case_or_404(db, case_id))
+    await workflow_jobs.run_now("prescreen", case_id)
+    return serializers.patient_case_detail(db, case_repo.case_or_404(db, case_id))
 
 
 @router.post("/{case_id}/consultation-notes", response_model=ConsultationNoteResponse, status_code=201)
-def add_consultation_note(case_id: uuid.UUID, payload: ConsultationNoteRequest, db: Session = Depends(get_db)):
-    case = case_repo.case_or_404(db, case_id)
-    if not case_repo.is_approved(db, case.id):
-        raise Conflict("A clinician must review the case before consultation notes are recorded.")
-    note = ConsultationNote(
-        case_id=case.id, doctor_id=payload.doctor_id, consultation_mode=payload.consultation_mode,
-        notes=payload.notes, prescription=payload.prescription, follow_up_instructions=payload.follow_up_instructions,
+def add_consultation_note(
+    case_id: uuid.UUID,
+    payload: ConsultationNoteRequest,
+    principal: ClinicianPrincipal,
+    db: Session = Depends(get_db),
+):
+    rate_limits.enforce("clinician.verify", principal.user_id)
+    require_hms_identity(principal, payload.doctor_username)
+    note = consultation_service.record_note(
+        db,
+        case_for_principal(db, case_id, principal, allow_patient=False),
+        payload,
     )
-    db.add(note)
-    audit.record(db, case.id, f"doctor:{payload.doctor_id}", "consultation.recorded",
-                 {"mode": payload.consultation_mode, "has_prescription": bool(payload.prescription), "has_follow_up": bool(payload.follow_up_instructions)})
-    db.commit()
-    db.refresh(note)
     return serializers.note_out(note)
 
 
 @router.post("/{case_id}/finalize", response_model=CaseDetailResponse)
-async def finalize(case_id: uuid.UUID, db: Session = Depends(get_db)):
-    """Hard gate: no patient-facing output before clinician approval and recorded notes."""
-    case = case_repo.case_or_404(db, case_id)
-    if not case_repo.is_approved(db, case.id):
-        raise Conflict("This case has not been approved by a clinician. No visit summary can be released before human review.")
-    if not case_repo.notes(db, case.id):
-        raise Conflict("Record the consultation notes before finalising the visit.")
+async def finalize(
+    case_id: uuid.UUID,
+    payload: FinalizeRequest,
+    principal: ClinicianPrincipal,
+    db: Session = Depends(get_db),
+):
+    """Hard gate: clinician approval + recorded notes + a verified clinician identity
+    (this endpoint triggers HMS writes)."""
+    rate_limits.enforce("clinician.verify", principal.user_id)
+    require_hms_identity(principal, payload.finalizer_username)
+    case = case_for_principal(db, case_id, principal, allow_patient=False)
+    consultation_service.assert_finalizable(db, case)
+    identity = await verify_clinician_async(payload.finalizer_username, payload.finalizer_password)
     db.close()
-    await run_finalize(case_id)
+    await workflow_jobs.run_now(
+        "finalize",
+        case_id,
+        payload={"finalizer_id": identity.id, "finalizer_name": identity.name},
+    )
     return serializers.case_detail(db, case_repo.case_or_404(db, case_id))

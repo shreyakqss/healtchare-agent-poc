@@ -10,9 +10,12 @@ export function GeneralTab({ editor, hospitalId }: { editor: ConfigEditor; hospi
   return (
     <div className="grid gap-4 lg:grid-cols-3">
       <Card className="lg:col-span-2">
-        <CardHeader title="Clinic details" description="Shown in the patient portal header and on every case." />
+        <CardHeader
+          title="Clinic details"
+          description="The clinic's name and address are read from the hospital system's own facility record. These are the fallback for when it has none."
+        />
         <CardBody className="grid gap-4 sm:grid-cols-2">
-          <Field label="Display name" htmlFor="h-name" required>
+          <Field label="Display name" htmlFor="h-name" required hint="Overridden by the hospital system's facility name when it has one.">
             <Input id="h-name" value={cfg.hospital?.name ?? ""} onChange={(e) => set({ name: e.target.value })} />
           </Field>
           <Field label="Timezone" htmlFor="h-tz" hint="IANA name, e.g. Asia/Kolkata">

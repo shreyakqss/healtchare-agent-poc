@@ -20,7 +20,7 @@ export function AppointmentsTab({ editor }: { editor: ConfigEditor }) {
         <CardHeader title="Appointment types" description="The kinds of visit the clinic offers."
           action={<Button size="sm" variant="secondary" icon={<Icons.plus size={14} />} onClick={() => setTypes([...types, { id: `type_${types.length + 1}`, label: "", duration_minutes: 20 }])}>Add type</Button>} />
         {types.length === 0 ? <EmptyState title="No appointment types" /> : (
-          <Table>
+          <Table regionLabel="Appointment types">
             <thead><tr><Th>Id</Th><Th>Label</Th><Th className="w-28">Minutes</Th><Th className="w-16"><span className="sr-only">Actions</span></Th></tr></thead>
             <tbody>
               {types.map((t, i) => (

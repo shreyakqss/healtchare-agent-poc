@@ -5,6 +5,7 @@ Swapping provider = editing `build_model()`. Nothing else imports a provider cla
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from functools import lru_cache
 from typing import Any, TypeVar
@@ -79,7 +80,21 @@ async def run_structured(agent: Agent, prompt: str, schema: type[T]) -> T:
     if not llm_available():
         raise AgentUnavailable("No LLM API key configured.")
     try:
-        result = await agent.arun(prompt)
+        # httpx's read-timeout only fires on total silence between chunks - a provider that
+        # trickles keep-alive bytes while effectively stalled never trips it - and agno's own
+        # retry-on-any-exception loop (make_agent sets retries=1) can swallow a plain
+        # asyncio.wait_for cancellation and just retry instead of propagating it, so the
+        # ceiling never actually lands. Racing against a bare sleep and walking away from
+        # the slow task (never awaiting it further) enforces the ceiling regardless of what
+        # the library does internally - the orphaned task keeps running but nothing here
+        # waits on it, so the patient is unblocked at settings.LLM_TIMEOUT_SECONDS no matter what.
+        task = asyncio.ensure_future(agent.arun(prompt))
+        done, pending = await asyncio.wait({task}, timeout=settings.LLM_TIMEOUT_SECONDS)
+        if task in pending:
+            task.cancel()
+            task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
+            raise AgentUnavailable(f"{agent.name} exceeded the {settings.LLM_TIMEOUT_SECONDS}s timeout.")
+        result = task.result()
         content = result.content
         if isinstance(content, schema):
             return content
@@ -90,5 +105,7 @@ async def run_structured(agent: Agent, prompt: str, schema: type[T]) -> T:
         raise AgentUnavailable(f"{agent.name} returned {type(content).__name__}, expected {schema.__name__}.")
     except AgentUnavailable:
         raise
+    except TimeoutError as exc:
+        raise AgentUnavailable(f"{agent.name} exceeded the {settings.LLM_TIMEOUT_SECONDS}s timeout.") from exc
     except Exception as exc:  # provider / network / validation
         raise AgentUnavailable(str(exc)) from exc

@@ -39,7 +39,10 @@ class AllergyMedication(Base):
 
 
 class MedicalAttachment(Base):
-    """Uploaded document or image. Stored and displayed only - never triaged on."""
+    """Uploaded document or image. Never fed to triage_engine - it evaluates rules,
+    not documents. `extracted_text` is shown to the clinician as-is and may also be
+    read by a discrepancy-check agent to raise clinician-facing flags (not yet added);
+    neither path lets an attachment change a priority."""
 
     __tablename__ = "medical_attachments"
 
@@ -53,3 +56,6 @@ class MedicalAttachment(Base):
     storage_uri: Mapped[str] = mapped_column(Text)
     extracted_text: Mapped[str | None] = mapped_column(Text)  # None for images
     uploaded_by: Mapped[str] = mapped_column(String(64), default="patient")
+    # Display/audit field only - set when the raw file is best-effort forwarded to the
+    # linked HMS record via push_document(). Never consumed by triage_engine.
+    hms_reference: Mapped[str | None] = mapped_column(String(128), nullable=True)

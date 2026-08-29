@@ -41,7 +41,7 @@ export function TriageEvidence({ c }: { c: CaseDetail }) {
         <div>
           <SectionTitle>Evidence</SectionTitle>
           <div className="mt-2 overflow-hidden rounded-md border border-line">
-            <Table>
+            <Table regionLabel="Triage evidence">
               <thead><tr><Th>Matched on</Th><Th>Keyword</Th><Th>Patient statement</Th></tr></thead>
               <tbody>
                 {t.evidence.map((e, i) => (
