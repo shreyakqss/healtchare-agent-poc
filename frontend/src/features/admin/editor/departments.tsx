@@ -45,10 +45,11 @@ export function DepartmentsTab({ editor }: { editor: ConfigEditor }) {
       </Card>
 
       <Card>
-        <CardHeader title="Doctors" description="The roster the care navigator and the HMS adapter draw on. Working days generate available slots."
+        <CardHeader title="Doctors (static overrides)"
+          description="Only for a department the hospital system has no live practitioner for. Live doctors come from the HMS automatically - see Practitioners count above - and never need adding here. Working days generate available slots."
           action={<Button size="sm" variant="secondary" icon={<Icons.plus size={14} />} disabled={deps.length === 0}
             onClick={() => setDocs([...docs, { id: `dr_${docs.length + 1}`, name: "", department_id: deps[0]?.id ?? "", working_days: ["mon", "tue", "wed", "thu", "fri"] }])}>Add doctor</Button>} />
-        {docs.length === 0 ? <EmptyState title="No doctors on the roster" description="Cases can still be routed to a department without a doctor." /> : (
+        {docs.length === 0 ? <EmptyState title="No static overrides" description="Every department already has a live doctor from the hospital system." /> : (
           <Table regionLabel="Doctors">
             <thead><tr><Th>Id</Th><Th>Name</Th><Th>Department</Th><Th>Working days</Th><Th className="w-16"><span className="sr-only">Actions</span></Th></tr></thead>
             <tbody>

@@ -12,6 +12,7 @@ import type {
   HospitalConfig,
   HospitalSummary,
   IntakeConfig,
+  LinkedPatientRecord,
   PatientCase,
   PatientVisitItem,
   Roster,
@@ -41,6 +42,7 @@ export const serverApi = {
     greeting: () => serverRequest<{ text: string }>("/intake-sessions/greeting"),
     visits: () => serverRequest<PatientVisitItem[]>("/cases/my-visits"),
     activeIntake: () => serverRequest<ActiveIntake | null>("/intake-sessions/active"),
+    linkedRecord: () => serverRequest<LinkedPatientRecord | null>("/intake-sessions/linked-record"),
     case: (id: string) => serverRequest<PatientCase>(`/cases/${encodeURIComponent(id)}/patient-view`),
   },
   clinician: {

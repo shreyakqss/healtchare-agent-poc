@@ -15,17 +15,20 @@ import { Composer } from "@/features/intake/composer";
 import { DocumentPrompt } from "@/features/intake/document-prompt";
 import { MessageList } from "@/features/intake/message-list";
 import { useIntakeSession } from "@/features/intake/use-intake-session";
-import type { ActiveIntake, PatientVisitItem } from "@/lib/api";
+import type { ActiveIntake, LinkedPatientRecord, PatientVisitItem } from "@/lib/api";
 
 type Tab = "chat" | "documents" | "visits";
 
 export function PatientPortal({
   initialRequiredFields, initialRequiredAttachmentKinds, initialApiOnline, initialLlmConfigured, initialGreeting,
-  initialVisits, initialActiveIntake,
+  initialVisits, initialActiveIntake, prefillName, prefillEmail, linkedRecord,
 }: {
   initialRequiredFields: string[]; initialRequiredAttachmentKinds: string[];
   initialApiOnline: boolean; initialLlmConfigured: boolean; initialGreeting: string; initialVisits: PatientVisitItem[];
   initialActiveIntake: ActiveIntake | null;
+  prefillName?: string | null;
+  prefillEmail?: string | null;
+  linkedRecord?: LinkedPatientRecord | null;
 }) {
   const [tab, setTab] = useState<Tab>("chat");
   const [checking, setChecking] = useState(false);
@@ -152,6 +155,9 @@ export function PatientPortal({
                 onSubmit={(values) => void submitIdentity(values)}
                 busy={state.submittingIdentity}
                 disabled={!initialApiOnline}
+                prefillName={prefillName}
+                prefillEmail={prefillEmail}
+                linkedRecord={linkedRecord}
               />
             ) : null}
           </div>

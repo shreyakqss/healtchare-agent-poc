@@ -51,7 +51,7 @@ from app.services import case_repo, hospital_config
 def session_out(db: Session, session: IntakeSession, case: PatientCase) -> SessionResponse:
     return SessionResponse(
         session_id=str(session.id), case_id=str(case.id), status=session.status,
-        consent_status=session.consent_status, demographics=case.demographics or {},
+        consent_status=session.consent_status, demographics=case_repo.demographics(db, case.id),
         hms_linked=bool(case.hms_patient_id), missing_fields=case_repo.missing_fields(db, case.id),
         required_attachment_kinds=hospital_config.required_attachment_kinds(),
         pending_attachment_kinds=case_repo.pending_attachment_kinds(db, case.id),
@@ -177,7 +177,7 @@ def case_detail(db: Session, case: PatientCase) -> CaseDetailResponse:
     return CaseDetailResponse(
         case_id=str(case.id), session_id=str(case.session_id), status=session.status,
         consent_status=session.consent_status, channel=session.channel, hospital_id=case.hospital_id,
-        demographics=case.demographics or {}, hms_patient_id=case.hms_patient_id,
+        demographics=case_repo.demographics(db, case.id), hms_patient_id=case.hms_patient_id,
         transcript=[TranscriptMessage(role=m.role, content=m.content, turn_index=m.turn_index) for m in case_repo.messages(db, session.id)],
         facts=[FactResponse(id=str(f.id), kind=f.kind, value=f.value, source=f.source, source_turn=f.source_turn, confidence=f.confidence)
                for f in case_repo.facts(db, case.id)],
@@ -336,7 +336,7 @@ def case_list(db: Session, cases: list[PatientCase] | None = None) -> list[CaseL
             department_name=case_routing.department_name if case_routing else None,
             doctor_id=case_routing.doctor_id if case_routing else None,
             doctor_name=case_routing.doctor_name if case_routing else None,
-            chief_complaint=reason, demographics=case.demographics or {}, hms_patient_id=case.hms_patient_id,
+            chief_complaint=reason, demographics=case_repo.demographics_from_facts(facts), hms_patient_id=case.hms_patient_id,
             review_decision=review.decision if review else None,
             missing_count=len(intake_fields.missing_fields(required_fields, facts, entries)),
             created_at=case.created_at, updated_at=updated.get(case.id),

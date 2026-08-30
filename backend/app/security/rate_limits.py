@@ -17,6 +17,7 @@ from app.models import RateLimitBucket
 POLICIES = {
     "auth.login": (20, 600),
     "auth.callback": (30, 600),
+    "auth.self_register": (20, 600),
     "intake.start": (10, 3600),
     "intake.message": (60, 60),
     "attachment.upload": (20, 300),

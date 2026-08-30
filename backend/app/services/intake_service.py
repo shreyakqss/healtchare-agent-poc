@@ -34,7 +34,6 @@ from app.core.errors import Conflict, Forbidden
 from app.db import utcnow
 from app.domain import intake_fields
 from app.domain.demographics import age_from_birth_date
-from app.domain.intake_fields import PLACEHOLDERS
 from app.domain.lifecycle import TERMINAL, CaseStatus
 from app.integrations.hms import get_hms
 from app.integrations.hms.schemas import PatientRegistration
@@ -57,7 +56,6 @@ logger = logging.getLogger(__name__)
 
 MAX_ASSISTANT_QUESTIONS = 12
 MAX_FACT_CHARS = 220
-DEMOGRAPHIC_KEYS = {"name": "name", "age": "age", "gender": "sex"}
 
 CLOSING = (
     "Thank you - that is everything I need. I am passing your answers to the care team now, "
@@ -100,7 +98,7 @@ def active_session(db: Session, owner_user_id: uuid.UUID) -> tuple[IntakeSession
 
 
 def start_session(db: Session, owner_user_id: uuid.UUID) -> tuple[IntakeSession, PatientCase]:
-    db.query(ApplicationUser).filter(ApplicationUser.id == owner_user_id).with_for_update().one()
+    owner = db.query(ApplicationUser).filter(ApplicationUser.id == owner_user_id).with_for_update().one()
     active = active_session(db, owner_user_id)
     if active is not None:
         return active
@@ -110,8 +108,7 @@ def start_session(db: Session, owner_user_id: uuid.UUID) -> tuple[IntakeSession,
 
     case = PatientCase(
         session_id=session.id,
-        demographics={},
-        hms_patient_id=None,
+        hms_patient_id=owner.hms_patient_id,
         hospital_id=hospital_config.active_id(),
     )
     db.add(case)
@@ -133,17 +130,6 @@ def record_consent(db: Session, session: IntakeSession, case: PatientCase, grant
         lifecycle.transition(db, session, CaseStatus.REJECTED, "patient", case.id)
     db.commit()
     return session
-
-
-def sync_demographics(db: Session, case: PatientCase) -> None:
-    """Copy name/age/gender facts onto the case header. First value stated wins."""
-    merged = dict(case.demographics or {})
-    for f in case_repo.facts(db, case.id):
-        if f.kind in DEMOGRAPHIC_KEYS and f.value not in PLACEHOLDERS:
-            merged.setdefault(DEMOGRAPHIC_KEYS[f.kind], f.value.strip())
-    if merged != case.demographics:
-        case.demographics = merged  # reassigned: SQLAlchemy does not track in-place JSON edits
-        db.commit()
 
 
 def _guard_open(db: Session, session: IntakeSession, case: PatientCase) -> None:
@@ -235,7 +221,6 @@ def submit_identity_form(db: Session, session: IntakeSession, case: PatientCase,
             db.add(PatientFact(case_id=case.id, kind=kind, value=value, source_turn=turn_index))
 
     db.commit()
-    sync_demographics(db, case)
 
     audit.record(db, case.id, "system:intake", "intake.identity_submitted", {"turn_index": turn_index})
     audit.record(db, case.id, "system:hms_sync", "patient.created_or_updated", {"mrn": registered.mrn})
@@ -337,8 +322,6 @@ async def _extract_and_store(db: Session, case: PatientCase, message: str, turn_
         added_entries += 1
 
     db.commit()
-    if added:
-        sync_demographics(db, case)
     return {"facts": added, "entries": added_entries, "mode": "llm"}
 
 
@@ -402,7 +385,7 @@ async def process_turn(db: Session, session: IntakeSession, case: PatientCase, c
             outstanding=outstanding,
             transcript=case_repo.transcript(db, session.id),
             on_file=_on_file(db, case.id),
-            patient_name=(case.demographics or {}).get("name"),
+            patient_name=case_repo.demographics(db, case.id).get("name"),
         )
         # The planner runs as a task so its tokens can be forwarded while it is still writing.
         tokens: asyncio.Queue[str | None] = asyncio.Queue()

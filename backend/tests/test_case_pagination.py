@@ -21,7 +21,6 @@ def cases():
             db.add(
                 PatientCase(
                     session_id=session.id,
-                    demographics={"name": f"Synthetic patient {index}"},
                     hospital_id="qss-demo-clinic",
                 )
             )

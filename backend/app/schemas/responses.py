@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
@@ -85,6 +85,25 @@ class ActiveIntakeResponse(SessionResponse):
     transcript: list[TranscriptMessage] = Field(default_factory=list)
     attachments: list[AttachmentResponse] = Field(default_factory=list)
     skipped_attachment_kinds: list[str] = Field(default_factory=list)
+
+
+class LinkedPatientRecord(BaseModel):
+    """Prefill for the identity form when this account is linked to an existing OpenEMR
+    patient (Keycloak `hms_patient_id`). The patient still confirms every field before it is
+    written back - this never submits on their behalf."""
+
+    name: str
+    birth_date: date | None = None
+    gender: str
+    phone: str | None = None
+    email: str | None = None
+    address_line1: str | None = None
+    address_line2: str | None = None
+    city: str | None = None
+    state: str | None = None
+    postal_code: str | None = None
+    country: str | None = None
+    contact_preference: str | None = None
 
 
 class TriageResponse(BaseModel):

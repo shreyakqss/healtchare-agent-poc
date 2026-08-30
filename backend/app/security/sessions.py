@@ -196,12 +196,48 @@ def _sync_user(db: Session, claims: dict[str, Any]) -> ApplicationUser:
     elif not user.active:
         raise Forbidden("This CareFlow account is disabled.")
     user.username = claims.get("preferred_username") if isinstance(claims.get("preferred_username"), str) else None
+    user.email = claims.get("email") if isinstance(claims.get("email"), str) else None
+    user.display_name = claims.get("name") if isinstance(claims.get("name"), str) else None
     user.roles = sorted(roles)
     user.clinic_id = claims.get("clinic_id") if isinstance(claims.get("clinic_id"), str) else None
     user.hms_username = claims.get("hms_username") if isinstance(claims.get("hms_username"), str) else None
+    user.hms_patient_id = claims.get("hms_patient_id") if isinstance(claims.get("hms_patient_id"), str) else None
     user.last_login_at = _now()
     db.flush()
     return user
+
+
+def _finish_login(db: Session, tokens: dict[str, Any], access_claims: dict[str, Any], return_to: str) -> LoginSession:
+    """Shared tail of every login path (authorization-code callback, self-registration):
+    sync the CareFlow user row and mint a CareFlow session from already-verified tokens."""
+    access_token = tokens["access_token"]
+    id_token = tokens.get("id_token")
+    user = _sync_user(db, access_claims)
+    session_token = secrets.token_urlsafe(32)
+    csrf_token = secrets.token_urlsafe(32)
+    access_expiry = datetime.fromtimestamp(int(access_claims["exp"]), UTC)
+    absolute_expiry = _now() + timedelta(hours=settings.AUTH_SESSION_HOURS)
+    refresh_expires = tokens.get("refresh_expires_in")
+    if isinstance(refresh_expires, int) and refresh_expires > 0:
+        absolute_expiry = min(absolute_expiry, _now() + timedelta(seconds=refresh_expires))
+    db.add(
+        AuthSession(
+            token_hash=_hash(session_token),
+            user_id=user.id,
+            csrf_hash=_hash(csrf_token),
+            encryption_key_id=_active_key()[0],
+            access_token_ciphertext=_encrypt(access_token),
+            refresh_token_ciphertext=_encrypt(
+                tokens.get("refresh_token") if isinstance(tokens.get("refresh_token"), str) else None
+            ),
+            id_token_ciphertext=_encrypt(id_token if isinstance(id_token, str) else None),
+            access_expires_at=access_expiry,
+            expires_at=absolute_expiry,
+        )
+    )
+    db.commit()
+    logger.info("Authentication succeeded")
+    return LoginSession(session_token=session_token, csrf_token=csrf_token, return_to=_safe_return_to(return_to))
 
 
 def complete_login(db: Session, code: str, state: str, transaction_cookie: str) -> LoginSession:
@@ -236,32 +272,48 @@ def complete_login(db: Session, code: str, state: str, transaction_cookie: str) 
         logger.warning("OIDC login exchange failed (%s)", type(exc).__name__)
         raise Unauthorized("Keycloak could not complete the login.") from exc
 
-    user = _sync_user(db, access_claims)
-    session_token = secrets.token_urlsafe(32)
-    csrf_token = secrets.token_urlsafe(32)
-    access_expiry = datetime.fromtimestamp(int(access_claims["exp"]), UTC)
-    absolute_expiry = _now() + timedelta(hours=settings.AUTH_SESSION_HOURS)
-    refresh_expires = tokens.get("refresh_expires_in")
-    if isinstance(refresh_expires, int) and refresh_expires > 0:
-        absolute_expiry = min(absolute_expiry, _now() + timedelta(seconds=refresh_expires))
-    db.add(
-        AuthSession(
-            token_hash=_hash(session_token),
-            user_id=user.id,
-            csrf_hash=_hash(csrf_token),
-            encryption_key_id=_active_key()[0],
-            access_token_ciphertext=_encrypt(access_token),
-            refresh_token_ciphertext=_encrypt(
-                tokens.get("refresh_token") if isinstance(tokens.get("refresh_token"), str) else None
-            ),
-            id_token_ciphertext=_encrypt(id_token),
-            access_expires_at=access_expiry,
-            expires_at=absolute_expiry,
+    return _finish_login(db, tokens, access_claims, str(transaction.get("return_to")))
+
+
+def self_register_patient(db: Session, return_to: str | None) -> tuple[LoginSession, str, str]:
+    """New-patient self-signup from the landing page: creates a fresh Keycloak account
+    (role patient) with a generated username/password, logs it straight into a CareFlow
+    session (no Keycloak login screen), and returns the credentials once so the patient
+    can save them for a returning visit. The intake form itself creates the OpenEMR record
+    on first submit - nothing OpenEMR-side happens here."""
+    from app.integrations.keycloak import admin_client
+    from app.security.oidc import OidcVerifier, configured_verifier
+
+    username = f"patient-{secrets.token_hex(4)}"
+    password = username
+    admin_client.create_user(username, password, "patient")
+    try:
+        tokens = _token_request(
+            {
+                "grant_type": "password",
+                "client_id": settings.KEYCLOAK_ADMIN_CLIENT_ID,
+                "client_secret": settings.KEYCLOAK_ADMIN_CLIENT_SECRET,
+                "username": username,
+                "password": password,
+                "scope": "openid",
+            }
         )
-    )
-    db.commit()
-    logger.info("Authentication succeeded")
-    return LoginSession(session_token=session_token, csrf_token=csrf_token, return_to=_safe_return_to(transaction.get("return_to")))
+        access_token = tokens["access_token"]
+        id_token = tokens["id_token"]
+        if not isinstance(access_token, str) or not isinstance(id_token, str):
+            raise ValueError("missing tokens")
+        access_claims = configured_verifier().claims(access_token)
+        id_claims = OidcVerifier(
+            settings.OIDC_ISSUER_URL, str(settings.KEYCLOAK_ADMIN_CLIENT_ID), settings.OIDC_JWKS_TTL_SECONDS
+        ).claims(id_token)
+        if access_claims is None or id_claims is None or access_claims["sub"] != id_claims["sub"]:
+            raise ValueError("token validation failed")
+    except (KeyError, TypeError, ValueError, httpx.HTTPError) as exc:
+        logger.warning("Self-registration login failed (%s)", type(exc).__name__)
+        raise Unauthorized("Could not sign in the new account.") from exc
+
+    session = _finish_login(db, tokens, access_claims, return_to or "/patient")
+    return session, username, password
 
 
 def _rewrap_session(db: Session, row: AuthSession) -> AuthSession:
@@ -360,8 +412,11 @@ def principal_from_session(db: Session, request: Request):
         subject=user.subject,
         roles=frozenset(role for role in user.roles if role in APP_ROLES),
         username=user.username,
+        email=user.email,
+        display_name=user.display_name,
         clinic_id=user.clinic_id,
         hms_username=user.hms_username,
+        hms_patient_id=user.hms_patient_id,
         auth_method="session",
     )
 

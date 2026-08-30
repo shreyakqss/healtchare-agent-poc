@@ -20,6 +20,7 @@ from app.security.sessions import (
     keycloak_logout_url,
     revoke_session,
     revoke_user_sessions,
+    self_register_patient,
 )
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -74,12 +75,32 @@ def callback(
     return response
 
 
+@router.post("/self-register")
+def self_register(
+    request: Request,
+    response: Response,
+    return_to: str | None = Query(None, max_length=512),
+    db: Session = Depends(get_db),
+):
+    rate_limits.enforce("auth.self_register", rate_limits.client_identity(request))
+    session, username, password = self_register_patient(db, return_to)
+    response.set_cookie(
+        SESSION_COOKIE, session.session_token, max_age=settings.AUTH_SESSION_HOURS * 3600, **_cookie_options(),
+    )
+    response.set_cookie(
+        CSRF_COOKIE, session.csrf_token, max_age=settings.AUTH_SESSION_HOURS * 3600, **_cookie_options(http_only=False),
+    )
+    return {"username": username, "password": password, "return_to": session.return_to}
+
+
 @router.get("/me")
 def current_user(principal: CurrentPrincipal = Depends(authenticate)):
     return {
         "user_id": str(principal.user_id),
         "subject": principal.subject,
         "username": principal.username,
+        "email": principal.email,
+        "display_name": principal.display_name,
         "roles": sorted(principal.roles),
         "clinic_id": principal.clinic_id,
         "hms_username": principal.hms_username,

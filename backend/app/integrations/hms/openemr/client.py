@@ -23,6 +23,7 @@ import logging
 import re
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import Any
 from urllib.parse import urlsplit
@@ -326,15 +327,27 @@ class FhirHMS:
         if res is None:
             return None
         patient_id = res.get("id", "")
-        # The standard-API row carries what FHIR omits (country, contact preference) and the
-        # numeric pid; fetch it once and reuse.
-        row = self._rest.patient(patient_id) or {}
+        # Independent OpenEMR round-trips - each one is slow on its own (no opcache on this
+        # install), so run them concurrently rather than paying for all of them in sequence.
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            row_future = pool.submit(self._rest.patient, patient_id)
+            conditions_future = pool.submit(self._labels, "Condition", patient_id, "code")
+            allergies_future = pool.submit(self._allergies, patient_id)
+            last_visit_future = pool.submit(self._last_visit, patient_id)
+            # The standard-API row carries what FHIR omits (country, contact preference) and
+            # the numeric pid; fetch it once and reuse. Medications needs it only for its
+            # standard-API fallback, so it waits on row_future rather than fetching twice.
+            row = row_future.result() or {}
+            medications = self._medications(patient_id, row)
+            conditions = conditions_future.result()
+            allergies = allergies_future.result()
+            last_visit = last_visit_future.result()
         return fhir.patient_from_resource(
             res,
-            conditions=self._labels("Condition", patient_id, "code"),
-            medications=self._medications(patient_id, row),
-            allergies=self._allergies(patient_id),
-            last_visit=self._last_visit(patient_id),
+            conditions=conditions,
+            medications=medications,
+            allergies=allergies,
+            last_visit=last_visit,
             fallback_mrn=mrn,
             country_fallback=row.get("country_code") or None,
             contact_preference=contact_preference_from_row(row),

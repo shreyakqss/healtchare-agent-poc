@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import type { IdentityFormRequest } from "@/lib/api";
+import type { IdentityFormRequest, LinkedPatientRecord } from "@/lib/api";
 import { Alert, Button, Card, CardBody, CardHeader, Field, Icons, Input, Select } from "@/components/ui";
 
 interface Draft {
@@ -26,12 +26,41 @@ const EMPTY_DRAFT: Draft = {
 
 const REQUIRED_KEYS = ["name", "birth_date", "gender", "address_line1", "city", "state", "postal_code", "country", "contact_preference"] as const;
 
-export function IntakeForm({ onSubmit, busy, disabled }: {
+export function IntakeForm({ onSubmit, busy, disabled, prefillName, prefillEmail, linkedRecord }: {
   onSubmit: (values: IdentityFormRequest) => void;
   busy: boolean;
   disabled?: boolean;
+  // From the signed-in Keycloak account, so the patient doesn't retype what's already known.
+  // Used only when there is no linkedRecord (a brand-new account, not yet tied to an OpenEMR patient).
+  prefillName?: string | null;
+  prefillEmail?: string | null;
+  // Full prefill when this account is linked to an existing OpenEMR patient (Keycloak
+  // `hms_patient_id`) - submitting still updates that same record, never creates a second one.
+  linkedRecord?: LinkedPatientRecord | null;
 }) {
-  const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
+  const [draft, setDraft] = useState<Draft>(() =>
+    linkedRecord
+      ? {
+          name: linkedRecord.name,
+          birth_date: linkedRecord.birth_date ?? "",
+          gender: linkedRecord.gender.toLowerCase(),
+          phone: linkedRecord.phone ?? "",
+          email: linkedRecord.email ?? "",
+          address_line1: linkedRecord.address_line1 ?? "",
+          address_line2: linkedRecord.address_line2 ?? "",
+          city: linkedRecord.city ?? "",
+          state: linkedRecord.state ?? "",
+          postal_code: linkedRecord.postal_code ?? "",
+          country: linkedRecord.country ?? "",
+          contact_preference: linkedRecord.contact_preference ?? "",
+        }
+      : {
+          ...EMPTY_DRAFT,
+          name: prefillName ?? "",
+          email: prefillEmail ?? "",
+          contact_preference: prefillEmail ? "email" : "",
+        },
+  );
   const [consented, setConsented] = useState(false);
   const [touched, setTouched] = useState(false);
 
@@ -67,7 +96,11 @@ export function IntakeForm({ onSubmit, busy, disabled }: {
       <Card>
         <CardHeader
           title="Your details"
-          description="We use these details to create your clinic record. Next, the assistant will ask what brings you in."
+          description={
+            linkedRecord
+              ? "Filled in from your last visit - please confirm or update anything that's changed."
+              : "We use these details to create your clinic record. Next, the assistant will ask what brings you in."
+          }
         />
         <CardBody className="space-y-4">
           <div className="grid gap-4 sm:grid-cols-2">

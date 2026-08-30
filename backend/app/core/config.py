@@ -86,6 +86,21 @@ class Settings(BaseSettings):
     OPENEMR_USERNAME: str | None = None
     OPENEMR_PASSWORD: str | None = None
 
+    # Direct MariaDB access for the one OpenEMR admin write with no REST/FHIR path at all:
+    # creating a practitioner login (users/users_secure) and its facility_user_ids role rows.
+    OPENEMR_MYSQL_HOST: str = "localhost"
+    OPENEMR_MYSQL_PORT: int = 3307
+    OPENEMR_MYSQL_DB: str = "openemr"
+    OPENEMR_MYSQL_USER: str | None = None
+    OPENEMR_MYSQL_PASSWORD: str | None = None
+
+    # Keycloak Admin REST API - used only by self-registration/account provisioning to
+    # create a Keycloak user. The `careflow-admin` client has only manage-users/view-users.
+    KEYCLOAK_ADMIN_URL: str = "http://localhost:8500"
+    KEYCLOAK_REALM: str = "careflow"
+    KEYCLOAK_ADMIN_CLIENT_ID: str | None = None
+    KEYCLOAK_ADMIN_CLIENT_SECRET: str | None = None
+
     model_config = SettingsConfigDict(env_file=BACKEND_DIR / ".env", case_sensitive=True, extra="ignore")
 
     @property

@@ -68,6 +68,22 @@ def facts(db: Session, case_id: uuid.UUID) -> list[PatientFact]:
     return db.query(PatientFact).filter(PatientFact.case_id == case_id).order_by(PatientFact.source_turn, PatientFact.created_at).all()
 
 
+# Derived from PatientFact rows on read instead of caching identity data a second time.
+DEMOGRAPHIC_KEYS = {"name": "name", "age": "age", "gender": "sex"}
+
+
+def demographics_from_facts(fact_rows: list[PatientFact]) -> dict[str, str]:
+    merged: dict[str, str] = {}
+    for f in fact_rows:
+        if f.kind in DEMOGRAPHIC_KEYS and f.value not in intake_fields.PLACEHOLDERS:
+            merged.setdefault(DEMOGRAPHIC_KEYS[f.kind], f.value.strip())
+    return merged
+
+
+def demographics(db: Session, case_id: uuid.UUID) -> dict[str, str]:
+    return demographics_from_facts(facts(db, case_id))
+
+
 def entries(db: Session, case_id: uuid.UUID) -> list[AllergyMedication]:
     return db.query(AllergyMedication).filter(AllergyMedication.case_id == case_id).order_by(AllergyMedication.source_turn).all()
 

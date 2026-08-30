@@ -2,8 +2,8 @@ import { API_ROOT, http, readCookie, readSse } from "@/lib/api/client";
 import type {
   AppointmentRequestResult, Attachment, AttachmentSkipResponse, AuditEvent, CaseDetail, CaseListItem, ConsultationNote,
   ConsultationNoteRequest, FinalizeRequest, HMSPractitioner, HMSStatus, HospitalConfig,
-  HospitalSummary, IdentityFormRequest, IntakeConfig, MessageResponse, PatientCase, PatientVisitItem, Review, ReviewRequest,
-  Roster, SessionResponse, Slot, TurnEvent,
+  HospitalSummary, IdentityFormRequest, IntakeConfig, LinkedPatientRecord, MessageResponse, PatientCase, PatientVisitItem,
+  Review, ReviewRequest, Roster, SessionResponse, Slot, TurnEvent,
 } from "@/lib/api/types";
 
 export { ApiError } from "@/lib/api/client";
@@ -11,6 +11,7 @@ export type * from "@/lib/api/types";
 
 export const intakeApi = {
   greeting: () => http.get<{ text: string }>("/intake-sessions/greeting"),
+  linkedRecord: () => http.get<LinkedPatientRecord | null>("/intake-sessions/linked-record"),
   start: (body: Record<string, never> = {}) =>
     http.post<SessionResponse>("/intake-sessions", body),
   get: (sessionId: string) => http.get<SessionResponse>(`/intake-sessions/${sessionId}`),

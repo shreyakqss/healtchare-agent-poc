@@ -30,8 +30,11 @@ class CurrentPrincipal:
     subject: str
     roles: frozenset[str]
     username: str | None = None
+    email: str | None = None
+    display_name: str | None = None
     clinic_id: str | None = None
     hms_username: str | None = None
+    hms_patient_id: str | None = None
     auth_method: str = "bearer"
 
 
@@ -119,7 +122,10 @@ def _claims_principal(db: Session, claims: dict[str, Any], auth_method: str) -> 
     roles = application_roles(claims)
     clinic_id = claims.get("clinic_id") if isinstance(claims.get("clinic_id"), str) else None
     hms_username = claims.get("hms_username") if isinstance(claims.get("hms_username"), str) else None
+    hms_patient_id = claims.get("hms_patient_id") if isinstance(claims.get("hms_patient_id"), str) else None
     username = claims.get("preferred_username") if isinstance(claims.get("preferred_username"), str) else None
+    email = claims.get("email") if isinstance(claims.get("email"), str) else None
+    display_name = claims.get("name") if isinstance(claims.get("name"), str) else None
     user = (
         db.query(ApplicationUser)
         .filter(ApplicationUser.issuer == issuer, ApplicationUser.subject == subject)
@@ -130,17 +136,25 @@ def _claims_principal(db: Session, claims: dict[str, Any], auth_method: str) -> 
         db.add(user)
     elif not user.active:
         raise Unauthorized("This CareFlow account is disabled.")
-    changed = (user.username, user.roles, user.clinic_id, user.hms_username) != (
+    changed = (
+        user.username, user.email, user.display_name, user.roles, user.clinic_id, user.hms_username, user.hms_patient_id
+    ) != (
         username,
+        email,
+        display_name,
         sorted(roles),
         clinic_id,
         hms_username,
+        hms_patient_id,
     )
     if changed or user.id is None:
         user.username = username
+        user.email = email
+        user.display_name = display_name
         user.roles = sorted(roles)
         user.clinic_id = clinic_id
         user.hms_username = hms_username
+        user.hms_patient_id = hms_patient_id
         db.commit()
         db.refresh(user)
     else:
@@ -150,6 +164,9 @@ def _claims_principal(db: Session, claims: dict[str, Any], auth_method: str) -> 
         subject=subject,
         roles=roles,
         username=username,
+        email=email,
+        display_name=display_name,
+        hms_patient_id=hms_patient_id,
         clinic_id=clinic_id,
         hms_username=hms_username,
         auth_method=auth_method,

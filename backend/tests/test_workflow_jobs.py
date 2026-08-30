@@ -17,7 +17,6 @@ def case_id():
         db.flush()
         case = PatientCase(
             session_id=session.id,
-            demographics={},
             hospital_id="qss-demo-clinic",
         )
         db.add(case)

@@ -31,7 +31,7 @@ export function GeneralTab({ editor, hospitalId }: { editor: ConfigEditor; hospi
         <CardBody>
           <KeyValue columns={2} items={[
             { label: "Departments", value: <span className="tabular">{cfg.departments?.length ?? 0}</span> },
-            { label: "Doctors", value: <span className="tabular">{cfg.doctors?.length ?? 0}</span> },
+            { label: "Static doctor overrides", value: <span className="tabular">{cfg.doctors?.length ?? 0}</span> },
             { label: "Appointment types", value: <span className="tabular">{cfg.appointment_types?.length ?? 0}</span> },
             { label: "Triage rules", value: <span className="tabular">{cfg.triage_rules?.rules?.length ?? 0}</span> },
             { label: "Rule version", value: <span className="font-mono text-xs">{cfg.triage_rules?.version ?? "–"}</span> },

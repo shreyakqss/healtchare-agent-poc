@@ -139,7 +139,7 @@ async def create_care_task(step_input: StepInput) -> StepOutput:
         if routing:
             request = AppointmentRequest(
                 case_id=str(case_id), patient_mrn=case.hms_patient_id,
-                patient_name=(case.demographics or {}).get("name", "Unnamed patient"),
+                patient_name=case_repo.demographics(db, case_id).get("name", "Unnamed patient"),
                 department_id=routing.department_id, practitioner_id=routing.doctor_id,
                 appointment_type_id=routing.appointment_type_id, priority=priority,
                 preferred_slot_id=(routing.suggested_slot or {}).get("id"),

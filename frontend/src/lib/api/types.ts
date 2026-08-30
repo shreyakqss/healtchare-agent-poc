@@ -9,9 +9,26 @@ export interface AuthUser {
   user_id: string;
   subject: string;
   username: string | null;
+  email: string | null;
+  display_name: string | null;
   roles: Array<"patient" | "clinician" | "admin">;
   clinic_id: string | null;
   hms_username: string | null;
+}
+
+export interface LinkedPatientRecord {
+  name: string;
+  birth_date: string | null;
+  gender: string;
+  phone: string | null;
+  email: string | null;
+  address_line1: string | null;
+  address_line2: string | null;
+  city: string | null;
+  state: string | null;
+  postal_code: string | null;
+  country: string | null;
+  contact_preference: string | null;
 }
 
 export interface SessionResponse {

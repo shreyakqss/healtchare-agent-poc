@@ -16,7 +16,8 @@ from app.api.deps import get_db
 from app.api.v1.serializers import active_intake_out, session_out
 from app.core.errors import DomainError, Unprocessable
 from app.schemas.requests import ConsentRequest, IdentityFormRequest, MessageRequest, StartSessionRequest
-from app.schemas.responses import ActiveIntakeResponse, MessageResponse, SessionResponse, TurnEvent
+from app.integrations.hms import get_hms
+from app.schemas.responses import ActiveIntakeResponse, LinkedPatientRecord, MessageResponse, SessionResponse, TurnEvent
 from app.security import CurrentPrincipal, case_for_principal, rate_limits, require_roles
 from app.services import case_repo, intake_service, prescreen_trigger
 
@@ -35,6 +36,32 @@ def start_session(payload: StartSessionRequest, principal: PatientPrincipal, db:
 @router.get("/greeting")
 def greeting(_: PatientPrincipal):
     return {"text": intake_service.GREETING}
+
+
+@router.get("/linked-record", response_model=LinkedPatientRecord | None)
+def linked_record(principal: PatientPrincipal):
+    """Prefill for the identity form when this account is linked to an existing OpenEMR
+    patient. Read-only lookup by the account's own `hms_patient_id` - never a name/DOB
+    search, so it can only ever return this account's own record."""
+    if not principal.hms_patient_id:
+        return None
+    patient = get_hms().get_patient(principal.hms_patient_id)
+    if patient is None:
+        return None
+    return LinkedPatientRecord(
+        name=patient.name,
+        birth_date=patient.birth_date,
+        gender=patient.sex,
+        phone=patient.phone,
+        email=patient.email,
+        address_line1=patient.address.line1 if patient.address else None,
+        address_line2=patient.address.line2 if patient.address else None,
+        city=patient.address.city if patient.address else None,
+        state=patient.address.state if patient.address else None,
+        postal_code=patient.address.postal_code if patient.address else None,
+        country=patient.address.country if patient.address else None,
+        contact_preference=patient.contact_preference,
+    )
 
 
 @router.get("/active", response_model=ActiveIntakeResponse)
