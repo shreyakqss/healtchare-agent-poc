@@ -1,9 +1,23 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import ReactMarkdown from "react-markdown";
 import { cn } from "@/lib/utils";
 import { Icons } from "@/components/ui/icons";
 import type { ChatMessage } from "@/features/intake/use-intake-session";
+
+// The assistant's own words, not the patient's - a patient typing "**test**" must stay
+// literal text, so markdown is only ever parsed on the assistant side.
+const MARKDOWN_COMPONENTS = {
+  p: (props: React.ComponentPropsWithoutRef<"p">) => <p className="mb-2 last:mb-0" {...props} />,
+  strong: (props: React.ComponentPropsWithoutRef<"strong">) => <strong className="font-semibold text-fg" {...props} />,
+  em: (props: React.ComponentPropsWithoutRef<"em">) => <em className="italic" {...props} />,
+  ul: (props: React.ComponentPropsWithoutRef<"ul">) => <ul className="mb-2 list-disc space-y-1 pl-5 last:mb-0" {...props} />,
+  ol: (props: React.ComponentPropsWithoutRef<"ol">) => <ol className="mb-2 list-decimal space-y-1 pl-5 last:mb-0" {...props} />,
+  a: (props: React.ComponentPropsWithoutRef<"a">) => (
+    <a className="text-brand underline underline-offset-2" target="_blank" rel="noreferrer" {...props} />
+  ),
+};
 
 export function MessageList({ messages, typing }: { messages: ChatMessage[]; typing: boolean }) {
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -44,12 +58,14 @@ function Bubble({ message }: { message: ChatMessage }) {
       {mine ? null : <AssistantMark />}
       <div
         className={cn(
-          "max-w-[85%] whitespace-pre-wrap rounded-2xl px-4 py-2.5 text-[15px] leading-6 sm:max-w-[75%]",
-          mine ? "rounded-br-md bg-brand text-brand-fg" : "rounded-bl-md border border-line bg-surface text-fg shadow-card",
+          "max-w-[85%] rounded-2xl px-4 py-2.5 text-[15px] leading-6 sm:max-w-[75%]",
+          mine
+            ? "whitespace-pre-wrap rounded-br-md bg-brand text-brand-fg"
+            : "rounded-bl-md border border-line bg-surface text-fg shadow-card",
         )}
       >
         <span className="sr-only">{mine ? "You: " : "Assistant: "}</span>
-        {message.content}
+        {mine ? message.content : <ReactMarkdown components={MARKDOWN_COMPONENTS}>{message.content}</ReactMarkdown>}
         {message.streaming && message.content ? (
           <span className="ml-0.5 inline-block h-4 w-[2px] translate-y-0.5 animate-pulse-soft bg-current align-middle" aria-hidden="true" />
         ) : null}

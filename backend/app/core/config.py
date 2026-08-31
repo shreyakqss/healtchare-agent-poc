@@ -57,6 +57,14 @@ class Settings(BaseSettings):
     LLM_EFFORT: str = "low"
     OPENAI_API_KEY: str | None = None
 
+    TAVILY_API_KEY: str | None = None
+
+    # Agent tracing (app/core/tracing.py). Both keys set = every agno run is exported.
+    # Self-hosted Langfuse listens on http://localhost:3000.
+    LANGFUSE_HOST: str = "https://cloud.langfuse.com"
+    LANGFUSE_PUBLIC_KEY: str | None = None
+    LANGFUSE_SECRET_KEY: str | None = None
+
     # Synthetic uploads only.
     UPLOAD_DIR: Path = BACKEND_DIR / "data" / "uploads"
     MAX_UPLOAD_MB: int = 25
@@ -106,6 +114,10 @@ class Settings(BaseSettings):
     @property
     def llm_enabled(self) -> bool:
         return bool(self.OPENAI_API_KEY)
+
+    @property
+    def tracing_enabled(self) -> bool:
+        return bool(self.LANGFUSE_PUBLIC_KEY and self.LANGFUSE_SECRET_KEY)
 
     @field_validator("CORS_ORIGINS")
     @classmethod

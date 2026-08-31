@@ -269,6 +269,23 @@ def required_attachment_kinds() -> list[str]:
 def triage_rules() -> dict[str, Any]:
     return load().get("triage_rules", {"version": "0", "rules": []})
 
+def clinic_vocabulary() -> list[str]:
+    """Every term the triage rules and the routing keywords match on.
+
+    Handed to the extractor so a paraphrase is stored with the clinic's own term beside it.
+    The terms stay clinic policy and the rule engine still decides; only the matching stops
+    depending on the patient using the clinic's exact wording.
+    """
+    config = load()
+    terms: set[str] = set()
+    for rule in (config.get("triage_rules") or {}).get("rules") or []:
+        condition = rule.get("condition") or {}
+        for key in ("any_symptom", "all_symptoms", "any_history"):
+            terms.update(condition.get(key) or [])
+    for keywords in (config.get("specialty_map") or {}).values():
+        terms.update(keywords)
+    return sorted(terms)
+
 def department_by_id(department_id: str | None) -> dict[str, Any] | None:
     return next((d for d in departments() if d["id"] == department_id), None)
 

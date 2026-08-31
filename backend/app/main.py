@@ -17,6 +17,7 @@ from app.api.v1.router import api_router
 from app.core.config import settings, validate_runtime_settings
 from app.core.errors import DomainError, RateLimited
 from app.core.logging import bind_request_id, configure_logging, reset_request_id
+from app.core.tracing import configure as configure_tracing
 from app.db import SessionLocal
 from app.domain.lifecycle import IllegalTransition
 from app.integrations.hms import get_hms
@@ -39,6 +40,7 @@ async def unexpected_error(request: Request, exc: Exception) -> JSONResponse:
 async def lifespan(_: FastAPI):
     validate_runtime_settings(settings)
     configure_logging(settings.DEBUG, structured=settings.ENVIRONMENT == "production")
+    configure_tracing()
     hospital_config.load()  # fail fast on a broken clinic config
     status = get_hms().status()
     if not status.connected:

@@ -15,6 +15,7 @@ CONFIG = {
 class F:
     kind: str
     value: str
+    normalized: str = ""
 
 
 def test_rule_hint_beats_keywords():
@@ -25,6 +26,11 @@ def test_rule_hint_beats_keywords():
 
 def test_keyword_match():
     d = route([F("reason_for_visit", "Palpitations at night")], CONFIG, "low")
+    assert d.department["id"] == "cardio" and d.matched_keywords == ["palpitations"]
+
+
+def test_clinic_term_routes_a_paraphrase():
+    d = route([F("symptom", "my heart keeps fluttering", "palpitations")], CONFIG, "low")
     assert d.department["id"] == "cardio" and d.matched_keywords == ["palpitations"]
 
 

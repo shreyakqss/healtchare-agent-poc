@@ -95,10 +95,15 @@ def find_allergy_conflicts(entries: Iterable[Entry]) -> list[dict[str, Any]]:
 
 
 def _hits(facts: list[Fact], kinds: set[str], keywords: list[str]):
+    """Match the patient's own words or the clinic term the extractor mapped them to.
+
+    `normalized` is why "I can't catch my breath" reaches a rule written for
+    "shortness of breath" - the rule still decides, the label only widens what it sees.
+    """
     for f in facts:
         if f.kind not in kinds:
             continue
-        value = (f.value or "").lower()
+        value = f"{f.value or ''} {getattr(f, 'normalized', '') or ''}".lower()
         for kw in keywords:
             if kw.lower() in value:
                 yield kw, f

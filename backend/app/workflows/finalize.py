@@ -16,6 +16,7 @@ from agno.workflow.types import StepInput, StepOutput
 
 from app.agents import AgentUnavailable
 from app.agents.visit_reporter import VisitInputs, write_visit_summary
+from app.core.tracing import case_trace
 from app.db import db_session
 from app.domain.lifecycle import CaseStatus
 from app.integrations.hms import get_hms
@@ -233,14 +234,15 @@ async def run_finalize(
     mark_failed: bool = True,
 ) -> None:
     try:
-        result = await finalize_workflow.arun(
-            input={
-                "case_id": str(case_id),
-                "finalizer_id": finalizer_id,
-                "finalizer_name": finalizer_name,
-                "job_id": str(job_id) if job_id else None,
-            }
-        )
+        with case_trace("workflow.finalize", case_id):
+            result = await finalize_workflow.arun(
+                input={
+                    "case_id": str(case_id),
+                    "finalizer_id": finalizer_id,
+                    "finalizer_name": finalizer_name,
+                    "job_id": str(job_id) if job_id else None,
+                }
+            )
         if result.status != RunStatus.completed:
             raise RuntimeError(f"Workflow ended with status {result.status}: {result.content}")
     except Exception as exc:

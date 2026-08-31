@@ -5,7 +5,8 @@
 ```
 app/
   main.py              create_app(): CORS, response hardening, /health, /ready, router mount
-  core/                settings (pydantic-settings), logging (PHI redaction), domain errors -> HTTP
+  core/                settings (pydantic-settings), logging (PHI redaction), domain errors -> HTTP,
+                       tracing (agno runs -> Langfuse over OTLP, off without keys)
   security/            OIDC verification, opaque sessions, CSRF, role/clinic/case authorization
   db/                  Base (uuid id + created_at), engine/session, db_session() unit of work
   models/              SQLAlchemy tables (identity/session/ownership, intake, case, clinical, audit)
@@ -15,6 +16,7 @@ app/
                          lifecycle (status graph), demographics (age from birth date)
   services/            orchestration with a DB session:
                          intake_service      session, consent, identity form, streamed clinical turn loop
+                         assistant_tools     scoped read-only references for patient questions
                          attachment_service  upload (store + advisory kind check + HMS forward), skip
                          review_service      clinician review -> APPROVED / REJECTED
                          consultation_service consultation notes + the finalisation gate
@@ -32,9 +34,11 @@ app/
                            clinic (the facility = the clinic's identity), documents (push with
                            one retry), audit_forward (mirror audit notes), intake_sync
                            (approved-intake payload), roster (live doctors over YAML)
-  agents/              agno Agents - one typed async function each, no persistence:
-                         fact_extractor, question_planner (streams), discrepancy_checker,
+  agents/              agno Agents - one async function each, no persistence:
+                         fact_extractor, question_planner (streams), patient_assistant
+                         (grounded answers), answer_guard, discrepancy_checker,
                          summary_writer, visit_reporter
+    tools/               external references with no case scope: approved health-source search
   workflows/           prescreen/finalize steps invoked by durable workflow jobs
   integrations/hms/    HMSClient protocol + get_hms() factory (use_hms() is the test seam)
                          openemr/        the only implementation: auth (OAuth2 + OIDC), scopes,
@@ -67,8 +71,9 @@ logic: every gate, side effect and audit write lives in a service. `integrations
 
 | Step | Decides | LLM? |
 |---|---|---|
-| Fact extraction | what the patient stated -> typed facts | yes (fallback: raw text kept as a fact) |
+| Turn understanding | typed facts, current-field response, optional patient question and scope | yes (failure leaves the turn unprocessed) |
 | Question planning | wording of the next question | yes (fallback: template). *Which* field and *when to stop* is code |
+| Patient question | answer from scope-selected records, clinic data or health sources | yes (fallback: explained boundary + next field) |
 | Discrepancy check | patient statement vs document / HMS record (clinician-facing flags) | yes (fallback: no flags) |
 | Urgency evaluation | priority, rule codes, evidence, warnings | **never** |
 | Care navigation | department / doctor / appointment type / HMS slot | **never** (keyword map + rule hint + live roster) |
@@ -78,6 +83,19 @@ logic: every gate, side effect and audit write lives in a service. `integrations
 
 Every agent raises `AgentUnavailable`; callers degrade to the documented fallback and record which path ran
 (`generated_by`, `planner`, `extraction.mode` in the audit payloads) so the UI can say "AI draft" vs "plain listing".
+
+Turn understanding also labels each fact with `normalized`, the clinic term its wording means, chosen from
+`hospital_config.clinic_vocabulary()` (the rule and routing keywords) and discarded unless it is one of them.
+That is what lets "I can't catch my breath" reach a rule written for "shortness of breath". The patient's own
+words are stored unchanged and remain the evidence; the rules still decide the priority.
+
+### Observability
+
+`core/tracing.py` installs the OpenInference agno instrumentor at startup when both Langfuse keys are set, so every
+agent run exports its system prompt, chat history, tool calls, tool results, response, token counts and latency.
+`case_trace()` groups one intake turn (`intake.turn`) or one workflow run (`workflow.prescreen`, `workflow.finalize`)
+into a single trace keyed by case id, so a case reads as one timeline. Without the keys nothing is installed and no
+span is created. This is separate from `core/logging.py`, which redacts PHI and never records model content.
 
 ### Clinician identity
 
@@ -107,10 +125,16 @@ address) is submitted once and creates the patient in the HMS (`register_patient
 point. Existing-record search/link is intentionally unavailable until patient identity-proofing, record matching, proxy,
 and recovery policy exists. Clinical fields are then asked one at a time.
 
-A required field is open until a row satisfies it. A denial writes no fact, so each assistant question stores
-`asks_field` and the next turn closes it with one of three sentinels (`None reported by patient`,
-`Declined to answer`, `Answered - see the intake transcript`). Intake never asks the same field twice and always
-closes with a spoken message. `MAX_ASSISTANT_QUESTIONS` is a backstop, not the normal exit.
+A message may answer intake and ask a question at the same time. One typed agent call extracts both and selects a
+scope-specific context: case records, clinic data, or identifier-free health search. The answering agent may explain
+written reports and general health information, but code blocks clinical and operational decisions. A second agent
+checks generated answers before delivery, and the same reply continues intake with the next open field.
+
+A required field is open until a row satisfies it. Each assistant question stores `asks_field`; the typed turn result
+decides whether the next message answered, denied, declined or did not answer it. Only the first three close the field,
+using a fact or one of three sentinels (`None reported by patient`, `Declined to answer`,
+`Answered - see the intake transcript`). When turn understanding is unavailable, the transcript is preserved but no
+fact or field completion is guessed. `MAX_ASSISTANT_QUESTIONS` remains a backstop.
 
 Once `case_repo.ready_for_prescreen()` holds, CareFlow atomically enqueues a durable pre-screen job: every required
 field must be present and every required attachment kind uploaded or explicitly skipped. Leases recover abandoned jobs;

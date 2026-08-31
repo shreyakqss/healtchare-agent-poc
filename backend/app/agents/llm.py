@@ -7,11 +7,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 from functools import lru_cache
 from typing import Any, TypeVar
 
 from agno.agent import Agent
 from agno.models.openai import OpenAIChat
+from agno.run.agent import RunEvent
 from pydantic import BaseModel
 
 from app.core.config import settings
@@ -70,6 +72,42 @@ def make_agent(
     )
 
 
+async def _within_timeout(coro: Awaitable[Any], agent_name: str) -> Any:
+    """Enforce the model deadline even when provider streaming or retries remain active."""
+    task = asyncio.ensure_future(coro)
+    _, pending = await asyncio.wait({task}, timeout=settings.LLM_TIMEOUT_SECONDS)
+    if task in pending:
+        task.cancel()
+        task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
+        raise AgentUnavailable(f"{agent_name} exceeded the {settings.LLM_TIMEOUT_SECONDS}s timeout.")
+    return task.result()
+
+
+async def stream_text(agent: Agent, prompt: str, on_token: Callable[[str], None] | None = None) -> str:
+    """Stream an agent's text through `on_token`; return the full text. Raises AgentUnavailable."""
+    if not llm_available():
+        raise AgentUnavailable("No LLM API key configured.")
+
+    async def _run() -> str:
+        text = ""
+        async for event in agent.arun(prompt, stream=True):
+            if event.event == RunEvent.run_content and isinstance(event.content, str) and event.content:
+                text += event.content
+                if on_token:
+                    on_token(event.content)
+        return text
+
+    try:
+        text = str(await _within_timeout(_run(), agent.name)).strip()
+    except AgentUnavailable:
+        raise
+    except Exception as exc:
+        raise AgentUnavailable(str(exc)) from exc
+    if not text:
+        raise AgentUnavailable(f"{agent.name} produced an empty response.")
+    return text
+
+
 async def run_structured(agent: Agent, prompt: str, schema: type[T]) -> T:
     """Run an agent whose output_schema is `schema`; always returns an instance or raises AgentUnavailable.
 
@@ -80,22 +118,7 @@ async def run_structured(agent: Agent, prompt: str, schema: type[T]) -> T:
     if not llm_available():
         raise AgentUnavailable("No LLM API key configured.")
     try:
-        # httpx's read-timeout only fires on total silence between chunks - a provider that
-        # trickles keep-alive bytes while effectively stalled never trips it - and agno's own
-        # retry-on-any-exception loop (make_agent sets retries=1) can swallow a plain
-        # asyncio.wait_for cancellation and just retry instead of propagating it, so the
-        # ceiling never actually lands. Racing against a bare sleep and walking away from
-        # the slow task (never awaiting it further) enforces the ceiling regardless of what
-        # the library does internally - the orphaned task keeps running but nothing here
-        # waits on it, so the patient is unblocked at settings.LLM_TIMEOUT_SECONDS no matter what.
-        task = asyncio.ensure_future(agent.arun(prompt))
-        done, pending = await asyncio.wait({task}, timeout=settings.LLM_TIMEOUT_SECONDS)
-        if task in pending:
-            task.cancel()
-            task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
-            raise AgentUnavailable(f"{agent.name} exceeded the {settings.LLM_TIMEOUT_SECONDS}s timeout.")
-        result = task.result()
-        content = result.content
+        content = (await _within_timeout(agent.arun(prompt), agent.name)).content
         if isinstance(content, schema):
             return content
         if isinstance(content, dict):

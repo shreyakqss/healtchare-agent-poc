@@ -11,6 +11,19 @@ def test_active_hospital_config_passes_validation():
     hospital_config.validate(deepcopy(hospital_config.load()))
 
 
+def test_clinic_vocabulary_covers_rule_and_routing_terms():
+    vocabulary = hospital_config.clinic_vocabulary()
+    config = hospital_config.load()
+    rule_terms = {
+        term
+        for rule in config["triage_rules"]["rules"]
+        for key in ("any_symptom", "all_symptoms", "any_history")
+        for term in (rule.get("condition") or {}).get(key, [])
+    }
+    routing_terms = {term for terms in config["specialty_map"].values() for term in terms}
+    assert rule_terms | routing_terms == set(vocabulary)
+
+
 def test_duplicate_rule_codes_are_rejected():
     config = deepcopy(hospital_config.load())
     config["triage_rules"]["rules"][1]["code"] = config["triage_rules"]["rules"][0]["code"]

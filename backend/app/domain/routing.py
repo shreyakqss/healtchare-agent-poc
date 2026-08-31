@@ -16,6 +16,7 @@ MATCHABLE_KINDS = {"symptom", "reason_for_visit", "history", "condition"}
 class Fact(Protocol):
     kind: str
     value: str
+    normalized: str  # the clinic term this wording means, "" when none applies
 
 
 @dataclass
@@ -60,7 +61,11 @@ def route(
     if specialty_hint and specialty_hint in by_id:
         department, basis = by_id[specialty_hint], "rule_hint"
     else:
-        haystack = " ".join((f.value or "").lower() for f in facts if f.kind in MATCHABLE_KINDS)
+        haystack = " ".join(
+            f"{f.value or ''} {getattr(f, 'normalized', '') or ''}".lower()
+            for f in facts
+            if f.kind in MATCHABLE_KINDS
+        )
         for dep_id, keywords in (config.get("specialty_map") or {}).items():
             hits = [kw for kw in keywords if kw.lower() in haystack]
             if hits and dep_id in by_id:

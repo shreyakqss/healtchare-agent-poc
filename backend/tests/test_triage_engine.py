@@ -9,6 +9,7 @@ from app.domain import triage_engine as engine
 class F:
     kind: str
     value: str
+    normalized: str = ""
 
 
 @dataclass
@@ -77,3 +78,16 @@ def test_no_fallback_raises():
 @pytest.mark.parametrize("text,days", [("3 weeks", 21), ("a month", 30), ("couple of days", 2), ("since this morning", None), ("2.5 days", 2.5)])
 def test_parse_duration(text, days):
     assert engine.parse_duration_days(text) == days
+
+
+def test_paraphrase_matches_through_the_clinic_term():
+    out = engine.evaluate([F("symptom", "a crushing weight on my ribs", "chest pain")], [], RULES)
+    assert out.priority == "high"
+    assert out.rule_codes == ["TR-HIGH-001"]
+    # The evidence still quotes what the patient actually said.
+    assert out.evidence[0]["text"] == "a crushing weight on my ribs"
+
+
+def test_paraphrase_without_a_clinic_term_stays_routine():
+    out = engine.evaluate([F("symptom", "a crushing weight on my ribs")], [], RULES)
+    assert out.priority == "low"

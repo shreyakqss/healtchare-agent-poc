@@ -20,16 +20,18 @@ import asyncio
 import logging
 import time
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
+from dataclasses import dataclass
 from datetime import timedelta
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.agents import AgentUnavailable, fact_extractor, question_planner
+from app.agents import AgentUnavailable, answer_guard, fact_extractor, patient_assistant, question_planner
 from app.agents.question_planner import PlannerContext
-from app.agents.schemas import ExtractedFact
+from app.agents.schemas import ExtractedFact, ExtractionResult, QuestionResponse
 from app.core.config import settings
+from app.core.tracing import case_trace
 from app.core.errors import Conflict, Forbidden
 from app.db import utcnow
 from app.domain import intake_fields
@@ -50,7 +52,7 @@ from app.models import (
 from app.models.facts import SOURCE_HMS
 from app.schemas.requests import IdentityFormRequest
 from app.schemas.responses import MessageResponse, TranscriptMessage, TurnEvent
-from app.services import audit, case_repo, hospital_config, lifecycle
+from app.services import assistant_tools, audit, case_repo, hospital_config, lifecycle
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +71,35 @@ GREETING = (
     "Hello, I am the clinic's intake assistant. Tell me what brings you in today, in your own words. "
     "I will ask a few short questions and a clinician will review everything before any decision is made."
 )
+OUT_OF_SCOPE = "I cannot help with that request because it is outside healthcare, your intake, and this clinic."
+RESTRICTED_HEALTHCARE = (
+    "I can explain health information and your uploaded reports, but I cannot diagnose you, prescribe or change "
+    "treatment or dosage, decide urgency, make bookings or routing decisions, or change your medical record. "
+    "I can still explain possible causes in general or help you prepare questions for your clinician."
+)
+EMERGENCY_GUIDANCE = (
+    "I cannot safely assess an emergency in chat. If you may be experiencing a life-threatening emergency, "
+    "contact local emergency services now."
+)
+REFERENCE_UNAVAILABLE = (
+    "I cannot answer that reliably because the supporting report or clinic information is not available right now."
+)
+ASSISTANT_UNAVAILABLE = (
+    "I cannot answer that reliably because the healthcare assistant is unavailable right now. Please try again."
+)
+SAFE_ANSWER_UNAVAILABLE = (
+    "I could not provide a safe, reliable answer to that question. Please rephrase it or ask your clinician."
+)
+UNDERSTANDING_UNAVAILABLE = (
+    "I could not process that message because the healthcare assistant is unavailable right now. Please try again."
+)
+
+
+@dataclass(frozen=True)
+class TurnExtraction:
+    result: ExtractionResult | None
+    facts_added: int = 0
+    entries_added: int = 0
 
 
 # --- session ---------------------------------------------------------------
@@ -229,86 +260,105 @@ def submit_identity_form(db: Session, session: IntakeSession, case: PatientCase,
 
 # --- step 2: the clinical turn loop -----------------------------------------------------
 
-def _settle_last_question(db: Session, case: PatientCase, session: IntakeSession) -> None:
-    """Close the field the previous question asked about if the answer produced no fact."""
-    asked = (
+def _last_asked_question(db: Session, session: IntakeSession) -> IntakeMessage | None:
+    return (
         db.query(IntakeMessage)
-        .filter(IntakeMessage.session_id == session.id, IntakeMessage.role == "assistant", IntakeMessage.asks_field.isnot(None))
+        .filter(
+            IntakeMessage.session_id == session.id,
+            IntakeMessage.role == "assistant",
+            IntakeMessage.asks_field.isnot(None),
+        )
         .order_by(IntakeMessage.turn_index.desc())
         .first()
     )
-    if asked is None:
+
+
+def _settle_last_question(
+    db: Session,
+    case: PatientCase,
+    asked: IntakeMessage | None,
+    response: QuestionResponse | None,
+    turn_index: int,
+) -> None:
+    """Close the previous field only when the turn-understanding result says it was answered."""
+    if asked is None or asked.asks_field not in case_repo.missing_clinical_fields(db, case.id):
         return
-    reply = (
-        db.query(IntakeMessage)
-        .filter(IntakeMessage.session_id == session.id, IntakeMessage.role == "patient", IntakeMessage.turn_index > asked.turn_index)
-        .order_by(IntakeMessage.turn_index)
-        .first()
-    )
-    if reply is None or asked.asks_field not in case_repo.missing_clinical_fields(db, case.id):
+    value = intake_fields.sentinel_for(response)
+    if value is None:
         return
-    if intake_fields.is_off_topic(reply.content):
-        return  # not an answer at all - leave the field open rather than settling it with junk
-    value = intake_fields.settle_value(reply.content)
     field = asked.asks_field
     if field in intake_fields.ENTRY_FIELDS:
-        db.add(AllergyMedication(case_id=case.id, kind=field, name=value, source_turn=reply.turn_index))
+        db.add(AllergyMedication(case_id=case.id, kind=field, name=value, source_turn=turn_index))
     else:
-        db.add(PatientFact(case_id=case.id, kind=field, value=value, source_turn=reply.turn_index))
+        db.add(PatientFact(case_id=case.id, kind=field, value=value, source_turn=turn_index))
     db.commit()
 
 
-async def _extract_and_store(db: Session, case: PatientCase, message: str, turn_index: int, is_opening: bool) -> dict[str, int]:
+def _clinic_term(proposed: str, vocabulary: list[str]) -> str:
+    """Keep the label only when it is a term the clinic actually configured.
+
+    A term the model invented would fire a triage rule nobody wrote, so an unrecognised
+    one is dropped rather than stored.
+    """
+    term = proposed.strip().lower()
+    return next((known for known in vocabulary if known.lower() == term), "")
+
+
+async def _extract_and_store(
+    db: Session,
+    case: PatientCase,
+    message: str,
+    turn_index: int,
+    is_opening: bool,
+    asked: IntakeMessage | None,
+    transcript: list[dict[str, str]],
+) -> TurnExtraction:
     """`is_opening` is true for the patient's first CLINICAL statement - not necessarily
     turn_index 0, since the identity form now takes turn_index 0. It is computed from
     whether any assistant question has been asked yet, not from the raw index."""
+    vocabulary = hospital_config.clinic_vocabulary()
     try:
-        result = await fact_extractor.extract(message)
+        result = await fact_extractor.extract(
+            message,
+            asked.asks_field if asked else None,
+            asked.content if asked else None,
+            transcript,
+            vocabulary,
+        )
     except AgentUnavailable as exc:
-        # Losing structure is bad; losing the statement is worse. Keep the raw text.
         logger.warning("Extraction unavailable on turn %s (%s)", turn_index, type(exc).__name__)
-        if intake_fields.is_empty_answer(message) or intake_fields.is_denial(message):
-            return {"facts": 0, "entries": 0, "mode": "fallback"}  # settled by the next turn
-        kind = "reason_for_visit" if is_opening else "symptom"
-        value = message.strip()[:MAX_FACT_CHARS]
-        db.add(PatientFact(case_id=case.id, kind=kind, value=value, source_turn=turn_index, confidence=0.3))
-        added = 1
-        # "I have fever" is the reason for the visit AND the symptom. Filing it as the reason
-        # alone leaves the symptom field open, so the very next question asks the patient to
-        # describe what they have just described. An errand ("I need a refill") states no
-        # symptom, so it is left alone.
-        if kind == "reason_for_visit" and not intake_fields.is_administrative_request(message) \
-                and "symptom" in case_repo.missing_clinical_fields(db, case.id):
-            db.add(PatientFact(case_id=case.id, kind="symptom", value=value, source_turn=turn_index, confidence=0.3))
-            added += 1
-        # "I've had a headache for three weeks" answers the duration question too. Without this
-        # the whole sentence lands as one fact and the assistant asks for something already said.
-        duration = intake_fields.extract_duration(message)
-        if duration and "duration" in case_repo.missing_clinical_fields(db, case.id):
-            db.add(PatientFact(case_id=case.id, kind="duration", value=duration[:MAX_FACT_CHARS], source_turn=turn_index, confidence=0.3))
-            added += 1
-        db.commit()
-        return {"facts": added, "entries": 0, "mode": "fallback"}
+        return TurnExtraction(result=None)
 
     existing = {(f.kind, f.value.strip().lower()) for f in case_repo.facts(db, case.id)}
     existing_entries = {(e.kind, e.name.strip().lower()) for e in case_repo.entries(db, case.id)}
     facts = list(result.facts)
 
-    # The opening clinical statement *is* the reason for the visit, whatever the model tagged it as.
-    if is_opening and not any(f.kind == "reason_for_visit" for f in facts) and not any(k == "reason_for_visit" for k, _ in existing):
-        facts.insert(0, ExtractedFact(kind="reason_for_visit", value=message.strip()[:MAX_FACT_CHARS], confidence=0.9))
+    # A reported opening symptom is also the reason for seeking care; unrelated text is never promoted.
+    if (
+        is_opening
+        and not any(f.kind == "reason_for_visit" for f in facts)
+        and not any(k == "reason_for_visit" for k, _ in existing)
+    ):
+        symptom = next((fact for fact in facts if fact.kind == "symptom"), None)
+        if symptom:
+            facts.insert(0, ExtractedFact(
+                kind="reason_for_visit", value=symptom.value, normalized=symptom.normalized, confidence=symptom.confidence,
+            ))
     has_reason = any(k == "reason_for_visit" for k, _ in existing)
 
     added = 0
     for fact in facts:
         value = fact.value.strip()[:MAX_FACT_CHARS]
-        if not value or intake_fields.is_empty_answer(value) or (fact.kind, value.lower()) in existing:
+        if not value or (fact.kind, value.lower()) in existing:
             continue
         if fact.kind == "reason_for_visit":
             if has_reason:
                 continue
             has_reason = True
-        db.add(PatientFact(case_id=case.id, kind=fact.kind, value=value, source_turn=turn_index, confidence=fact.confidence))
+        db.add(PatientFact(
+            case_id=case.id, kind=fact.kind, value=value, normalized=_clinic_term(fact.normalized, vocabulary),
+            source_turn=turn_index, confidence=fact.confidence,
+        ))
         existing.add((fact.kind, value.lower()))
         added += 1
 
@@ -322,7 +372,7 @@ async def _extract_and_store(db: Session, case: PatientCase, message: str, turn_
         added_entries += 1
 
     db.commit()
-    return {"facts": added, "entries": added_entries, "mode": "llm"}
+    return TurnExtraction(result=result, facts_added=added, entries_added=added_entries)
 
 
 def _on_file(db: Session, case_id: uuid.UUID) -> list[str]:
@@ -335,7 +385,85 @@ def _transcript(db: Session, session_id: uuid.UUID) -> list[TranscriptMessage]:
     return [TranscriptMessage(role=m.role, content=m.content, turn_index=m.turn_index) for m in case_repo.messages(db, session_id)]
 
 
+async def _streamed(run: Callable[[Callable[[str], None]], Awaitable[str]]) -> AsyncIterator[tuple[str, str]]:
+    """Forward agent tokens, then yield its complete text."""
+    tokens: asyncio.Queue[str | None] = asyncio.Queue()
+    task = asyncio.create_task(run(tokens.put_nowait))
+    task.add_done_callback(lambda _: tokens.put_nowait(None))
+    try:
+        while (chunk := await tokens.get()) is not None:
+            yield "token", chunk
+        yield "text", await task
+    except BaseException:
+        task.cancel()
+        raise
+
+
+def _clinical_transcript(db: Session, session_id: uuid.UUID) -> list[dict[str, str]]:
+    return [
+        {"role": message.role, "content": message.content}
+        for message in case_repo.messages(db, session_id)
+        if message.turn_index > 0
+    ]
+
+
+def _bounded_reply(text: str, asks_field: str | None, outstanding: list[str]) -> str:
+    if asks_field:
+        ctx = PlannerContext(field=asks_field, outstanding=outstanding, transcript=[])
+        return f"{text} {question_planner.fallback_question(ctx)}"
+    closing = CLOSING if not outstanding else CLOSING_WITH_GAPS
+    return f"{text} {closing}"
+
+
+async def _answer_patient_question(
+    db: Session,
+    session: IntakeSession,
+    case: PatientCase,
+    extraction: ExtractionResult,
+    asks_field: str | None,
+    outstanding: list[str],
+    complete: bool,
+) -> tuple[str, str]:
+    scope = extraction.question_scope
+    if scope == "out_of_scope":
+        return _bounded_reply(OUT_OF_SCOPE, asks_field, outstanding), "scope"
+    if scope == "restricted_healthcare":
+        return _bounded_reply(RESTRICTED_HEALTHCARE, asks_field, outstanding), "scope"
+    if scope == "urgent_safety":
+        return _bounded_reply(EMERGENCY_GUIDANCE, asks_field, outstanding), "safety"
+    if scope not in {"personal_record", "clinic", "general_health"}:
+        return _bounded_reply(UNDERSTANDING_UNAVAILABLE, asks_field, outstanding), "scope"
+
+    reference = await assistant_tools.resolve(db, case.id, scope, extraction.health_topic)
+    if reference is None:
+        return _bounded_reply(REFERENCE_UNAVAILABLE, asks_field, outstanding), "unavailable"
+
+    question = extraction.patient_question or ""
+    asks_for = intake_fields.FIELD_PROMPTS.get(asks_field, asks_field) if asks_field else None
+    transcript = _clinical_transcript(db, session.id)
+    try:
+        reply = await patient_assistant.answer(question, reference, transcript, asks_for)
+        review = await answer_guard.check(scope, question, reference, reply)
+    except AgentUnavailable as exc:
+        logger.warning("Patient answer unavailable (%s)", type(exc).__name__)
+        return _bounded_reply(ASSISTANT_UNAVAILABLE, asks_field, outstanding), "fallback"
+
+    if review.decision == "block":
+        return _bounded_reply(SAFE_ANSWER_UNAVAILABLE, asks_field, outstanding), "guard"
+    if complete:
+        closing = CLOSING if not outstanding else CLOSING_WITH_GAPS
+        reply = f"{reply} {closing}"
+    return reply, f"assistant:{scope}"
+
+
 async def process_turn(db: Session, session: IntakeSession, case: PatientCase, content: str) -> AsyncIterator[TurnEvent]:
+    """Every agent run of one turn under a single trace; the turn itself is `_process_turn`."""
+    with case_trace("intake.turn", case.id):
+        async for event in _process_turn(db, session, case, content):
+            yield event
+
+
+async def _process_turn(db: Session, session: IntakeSession, case: PatientCase, content: str) -> AsyncIterator[TurnEvent]:
     """One turn of the clinical conversation. Requires the identity form to already be
     submitted - not enforced here (that would need an extra query on every turn); the caller
     only opens the chat UI once the identity step reports nothing missing."""
@@ -345,21 +473,22 @@ async def process_turn(db: Session, session: IntakeSession, case: PatientCase, c
         raise Conflict(f"Complete the identity form before clinical intake ({', '.join(missing_identity)} missing).")
 
     started = time.perf_counter()
-    is_opening = not any(
-        m.role == "assistant" and m.asks_field is not None for m in case_repo.messages(db, session.id)
-    )
+    asked = _last_asked_question(db, session)
+    is_opening = asked is None
     turn_index = case_repo.next_turn_index(db, session.id)
+    transcript = _clinical_transcript(db, session.id)
     db.add(IntakeMessage(session_id=session.id, role="patient", content=content, turn_index=turn_index))
     db.commit()
 
-    _settle_last_question(db, case, session)
-
-    # A message phrased as a question to the assistant is not an answer - skip the extractor
-    # (nothing to extract) and skip the planner too (there is nothing new to ask about, and a
-    # fixed redirect costs zero LLM calls instead of two).
-    off_topic = intake_fields.is_off_topic(content)
-    extraction = {"facts": 0, "entries": 0, "mode": "off_topic"} if off_topic else await _extract_and_store(
-        db, case, content, turn_index, is_opening
+    turn = await _extract_and_store(db, case, content, turn_index, is_opening, asked, transcript)
+    extraction = turn.result
+    question = extraction.patient_question if extraction else None
+    _settle_last_question(
+        db,
+        case,
+        asked,
+        extraction.current_question_response if extraction else None,
+        turn_index,
     )
 
     outstanding = case_repo.missing_clinical_fields(db, case.id)
@@ -368,16 +497,24 @@ async def process_turn(db: Session, session: IntakeSession, case: PatientCase, c
     )
     asks_field: str | None = None
     planner_mode = "code"
+    reply_streamed = False
 
-    if not outstanding:
+    if extraction is None:
+        reply, complete, planner_mode = UNDERSTANDING_UNAVAILABLE, False, "fallback"
+        yield TurnEvent(type="token", text=reply)
+        reply_streamed = True
+    elif question:
+        complete = not outstanding or asked_so_far >= MAX_ASSISTANT_QUESTIONS
+        asks_field = None if complete else outstanding[0]
+        reply, planner_mode = await _answer_patient_question(
+            db, session, case, extraction, asks_field, outstanding, complete
+        )
+        yield TurnEvent(type="token", text=reply)
+        reply_streamed = True
+    elif not outstanding:
         reply, complete = CLOSING, True
     elif asked_so_far >= MAX_ASSISTANT_QUESTIONS:
         reply, complete = CLOSING_WITH_GAPS, True
-    elif off_topic:
-        asks_field, complete = outstanding[0], False
-        planner_mode = "redirect"
-        reply = f"I can only help with your intake right now. {question_planner.fallback_question(PlannerContext(field=asks_field, outstanding=outstanding, transcript=[]))}"
-        yield TurnEvent(type="token", text=reply)
     else:
         asks_field, complete = outstanding[0], False
         ctx = PlannerContext(
@@ -387,26 +524,22 @@ async def process_turn(db: Session, session: IntakeSession, case: PatientCase, c
             on_file=_on_file(db, case.id),
             patient_name=case_repo.demographics(db, case.id).get("name"),
         )
-        # The planner runs as a task so its tokens can be forwarded while it is still writing.
-        tokens: asyncio.Queue[str | None] = asyncio.Queue()
-        task = asyncio.create_task(question_planner.plan(ctx, tokens.put_nowait))
-        task.add_done_callback(lambda _: tokens.put_nowait(None))
         try:
-            while (chunk := await tokens.get()) is not None:
-                yield TurnEvent(type="token", text=chunk)
-            reply = await task
-            planner_mode = "llm"
+            async for kind, text in _streamed(lambda emit: question_planner.plan(ctx, emit)):
+                if kind == "token":
+                    reply_streamed = True
+                    yield TurnEvent(type="token", text=text)
+                else:
+                    reply, planner_mode = text, "llm"
         except AgentUnavailable as exc:
             # Whatever was streamed is replaced client-side by the `done` frame.
             logger.warning("Planner unavailable (%s)", type(exc).__name__)
             reply = question_planner.fallback_question(ctx)
             planner_mode = "fallback"
             yield TurnEvent(type="token", text=reply)
-        except BaseException:
-            task.cancel()
-            raise
+            reply_streamed = True
 
-    if complete:
+    if complete and not reply_streamed:
         yield TurnEvent(type="token", text=reply)
 
     db.add(IntakeMessage(session_id=session.id, role="assistant", content=reply, turn_index=turn_index + 1, asks_field=asks_field))
@@ -415,7 +548,14 @@ async def process_turn(db: Session, session: IntakeSession, case: PatientCase, c
         {
             "turn_index": turn_index,
             "duration_ms": round((time.perf_counter() - started) * 1000, 1),
-            "extraction": extraction,
+            "extraction": {
+                "facts": turn.facts_added,
+                "entries": turn.entries_added,
+                "mode": "llm" if extraction else "fallback",
+                "response": extraction.current_question_response if extraction else None,
+                "has_question": bool(question),
+                "question_scope": extraction.question_scope if extraction else None,
+            },
             "planner": planner_mode,
             "asks_field": asks_field,
             "intake_complete": complete,

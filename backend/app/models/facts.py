@@ -20,6 +20,9 @@ class PatientFact(Base):
     )
     kind: Mapped[str] = mapped_column(String(64), index=True)
     value: Mapped[str] = mapped_column(Text)
+    # The clinic term this wording means, so a paraphrase still reaches the rule written for
+    # it. A label beside the patient's words, never a replacement for them.
+    normalized: Mapped[str] = mapped_column(String(255), default="")
     source: Mapped[str] = mapped_column(String(16), default=SOURCE_PATIENT)
     source_turn: Mapped[int] = mapped_column(Integer, default=NO_TURN)
     confidence: Mapped[float] = mapped_column(Float, default=1.0)

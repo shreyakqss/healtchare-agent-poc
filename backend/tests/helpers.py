@@ -1,9 +1,8 @@
 """Shared fixtures for the integration tests.
 
 These run against the OpenEMR configured in `backend/.env`: the identity form registers a
-real patient, and every clinician action is verified against a real OpenEMR login. Only the
-two intake agents are stubbed - the point of these tests is the turn-loop mechanics, and the
-model behind them is quota-limited.
+real patient, and every clinician action is verified against a real OpenEMR login. The intake
+agents are stubbed because these tests cover turn-loop mechanics, not model quality.
 """
 
 from __future__ import annotations
@@ -12,7 +11,7 @@ import time
 from typing import Any
 
 import app.services.intake_service as intake_service_module
-from app.agents.schemas import ExtractionResult
+from app.agents.schemas import ExtractedFact, ExtractionResult, PatientAnswerReview
 from app.core.config import settings
 
 BASE = "/api/v1/healthcare"
@@ -43,10 +42,23 @@ def identity_form(**overrides: Any) -> dict[str, Any]:
     return {**IDENTITY_FORM, **overrides}
 
 
-async def fake_extract(message: str) -> ExtractionResult:
-    """Never produces a fact; the opening-statement reason_for_visit auto-insert in
-    intake_service still fires because that logic lives outside the extractor."""
-    return ExtractionResult(facts=[], allergies_medications=[])
+async def fake_extract(
+    message: str,
+    asked_field: str | None,
+    asked_question: str | None,
+    transcript: list[dict[str, str]],
+    vocabulary: list[str],
+) -> ExtractionResult:
+    text = message.strip().lower()
+    if text.endswith("?"):
+        return ExtractionResult(
+            current_question_response="not_answered",
+            patient_question=message,
+            question_scope="out_of_scope",
+        )
+    response = "denied" if text in {"no", "none"} else "answered" if asked_field else "not_answered"
+    facts = [ExtractedFact(kind="reason_for_visit", value=message)] if asked_field is None else []
+    return ExtractionResult(facts=facts, current_question_response=response)
 
 
 async def fake_plan(ctx, on_token=None) -> str:
@@ -55,9 +67,19 @@ async def fake_plan(ctx, on_token=None) -> str:
     return "(mock question)"
 
 
+async def fake_answer(question, reference, transcript, asks_for) -> str:
+    return "(mock answer)"
+
+
+async def fake_answer_review(scope: str, question: str, reference: str, answer: str) -> PatientAnswerReview:
+    return PatientAnswerReview(decision="allow")
+
+
 def patch_intake_agents(monkeypatch) -> None:
     monkeypatch.setattr(intake_service_module.fact_extractor, "extract", fake_extract)
     monkeypatch.setattr(intake_service_module.question_planner, "plan", fake_plan)
+    monkeypatch.setattr(intake_service_module.patient_assistant, "answer", fake_answer)
+    monkeypatch.setattr(intake_service_module.answer_guard, "check", fake_answer_review)
 
 
 class RejectingHMS:

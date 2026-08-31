@@ -13,6 +13,7 @@ from app.agents import AgentUnavailable
 from app.agents.discrepancy_checker import check as check_discrepancies_llm
 from app.agents.schemas import DiscrepancyResult
 from app.agents.summary_writer import SummaryInputs, write_prescreening
+from app.core.tracing import case_trace
 from app.db import db_session
 from app.domain import routing as routing_rules
 from app.domain import triage_engine
@@ -286,9 +287,10 @@ async def run_prescreen(
         session = case_repo.session_for(db, case)
         lifecycle.transition(db, session, CaseStatus.ANALYZING, "system:prescreen", case_id)
     try:
-        result = await prescreen_workflow.arun(
-            input={"case_id": str(case_id), "job_id": str(job_id) if job_id else None}
-        )
+        with case_trace("workflow.prescreen", case_id):
+            result = await prescreen_workflow.arun(
+                input={"case_id": str(case_id), "job_id": str(job_id) if job_id else None}
+            )
         if result.status != RunStatus.completed:
             raise RuntimeError(f"Workflow ended with status {result.status}: {result.content}")
     except Exception as exc:

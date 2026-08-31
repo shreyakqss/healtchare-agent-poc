@@ -6,6 +6,16 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+QuestionResponse = Literal["answered", "denied", "declined", "not_answered"]
+QuestionScope = Literal[
+    "personal_record",
+    "clinic",
+    "general_health",
+    "restricted_healthcare",
+    "urgent_safety",
+    "out_of_scope",
+]
+
 FactKind = Literal[
     "reason_for_visit", "symptom", "duration", "history", "contact_preference", "name", "age", "gender",
 ]
@@ -14,6 +24,10 @@ FactKind = Literal[
 class ExtractedFact(BaseModel):
     kind: FactKind
     value: str = Field(description="The patient's own words for this one item, under 15 words.")
+    normalized: str = Field(
+        default="",
+        description="The clinic term this wording means, copied exactly from the list supplied; empty when none fits.",
+    )
     confidence: float = Field(default=1.0)
 
 
@@ -26,6 +40,27 @@ class ExtractedEntry(BaseModel):
 class ExtractionResult(BaseModel):
     facts: list[ExtractedFact] = Field(default_factory=list)
     allergies_medications: list[ExtractedEntry] = Field(default_factory=list)
+    current_question_response: QuestionResponse = Field(
+        description="Whether the message answers the clinic's current intake question.",
+    )
+    patient_question: str | None = Field(
+        default=None,
+        description="A self-contained question or request for the assistant, even when the message also answers intake.",
+    )
+    question_scope: QuestionScope | None = Field(
+        default=None,
+        description="The capability needed to answer patient_question; null when there is no patient question.",
+    )
+    health_topic: str | None = Field(
+        default=None,
+        description="A short identifier-free lookup topic for general_health; null for every other scope.",
+    )
+
+
+class PatientAnswerReview(BaseModel):
+    decision: Literal["allow", "block"] = Field(
+        description="Whether the answer is grounded and stays within the patient assistant's safety boundary."
+    )
 
 
 class PrescreeningSummary(BaseModel):
