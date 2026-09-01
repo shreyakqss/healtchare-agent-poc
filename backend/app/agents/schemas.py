@@ -91,6 +91,12 @@ class DiscrepancyResult(BaseModel):
     discrepancies: list[Discrepancy] = Field(default_factory=list)
 
 
+class MedicationCandidatesResult(BaseModel):
+    medications: list[str] = Field(
+        default_factory=list, description="Medication names found in the document, patient's own product/brand names where given."
+    )
+
+
 class VisitSummary(BaseModel):
     visit_reason: str
     consultation_overview: str

@@ -537,7 +537,7 @@ class FhirHMS:
             return
         latest = notes[-1]
         reason = next(
-            (f["value"] for f in payload.get("facts", []) if f.get("kind") == "reason_for_visit"),
+            (f["value"] for f in reversed(payload.get("facts", [])) if f.get("kind") == "reason_for_visit"),
             "CareFlow intake",
         )
         plan = "\n".join(

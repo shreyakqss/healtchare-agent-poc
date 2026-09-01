@@ -11,12 +11,13 @@ const FALLBACK_GREETING =
 
 export default async function PatientPage() {
   const user = await requireRole("patient", "/patient");
-  const [config, greeting, visits, activeIntake, linkedRecord] = await Promise.all([
+  const [config, greeting, visits, activeIntake, linkedRecord, pastAttachments] = await Promise.all([
     serverApi.patient.config(),
     serverApi.patient.greeting().catch(() => ({ text: FALLBACK_GREETING })),
     serverApi.patient.visits(),
     serverApi.patient.activeIntake(),
     serverApi.patient.linkedRecord().catch(() => null),
+    serverApi.patient.pastAttachments().catch(() => []),
   ]);
   const clinicName = config?.hospital?.name ?? "Clinic";
   // Self-registered accounts get a placeholder name/email just to satisfy Keycloak's
@@ -33,6 +34,7 @@ export default async function PatientPage() {
         initialGreeting={greeting.text}
         initialVisits={visits}
         initialActiveIntake={activeIntake}
+        initialPastAttachments={pastAttachments}
         prefillName={linkedRecord?.name ?? (isPlaceholder ? null : user.display_name)}
         prefillEmail={linkedRecord?.email ?? (isPlaceholder ? null : user.email)}
         linkedRecord={linkedRecord}

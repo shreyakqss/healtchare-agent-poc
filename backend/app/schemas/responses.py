@@ -14,8 +14,10 @@ class SessionResponse(BaseModel):
     demographics: dict[str, Any] = Field(default_factory=dict)
     hms_linked: bool = False
     missing_fields: list[str] = Field(default_factory=list)
+    captured_fields: dict[str, list[str]] = Field(default_factory=dict)
     required_attachment_kinds: list[str] = Field(default_factory=list)
     pending_attachment_kinds: list[str] = Field(default_factory=list)
+    past_attachments: list[AttachmentResponse] = Field(default_factory=list)
 
 
 class TranscriptMessage(BaseModel):
@@ -33,6 +35,7 @@ class MessageResponse(BaseModel):
     missing_fields: list[str]
     intake_complete: bool
     transcript: list[TranscriptMessage]
+    captured_fields: dict[str, list[str]] = Field(default_factory=dict)
 
 
 class AttachmentSkipResponse(BaseModel):
@@ -69,6 +72,7 @@ class EntryResponse(BaseModel):
 
 class AttachmentResponse(BaseModel):
     id: str
+    case_id: str
     kind: str
     filename: str
     mime_type: str

@@ -15,17 +15,18 @@ import { Composer } from "@/features/intake/composer";
 import { DocumentPrompt } from "@/features/intake/document-prompt";
 import { MessageList } from "@/features/intake/message-list";
 import { useIntakeSession } from "@/features/intake/use-intake-session";
-import type { ActiveIntake, LinkedPatientRecord, PatientVisitItem } from "@/lib/api";
+import type { ActiveIntake, Attachment, LinkedPatientRecord, PatientVisitItem } from "@/lib/api";
 
 type Tab = "chat" | "documents" | "visits";
 
 export function PatientPortal({
   initialRequiredFields, initialRequiredAttachmentKinds, initialApiOnline, initialLlmConfigured, initialGreeting,
-  initialVisits, initialActiveIntake, prefillName, prefillEmail, linkedRecord,
+  initialVisits, initialActiveIntake, initialPastAttachments, prefillName, prefillEmail, linkedRecord,
 }: {
   initialRequiredFields: string[]; initialRequiredAttachmentKinds: string[];
   initialApiOnline: boolean; initialLlmConfigured: boolean; initialGreeting: string; initialVisits: PatientVisitItem[];
   initialActiveIntake: ActiveIntake | null;
+  initialPastAttachments: Attachment[];
   prefillName?: string | null;
   prefillEmail?: string | null;
   linkedRecord?: LinkedPatientRecord | null;
@@ -34,7 +35,7 @@ export function PatientPortal({
   const [checking, setChecking] = useState(false);
   const [documentsDismissed, setDocumentsDismissed] = useState(false);
   const { state, submitIdentity, send, retry, refreshCase, clearError, uploadDocument, skipDocument } =
-    useIntakeSession(initialGreeting, initialActiveIntake);
+    useIntakeSession(initialGreeting, initialActiveIntake, initialPastAttachments);
   // A required kind is resolved by a file or by a logged skip - same rule the backend applies.
   const uploadedKinds = new Set(state.attachments.map((a) => a.kind));
   const pendingKinds = initialRequiredAttachmentKinds.filter(
@@ -178,6 +179,7 @@ export function PatientPortal({
             </header>
             <DocumentsPanel
               attachments={state.attachments}
+              pastAttachments={state.pastAttachments}
               skippedKinds={state.skippedKinds}
             />
           </div>
@@ -200,8 +202,8 @@ export function PatientPortal({
 
         <aside className="lg:sticky lg:top-20 lg:self-start" aria-label="Intake progress">
           <div className="rounded-lg border border-line bg-surface p-5 shadow-card">
-            <IntakeProgress requiredFields={initialRequiredFields} missingFields={state.missingFields} complete={state.complete}
-              fallbackMode={initialApiOnline && !initialLlmConfigured} />
+            <IntakeProgress requiredFields={initialRequiredFields} missingFields={state.missingFields} capturedFields={state.capturedFields}
+              complete={state.complete} fallbackMode={initialApiOnline && !initialLlmConfigured} />
           </div>
         </aside>
       </div>

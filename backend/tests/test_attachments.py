@@ -127,6 +127,26 @@ def test_upload_pushes_to_linked_hms_record(client):
     assert any(e["action"] == "attachment.pushed_to_hms" for e in audit_events)
 
 
+def test_prescription_upload_extracts_medication_candidates_without_creating_entries(client, monkeypatch):
+    """Candidates are surfaced for the patient to confirm, never written as AllergyMedication
+    rows directly - see CLAUDE.md: uploaded document text may ground an answer, never become a fact."""
+    from app.agents.schemas import MedicationCandidatesResult
+
+    async def fake_extract_medications(text: str) -> MedicationCandidatesResult:
+        return MedicationCandidatesResult(medications=["Metformin", "Atorvastatin"])
+
+    monkeypatch.setattr("app.services.attachment_service.extract_medications", fake_extract_medications)
+
+    _, cid = new_identified_session(client)
+    _upload(client, cid, "prescription")
+
+    with db_session() as db:
+        row = case_repo.attachments(db, uuid.UUID(cid))[0]
+        assert row.extracted_medications == ["Metformin", "Atorvastatin"]
+        assert case_repo.entries(db, uuid.UUID(cid)) == []
+        assert case_repo.pending_medication_candidates(db, uuid.UUID(cid)) == ["Metformin", "Atorvastatin"]
+
+
 def test_document_resolved_after_chat_closed_fires_prescreen(client, monkeypatch):
     require_attachments(monkeypatch, *REQUIRED_KINDS)
     """The chat can close while a required document is still pending; resolving it later

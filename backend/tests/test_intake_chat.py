@@ -330,6 +330,36 @@ def test_unsafe_generated_answer_is_blocked_before_delivery(client, monkeypatch)
     assert result["asks_field"] == "symptom"
 
 
+def test_reason_for_visit_correction_updates_captured_fields_but_keeps_both_rows(client, monkeypatch):
+    """A later, distinct statement corrects what is shown to the patient - PatientFact rows
+    stay append-only (never rewritten); only the "current" value shown changes."""
+    async def understand(message, asked_field, asked_question, transcript, vocabulary) -> ExtractionResult:
+        if asked_field is None:
+            return ExtractionResult(
+                facts=[ExtractedFact(kind="reason_for_visit", value="knee pain")],
+                current_question_response="not_answered",
+            )
+        if "actually" in message.lower():
+            return ExtractionResult(
+                facts=[ExtractedFact(kind="reason_for_visit", value="shoulder pain")],
+                current_question_response="not_answered",
+            )
+        return ExtractionResult(current_question_response="denied")
+
+    monkeypatch.setattr(intake_service_module.fact_extractor, "extract", understand)
+    sid, cid = new_identified_session(client)
+
+    r0 = client.post(f"{BASE}/intake-sessions/{sid}/messages", json={"content": "knee pain"}).json()
+    assert r0["captured_fields"]["reason_for_visit"] == ["knee pain"]
+
+    r1 = client.post(f"{BASE}/intake-sessions/{sid}/messages", json={"content": "actually it's my shoulder"}).json()
+    assert r1["captured_fields"]["reason_for_visit"] == ["shoulder pain"]
+
+    detail = client.get(f"{BASE}/cases/{cid}").json()
+    reasons = [f["value"] for f in detail["facts"] if f["kind"] == "reason_for_visit"]
+    assert reasons == ["knee pain", "shoulder pain"]
+
+
 def test_only_a_configured_clinic_term_is_stored_as_normalized():
     vocabulary = ["chest pain", "shortness of breath"]
     assert intake_service_module._clinic_term("Shortness Of Breath ", vocabulary) == "shortness of breath"

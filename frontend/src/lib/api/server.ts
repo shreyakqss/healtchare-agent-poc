@@ -3,6 +3,7 @@ import "server-only";
 import { cookies } from "next/headers";
 import { parseError } from "@/lib/api/client";
 import type {
+  Attachment,
   AuditEvent,
   ActiveIntake,
   CaseDetail,
@@ -42,6 +43,7 @@ export const serverApi = {
     greeting: () => serverRequest<{ text: string }>("/intake-sessions/greeting"),
     visits: () => serverRequest<PatientVisitItem[]>("/cases/my-visits"),
     activeIntake: () => serverRequest<ActiveIntake | null>("/intake-sessions/active"),
+    pastAttachments: () => serverRequest<Attachment[]>("/intake-sessions/past-attachments"),
     linkedRecord: () => serverRequest<LinkedPatientRecord | null>("/intake-sessions/linked-record"),
     case: (id: string) => serverRequest<PatientCase>(`/cases/${encodeURIComponent(id)}/patient-view`),
   },

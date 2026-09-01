@@ -1,6 +1,6 @@
 import uuid
 
-from sqlalchemy import Float, ForeignKey, Integer, String, Text, Uuid
+from sqlalchemy import Boolean, Float, ForeignKey, Integer, JSON, String, Text, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -58,6 +58,13 @@ class MedicalAttachment(Base):
     size_bytes: Mapped[int] = mapped_column(Integer)
     storage_uri: Mapped[str] = mapped_column(Text)
     extracted_text: Mapped[str | None] = mapped_column(Text)  # None for images
+    # Medication names found on a prescription document by medication_extractor.py. Candidates
+    # only - never written as AllergyMedication rows directly; they are surfaced as a confirm
+    # question, and only the patient's chat reply creates real entries.
+    extracted_medications: Mapped[list[str] | None] = mapped_column(JSON)
+    # Set once this attachment's candidates have been put to the patient as a confirm question,
+    # so a second upload's new candidates still get asked even after an earlier one was answered.
+    medication_candidates_confirmed: Mapped[bool] = mapped_column(Boolean, default=False)
     uploaded_by: Mapped[str] = mapped_column(String(64), default="patient")
     # Display/audit field only - set when the raw file is best-effort forwarded to the
     # linked HMS record via push_document(). Never consumed by triage_engine.

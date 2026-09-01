@@ -39,8 +39,10 @@ export interface SessionResponse {
   demographics: Record<string, string>;
   hms_linked: boolean;
   missing_fields: string[];
+  captured_fields: Record<string, string[]>;
   required_attachment_kinds: string[];
   pending_attachment_kinds: string[];
+  past_attachments: Attachment[];
 }
 
 export interface TranscriptMessage { role: "patient" | "assistant"; content: string; turn_index: number }
@@ -69,6 +71,7 @@ export interface MessageResponse {
   missing_fields: string[];
   intake_complete: boolean;
   transcript: TranscriptMessage[];
+  captured_fields: Record<string, string[]>;
 }
 
 export type TurnEvent =
@@ -96,7 +99,7 @@ export interface FinalizeRequest { finalizer_username: string; finalizer_passwor
 export interface Fact { id: string; kind: string; value: string; source: "patient" | "hms"; source_turn: number; confidence: number }
 export interface Entry { id: string; kind: "allergy" | "medication"; name: string; reaction_or_dose: string | null; source: "patient" | "hms"; source_turn: number }
 export interface Attachment {
-  id: string; kind: string; filename: string; mime_type: string; size_bytes: number;
+  id: string; case_id: string; kind: string; filename: string; mime_type: string; size_bytes: number;
   has_text: boolean; extracted_text: string | null; uploaded_by: string; created_at: string;
 }
 export interface TriageRuleRef { code: string; priority: Priority; action: string; explanation: string; version: string }

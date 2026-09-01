@@ -185,7 +185,7 @@ async def navigate_care(step_input: StepInput) -> StepOutput:
 
 def _plain_sections(facts, entries) -> dict:
     return {
-        "chief_complaint": next((f.value for f in facts if f.kind == "reason_for_visit"), "Not recorded"),
+        "chief_complaint": next((f.value for f in reversed(facts) if f.kind == "reason_for_visit"), "Not recorded"),
         "reported_symptoms": [f.value for f in facts if f.kind == "symptom"],
         "relevant_history": [f.value for f in facts if f.kind in {"history", "condition"}],
         "medications": [e.name for e in entries if e.kind == "medication"],
@@ -213,8 +213,9 @@ async def write_summary(step_input: StepInput) -> StepOutput:
                 "allergies": hms_patient.allergies,
                 "last_visit": hms_patient.last_visit,
             }
+        captured = case_repo.captured_fields(db, case_id)
         inputs = SummaryInputs(
-            facts=[(f.kind, f.value) for f in facts],
+            facts=[(kind, v) for kind, values in captured.items() if kind not in ("medication", "allergy") for v in values],
             entries=[(e.kind, e.name, e.reaction_or_dose or "") for e in entries],
             documents=[(d["filename"], d["excerpt"]) for d in records.get("documents", [])],
             images=[i["filename"] for i in records.get("images", [])],

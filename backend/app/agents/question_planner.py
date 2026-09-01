@@ -32,6 +32,7 @@ class PlannerContext:
     transcript: list[dict[str, str]]
     on_file: list[str] = field(default_factory=list)
     patient_name: str | None = None
+    medication_candidates: list[str] = field(default_factory=list)
 
 
 @lru_cache(maxsize=1)
@@ -44,6 +45,11 @@ def _agent():
 
 
 def fallback_question(ctx: PlannerContext) -> str:
+    if ctx.field == "medication" and ctx.medication_candidates:
+        return (
+            f"Your uploaded prescription lists: {', '.join(ctx.medication_candidates)}. "
+            "Are you currently taking these? Anything else?"
+        )
     return f"Could you tell me {FIELD_PROMPTS.get(ctx.field, ctx.field)}?"
 
 
@@ -61,6 +67,11 @@ def _prompt(ctx: PlannerContext) -> str:
     ]
     if ctx.patient_name:
         lines.append(f"The patient's name is {ctx.patient_name}; you may use it once, naturally.")
+    if ctx.field == "medication" and ctx.medication_candidates:
+        lines.append(
+            "Their uploaded prescription lists: " + ", ".join(ctx.medication_candidates)
+            + ". Ask whether they are currently taking these, and whether they take anything else."
+        )
     return "\n\n".join(lines)
 
 

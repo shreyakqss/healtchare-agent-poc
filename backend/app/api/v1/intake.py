@@ -13,11 +13,18 @@ from fastapi.sse import EventSourceResponse
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
-from app.api.v1.serializers import active_intake_out, session_out
+from app.api.v1.serializers import active_intake_out, attachment_out, session_out
 from app.core.errors import DomainError, Unprocessable
 from app.schemas.requests import ConsentRequest, IdentityFormRequest, MessageRequest, StartSessionRequest
 from app.integrations.hms import get_hms
-from app.schemas.responses import ActiveIntakeResponse, LinkedPatientRecord, MessageResponse, SessionResponse, TurnEvent
+from app.schemas.responses import (
+    ActiveIntakeResponse,
+    AttachmentResponse,
+    LinkedPatientRecord,
+    MessageResponse,
+    SessionResponse,
+    TurnEvent,
+)
 from app.security import CurrentPrincipal, case_for_principal, rate_limits, require_roles
 from app.services import case_repo, intake_service, prescreen_trigger
 
@@ -38,14 +45,24 @@ def greeting(_: PatientPrincipal):
     return {"text": intake_service.GREETING}
 
 
+@router.get("/past-attachments", response_model=list[AttachmentResponse])
+def past_attachments(principal: PatientPrincipal, db: Session = Depends(get_db)):
+    """Documents from this account's past visits, fetched eagerly on page load - independent
+    of whether this visit even has a session/case yet (identity form not submitted)."""
+    return [attachment_out(a) for a in case_repo.attachments_for_owner(db, principal.user_id)]
+
+
 @router.get("/linked-record", response_model=LinkedPatientRecord | None)
-def linked_record(principal: PatientPrincipal):
+def linked_record(principal: PatientPrincipal, db: Session = Depends(get_db)):
     """Prefill for the identity form when this account is linked to an existing OpenEMR
-    patient. Read-only lookup by the account's own `hms_patient_id` - never a name/DOB
-    search, so it can only ever return this account's own record."""
-    if not principal.hms_patient_id:
+    patient - either by the Keycloak `hms_patient_id` claim, or (self-registered accounts,
+    which carry no such claim) by the account's own most recent prior registration. Read-only
+    lookup by MRN either way - never a name/DOB search, so it can only ever return this
+    account's own record."""
+    mrn = principal.hms_patient_id or case_repo.last_linked_hms_patient_id(db, principal.user_id)
+    if not mrn:
         return None
-    patient = get_hms().get_patient(principal.hms_patient_id)
+    patient = get_hms().get_patient(mrn)
     if patient is None:
         return None
     return LinkedPatientRecord(

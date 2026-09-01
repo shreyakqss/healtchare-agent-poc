@@ -7,9 +7,12 @@ case-level behaviour around them. Nothing here reaches `triage_engine.evaluate()
 from __future__ import annotations
 
 import asyncio
+import logging
 
 from sqlalchemy.orm import Session
 
+from app.agents import AgentUnavailable
+from app.agents.medication_extractor import extract as extract_medications
 from app.core.errors import Conflict, Forbidden, Unprocessable
 from app.domain.lifecycle import TERMINAL
 from app.integrations.hms import get_hms
@@ -17,6 +20,8 @@ from app.models import ClinicalDiscrepancy, MedicalAttachment, PatientCase
 from app.services import attachments as storage
 from app.services import audit, case_repo
 from app.services.hms import push_document_with_retry
+
+logger = logging.getLogger(__name__)
 
 ACTOR_ATTACHMENTS = "system:attachments"
 ACTOR_HMS_SYNC = "system:hms_sync"
@@ -46,6 +51,17 @@ async def upload(db: Session, case: PatientCase, filename: str, content: bytes, 
         "text_extracted": bool(stored.extracted_text), "interpreted": False,
     })
     db.flush()  # row.id is referenced by the records below
+
+    if kind == "prescription" and stored.extracted_text:
+        try:
+            candidates = (await extract_medications(stored.extracted_text)).medications
+        except AgentUnavailable as exc:
+            logger.warning("Medication extraction unavailable (%s)", type(exc).__name__)
+            candidates = []
+        if candidates:
+            row.extracted_medications = candidates
+            audit.record(db, case.id, ACTOR_ATTACHMENTS, "attachment.medications_extracted",
+                         {"attachment_id": str(row.id), "count": len(candidates)})
 
     if storage.kind_mismatch_suspected(kind, stored.extracted_text):
         # Reuses ClinicalDiscrepancy (source_kind="document") rather than a new table.

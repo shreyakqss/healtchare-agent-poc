@@ -45,7 +45,7 @@ async def write_summary(step_input: StepInput) -> StepOutput:
         doctor = hospital_config.doctor_by_id(latest.doctor_id)
         display_doctor = latest.doctor_name or (doctor["name"] if doctor else latest.doctor_id)
         inputs = VisitInputs(
-            chief_complaint=next((f.value for f in facts if f.kind == "reason_for_visit"), "Not recorded"),
+            chief_complaint=next((f.value for f in reversed(facts) if f.kind == "reason_for_visit"), "Not recorded"),
             department=routing.department_name if routing else None,
             doctor=display_doctor,
             consultation_mode=latest.consultation_mode,

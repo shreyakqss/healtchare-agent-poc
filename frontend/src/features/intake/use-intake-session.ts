@@ -18,6 +18,7 @@ export interface IntakeState {
   identityComplete: boolean; // step 1 (name/age/gender/contact) done
   messages: ChatMessage[]; // step 2, the clinical chat
   missingFields: string[] | null; // full (identity + clinical); null until the session exists
+  capturedFields: Record<string, string[]>; // current value(s) per field kind, for review/correction
   complete: boolean; // step 2 closed itself (missing_fields empty or the question backstop hit)
   submittingIdentity: boolean;
   sending: boolean;
@@ -27,13 +28,23 @@ export interface IntakeState {
   // Documents added during this visit. Held here rather than in the panel so the chat
   // (where uploading happens) and the Documents tab (where it is listed) never disagree.
   attachments: Attachment[];
+  // Documents from this account's other cases (past visits) - read-only reference.
+  pastAttachments: Attachment[];
   skippedKinds: Record<string, string | null>; // kind -> reason given, if any
   uploading: boolean;
 }
 
 let nextId = 1;
 
-export function useIntakeSession(greeting: string, initialActive: ActiveIntake | null) {
+// A 401 mid-conversation means the CareFlow session itself expired (not a chat/upload
+// failure) - send the patient to sign in again instead of showing an inline error they
+// can't act on.
+function redirectToSignIn(): void {
+  const returnTo = window.location.pathname + window.location.search;
+  window.location.href = `/api/auth/login?return_to=${encodeURIComponent(returnTo)}`;
+}
+
+export function useIntakeSession(greeting: string, initialActive: ActiveIntake | null, initialPastAttachments: Attachment[] = []) {
   const resumedMessages: ChatMessage[] = initialActive?.identity_complete
     ? [
         { id: nextId++, role: "assistant", content: greeting },
@@ -50,6 +61,7 @@ export function useIntakeSession(greeting: string, initialActive: ActiveIntake |
     identityComplete: initialActive?.identity_complete ?? false,
     messages: resumedMessages,
     missingFields: initialActive?.missing_fields ?? null,
+    capturedFields: initialActive?.captured_fields ?? {},
     complete: initialActive?.intake_complete ?? false,
     submittingIdentity: false,
     sending: false,
@@ -57,6 +69,7 @@ export function useIntakeSession(greeting: string, initialActive: ActiveIntake |
     error: null,
     lastCase: null,
     attachments: initialActive?.attachments ?? [],
+    pastAttachments: initialActive?.past_attachments ?? initialPastAttachments,
     skippedKinds: Object.fromEntries((initialActive?.skipped_attachment_kinds ?? []).map((kind) => [kind, null])),
     uploading: false,
   });
@@ -86,7 +99,10 @@ export function useIntakeSession(greeting: string, initialActive: ActiveIntake |
     const consented = await intakeApi.consent(started.session_id, true);
     const ref = { sessionId: consented.session_id, caseId: consented.case_id, consented: true };
     sessionRef.current = ref;
-    patch({ sessionId: ref.sessionId, caseId: ref.caseId, missingFields: consented.missing_fields });
+    patch({
+      sessionId: ref.sessionId, caseId: ref.caseId, missingFields: consented.missing_fields,
+      capturedFields: consented.captured_fields, pastAttachments: consented.past_attachments,
+    });
     return ref;
   }, [patch]);
 
@@ -102,9 +118,11 @@ export function useIntakeSession(greeting: string, initialActive: ActiveIntake |
           submittingIdentity: false,
           identityComplete: true,
           missingFields: result.missing_fields,
+          capturedFields: result.captured_fields,
           messages: [{ id: nextId++, role: "assistant", content: greeting }],
         });
       } catch (err) {
+        if (err instanceof ApiError && err.status === 401) return redirectToSignIn();
         const detail = err instanceof ApiError ? err.message : "Something went wrong. Please try again.";
         patch({ submittingIdentity: false, error: detail });
       }
@@ -144,6 +162,7 @@ export function useIntakeSession(greeting: string, initialActive: ActiveIntake |
               sending: false,
               complete: r.intake_complete,
               missingFields: r.missing_fields,
+              capturedFields: r.captured_fields,
               messages: s.messages.map((m) => (m.id === assistantMsg.id ? { ...m, content: r.reply, streaming: false } : m)),
             }));
             if (r.intake_complete) {
@@ -157,6 +176,7 @@ export function useIntakeSession(greeting: string, initialActive: ActiveIntake |
         }
         if (!finished) throw new Error("The assistant did not finish its reply.");
       } catch (err) {
+        if (err instanceof ApiError && err.status === 401) return redirectToSignIn();
         const detail = err instanceof Error ? err.message : "Something went wrong.";
         setState((s) => ({
           ...s,
@@ -190,6 +210,10 @@ export function useIntakeSession(greeting: string, initialActive: ActiveIntake |
         }));
         return saved;
       } catch (err) {
+        if (err instanceof ApiError && err.status === 401) {
+          redirectToSignIn();
+          return null;
+        }
         const detail = err instanceof ApiError ? err.message : "Upload failed. Please try again.";
         patch({ uploading: false, error: detail });
         return null;
@@ -207,6 +231,7 @@ export function useIntakeSession(greeting: string, initialActive: ActiveIntake |
         await casesApi.skipAttachment(caseId, kind, reason?.trim() || undefined);
         setState((s) => ({ ...s, uploading: false, skippedKinds: { ...s.skippedKinds, [kind]: reason?.trim() || null } }));
       } catch (err) {
+        if (err instanceof ApiError && err.status === 401) return redirectToSignIn();
         const detail = err instanceof ApiError ? err.message : "Could not record the skip. Please try again.";
         patch({ uploading: false, error: detail });
       }

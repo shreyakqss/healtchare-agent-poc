@@ -53,14 +53,16 @@ def session_out(db: Session, session: IntakeSession, case: PatientCase) -> Sessi
         session_id=str(session.id), case_id=str(case.id), status=session.status,
         consent_status=session.consent_status, demographics=case_repo.demographics(db, case.id),
         hms_linked=bool(case.hms_patient_id), missing_fields=case_repo.missing_fields(db, case.id),
+        captured_fields=case_repo.captured_fields(db, case.id),
         required_attachment_kinds=hospital_config.required_attachment_kinds(),
         pending_attachment_kinds=case_repo.pending_attachment_kinds(db, case.id),
+        past_attachments=[attachment_out(a) for a in case_repo.past_attachments(db, case.id)],
     )
 
 
 def attachment_out(a: MedicalAttachment) -> AttachmentResponse:
     return AttachmentResponse(
-        id=str(a.id), kind=a.kind, filename=a.filename, mime_type=a.mime_type, size_bytes=a.size_bytes,
+        id=str(a.id), case_id=str(a.case_id), kind=a.kind, filename=a.filename, mime_type=a.mime_type, size_bytes=a.size_bytes,
         has_text=bool(a.extracted_text), extracted_text=a.extracted_text, uploaded_by=a.uploaded_by, created_at=a.created_at,
     )
 
@@ -328,7 +330,7 @@ def case_list(db: Session, cases: list[PatientCase] | None = None) -> list[CaseL
         review = reviews.get(case.id)
         facts = facts_by_case[case.id]
         entries = entries_by_case[case.id]
-        reason = next((fact.value for fact in facts if fact.kind == "reason_for_visit"), None)
+        reason = next((fact.value for fact in reversed(facts) if fact.kind == "reason_for_visit"), None)
         items.append(CaseListItem(
             case_id=str(case.id), session_id=str(case.session_id), status=session.status if session else "UNKNOWN",
             priority=case_triage.priority if case_triage else None,

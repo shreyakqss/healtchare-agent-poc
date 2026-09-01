@@ -4,6 +4,8 @@
   "displayName": "CareFlow",
   "registrationAllowed": false,
   "resetPasswordAllowed": true,
+  "ssoSessionIdleTimeout": 7200,
+  "ssoSessionMaxLifespan": 28800,
   "components": {
     "org.keycloak.userprofile.UserProfileProvider": [
       {

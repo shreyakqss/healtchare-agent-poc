@@ -241,11 +241,15 @@ def submit_identity_form(db: Session, session: IntakeSession, case: PatientCase,
     turn_index = case_repo.next_turn_index(db, session.id)
     db.add(IntakeMessage(session_id=session.id, role="patient", content=_identity_transcript_text(payload), turn_index=turn_index))
 
+    contact_detail = payload.email if payload.contact_preference == "email" else payload.phone
+    contact_preference_value = (
+        f"{payload.contact_preference} ({contact_detail.strip()})" if contact_detail else payload.contact_preference
+    )
     for kind, value in (
         ("name", payload.name),
         ("age", str(age_from_birth_date(payload.birth_date, utcnow().date()))),
         ("gender", payload.gender),
-        ("contact_preference", payload.contact_preference),
+        ("contact_preference", contact_preference_value),
     ):
         value = value.strip()[:MAX_FACT_CHARS]
         if value:
@@ -344,17 +348,14 @@ async def _extract_and_store(
             facts.insert(0, ExtractedFact(
                 kind="reason_for_visit", value=symptom.value, normalized=symptom.normalized, confidence=symptom.confidence,
             ))
-    has_reason = any(k == "reason_for_visit" for k, _ in existing)
-
+    # reason_for_visit is not capped to one entry: a later, distinct statement is treated as a
+    # correction - PatientFact rows stay append-only, but callers show the latest one per kind
+    # (see case_repo.captured_fields), so a correction is what the patient and the record see.
     added = 0
     for fact in facts:
         value = fact.value.strip()[:MAX_FACT_CHARS]
         if not value or (fact.kind, value.lower()) in existing:
             continue
-        if fact.kind == "reason_for_visit":
-            if has_reason:
-                continue
-            has_reason = True
         db.add(PatientFact(
             case_id=case.id, kind=fact.kind, value=value, normalized=_clinic_term(fact.normalized, vocabulary),
             source_turn=turn_index, confidence=fact.confidence,
@@ -511,33 +512,47 @@ async def _process_turn(db: Session, session: IntakeSession, case: PatientCase, 
         )
         yield TurnEvent(type="token", text=reply)
         reply_streamed = True
-    elif not outstanding:
-        reply, complete = CLOSING, True
-    elif asked_so_far >= MAX_ASSISTANT_QUESTIONS:
-        reply, complete = CLOSING_WITH_GAPS, True
     else:
-        asks_field, complete = outstanding[0], False
-        ctx = PlannerContext(
-            field=asks_field,
-            outstanding=outstanding,
-            transcript=case_repo.transcript(db, session.id),
-            on_file=_on_file(db, case.id),
-            patient_name=case_repo.demographics(db, case.id).get("name"),
-        )
-        try:
-            async for kind, text in _streamed(lambda emit: question_planner.plan(ctx, emit)):
-                if kind == "token":
-                    reply_streamed = True
-                    yield TurnEvent(type="token", text=text)
-                else:
-                    reply, planner_mode = text, "llm"
-        except AgentUnavailable as exc:
-            # Whatever was streamed is replaced client-side by the `done` frame.
-            logger.warning("Planner unavailable (%s)", type(exc).__name__)
-            reply = question_planner.fallback_question(ctx)
-            planner_mode = "fallback"
-            yield TurnEvent(type="token", text=reply)
-            reply_streamed = True
+        # A pending prescription's candidates are asked about once, even for a hospital config
+        # that does not require the `medication` field and even after an earlier prescription's
+        # candidates were already answered - independent of the required-field loop below.
+        pending_meds = case_repo.pending_medication_candidates(db, case.id)
+        force_medication = bool(pending_meds) and "medication" not in outstanding
+        if not outstanding and not force_medication:
+            reply, complete = CLOSING, True
+        elif asked_so_far >= MAX_ASSISTANT_QUESTIONS:
+            reply, complete = CLOSING_WITH_GAPS, True
+        else:
+            asks_field = "medication" if force_medication else outstanding[0]
+            complete = False
+            if asks_field == "medication" and pending_meds:
+                # Mark every attachment's candidates as surfaced now that the confirm
+                # question is actually about to be asked, so it isn't asked again.
+                for a in case_repo.attachments(db, case.id):
+                    if a.extracted_medications and not a.medication_candidates_confirmed:
+                        a.medication_candidates_confirmed = True
+            ctx = PlannerContext(
+                field=asks_field,
+                outstanding=outstanding,
+                transcript=case_repo.transcript(db, session.id),
+                on_file=_on_file(db, case.id),
+                patient_name=case_repo.demographics(db, case.id).get("name"),
+                medication_candidates=pending_meds if asks_field == "medication" else [],
+            )
+            try:
+                async for kind, text in _streamed(lambda emit: question_planner.plan(ctx, emit)):
+                    if kind == "token":
+                        reply_streamed = True
+                        yield TurnEvent(type="token", text=text)
+                    else:
+                        reply, planner_mode = text, "llm"
+            except AgentUnavailable as exc:
+                # Whatever was streamed is replaced client-side by the `done` frame.
+                logger.warning("Planner unavailable (%s)", type(exc).__name__)
+                reply = question_planner.fallback_question(ctx)
+                planner_mode = "fallback"
+                yield TurnEvent(type="token", text=reply)
+                reply_streamed = True
 
     if complete and not reply_streamed:
         yield TurnEvent(type="token", text=reply)
@@ -574,5 +589,6 @@ async def _process_turn(db: Session, session: IntakeSession, case: PatientCase, 
             missing_fields=outstanding,
             intake_complete=complete,
             transcript=_transcript(db, session.id),
+            captured_fields=case_repo.captured_fields(db, case.id),
         ),
     )

@@ -7,8 +7,9 @@ import { Badge } from "@/components/ui/badge";
 import { Alert, EmptyState } from "@/components/ui/feedback";
 import { Icons } from "@/components/ui/icons";
 
-export function DocumentsPanel({ attachments, skippedKinds }: {
+export function DocumentsPanel({ attachments, pastAttachments, skippedKinds }: {
   attachments: Attachment[];
+  pastAttachments: Attachment[];
   skippedKinds: Record<string, string | null>;
 }) {
   const skipped = Object.entries(skippedKinds);
@@ -58,6 +59,31 @@ export function DocumentsPanel({ attachments, skippedKinds }: {
           />
         )}
       </section>
+
+      {pastAttachments.length ? (
+        <section className="space-y-2.5" aria-label="Past visits">
+          <h3 className="text-sm font-semibold">From past visits</h3>
+          <p className="text-xs text-fg-muted">
+            Read-only. The assistant can refer to these when answering your questions.
+          </p>
+          <ul className="divide-y divide-line overflow-hidden rounded-lg border border-line bg-surface">
+            {pastAttachments.map((file) => (
+              <li key={file.id} className="flex items-center gap-3 px-4 py-3">
+                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-sunken text-fg-muted">
+                  {file.mime_type.startsWith("image/") ? <Icons.image size={18} /> : <Icons.file size={18} />}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-medium">{file.filename}</p>
+                  <p className="text-xs text-fg-muted">
+                    {attachmentKindLabel(file.kind)} · {new Date(file.created_at).toLocaleDateString()}
+                  </p>
+                </div>
+                <Badge tone="neutral">Past visit</Badge>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
     </div>
   );
 }

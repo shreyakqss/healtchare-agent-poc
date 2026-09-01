@@ -26,13 +26,19 @@ async def resolve(
     health_topic: str | None = None,
 ) -> str | None:
     if scope == "personal_record":
+        # Past visits' documents too - a patient asking to explain a prior prescription or
+        # report shouldn't have to re-upload it into the new case.
+        all_docs = sorted(
+            case_repo.attachments(db, case_id) + case_repo.past_attachments(db, case_id),
+            key=lambda row: row.created_at,
+        )
         documents = [
             {
                 "kind": kind_label(row.kind),
                 "filename": row.filename,
                 "text": (row.extracted_text or "").strip()[:MAX_DOCUMENT_CHARS] or None,
             }
-            for row in case_repo.attachments(db, case_id)[-MAX_DOCUMENTS:]
+            for row in all_docs[-MAX_DOCUMENTS:]
         ]
         facts = [
             {"kind": fact.kind, "value": fact.value}

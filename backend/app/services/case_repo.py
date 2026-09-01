@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import uuid
+from collections import defaultdict
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.errors import NotFound
@@ -12,6 +14,7 @@ from app.models import (
     AllergyMedication,
     AuditEvent,
     CareTask,
+    CaseOwner,
     ClinicalDiscrepancy,
     ClinicalReview,
     ClinicalSummary,
@@ -84,6 +87,34 @@ def demographics(db: Session, case_id: uuid.UUID) -> dict[str, str]:
     return demographics_from_facts(facts(db, case_id))
 
 
+# A field the patient can only ever mean one current answer for - a later distinct statement
+# supersedes it for display. Everything else (symptom, history) is naturally cumulative.
+SINGLE_VALUE_FIELDS = {"reason_for_visit", "duration", "contact_preference", "name", "age", "gender"}
+
+
+def captured_fields(db: Session, case_id: uuid.UUID) -> dict[str, list[str]]:
+    """Current value(s) per intake field kind, for the patient to review and for any
+    downstream text that should reflect a correction. PatientFact rows themselves stay
+    append-only (never rewritten) - this only picks which row is "current" to show."""
+    by_kind: dict[str, list[PatientFact]] = defaultdict(list)
+    for f in facts(db, case_id):
+        if f.value not in intake_fields.PLACEHOLDERS:
+            by_kind[f.kind].append(f)
+
+    result: dict[str, list[str]] = {}
+    for kind, rows in by_kind.items():
+        if kind in SINGLE_VALUE_FIELDS:
+            result[kind] = [max(rows, key=lambda f: (f.source_turn, f.created_at)).value]
+        else:
+            result[kind] = [f.value for f in rows]
+
+    for kind in ("medication", "allergy"):
+        names = [e.name for e in clinical_entries(db, case_id) if e.kind == kind]
+        if names:
+            result[kind] = names
+    return result
+
+
 def entries(db: Session, case_id: uuid.UUID) -> list[AllergyMedication]:
     return db.query(AllergyMedication).filter(AllergyMedication.case_id == case_id).order_by(AllergyMedication.source_turn).all()
 
@@ -93,8 +124,61 @@ def clinical_entries(db: Session, case_id: uuid.UUID) -> list[AllergyMedication]
     return [e for e in entries(db, case_id) if e.name not in intake_fields.PLACEHOLDERS]
 
 
+def last_linked_hms_patient_id(db: Session, owner_user_id: uuid.UUID) -> str | None:
+    """The HMS record this account itself registered in a prior intake, most recent first -
+    used to prefill a fresh session's identity form after the old one timed out. Keyed by the
+    account's own case ownership, never a name/DOB search."""
+    return (
+        db.query(PatientCase.hms_patient_id)
+        .join(CaseOwner, CaseOwner.case_id == PatientCase.id)
+        .filter(CaseOwner.user_id == owner_user_id, PatientCase.hms_patient_id.isnot(None))
+        .order_by(PatientCase.created_at.desc())
+        .limit(1)
+        .scalar()
+    )
+
+
 def attachments(db: Session, case_id: uuid.UUID) -> list[MedicalAttachment]:
     return db.query(MedicalAttachment).filter(MedicalAttachment.case_id == case_id).order_by(MedicalAttachment.created_at).all()
+
+
+def attachments_for_owner(db: Session, owner_user_id: uuid.UUID) -> list[MedicalAttachment]:
+    """All of this account's documents across every case, most recent first - for showing past
+    visits' documents before this visit even has a case (identity form not submitted yet)."""
+    case_ids = select(CaseOwner.case_id).where(CaseOwner.user_id == owner_user_id)
+    return (
+        db.query(MedicalAttachment)
+        .filter(MedicalAttachment.case_id.in_(case_ids))
+        .order_by(MedicalAttachment.created_at.desc())
+        .all()
+    )
+
+
+def past_attachments(db: Session, case_id: uuid.UUID) -> list[MedicalAttachment]:
+    """Documents from this same account's other cases (past visits) - read-only reference for
+    the current one, most recent first. Scoped by case ownership, not a cross-patient search."""
+    owner_id = db.query(CaseOwner.user_id).filter(CaseOwner.case_id == case_id).scalar()
+    if owner_id is None:
+        return []
+    return [a for a in attachments_for_owner(db, owner_id) if a.case_id != case_id]
+
+
+def pending_medication_candidates(db: Session, case_id: uuid.UUID) -> list[str]:
+    """Medication names from uploaded prescriptions not yet surfaced to the patient as a
+    confirm question, per attachment (`medication_candidates_confirmed`) - not gated on
+    whether the patient already has other medication entries, so a later prescription's new
+    candidates are still asked about after an earlier one was answered."""
+    seen: set[str] = set()
+    candidates: list[str] = []
+    for a in attachments(db, case_id):
+        if a.medication_candidates_confirmed:
+            continue
+        for name in a.extracted_medications or []:
+            key = name.strip().lower()
+            if key and key not in seen:
+                seen.add(key)
+                candidates.append(name.strip())
+    return candidates
 
 
 def skipped_attachment_kinds(db: Session, case_id: uuid.UUID) -> set[str]:

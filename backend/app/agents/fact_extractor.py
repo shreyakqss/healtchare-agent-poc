@@ -33,6 +33,10 @@ INSTRUCTIONS = [
     'facts: [history "asthma"]; allergies_medications: [medication "salbutamol inhaler" (twice a day), '
     'allergy "penicillin"].',
     "Every medicine named goes in allergies_medications as a medication; every allergy as an allergy.",
+    "When the clinic's question already named specific medications (e.g. from an uploaded prescription) and "
+    "the patient confirms them without repeating the names ('yes, those', 'yes to all of them'), extract each "
+    "named medication from the question text as its own medication entry. If the patient names only some of "
+    "them, or adds more, extract exactly what they confirmed and what they added - not what they rejected.",
     "A fact you leave out is one the assistant has to ask again.",
     "Extract facts and a patient question independently; one message may contain both.",
     "Set current_question_response to answered only when the message responds to the clinic's current field, "
