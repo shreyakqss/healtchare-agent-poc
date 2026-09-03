@@ -1,12 +1,36 @@
 "use client";
 
+import { useState } from "react";
+import { hospitalApi } from "@/lib/api";
 import type { HospitalConfig } from "@/lib/api/types";
-import { Card, CardBody, CardHeader, Field, Input, KeyValue } from "@/components/ui";
+import { Card, CardBody, CardHeader, Field, Icons, Input, KeyValue, useToast } from "@/components/ui";
 import type { ConfigEditor } from "@/features/admin/use-config-editor";
 
 export function GeneralTab({ editor, hospitalId }: { editor: ConfigEditor; hospitalId: string }) {
   const cfg = editor.config as HospitalConfig;
   const set = (patch: Partial<HospitalConfig["hospital"]>) => editor.update((c) => ({ ...c, hospital: { ...c.hospital, ...patch } }));
+  const toast = useToast();
+  const [hasLetterhead, setHasLetterhead] = useState(true);
+  const [cacheBust, setCacheBust] = useState(0);
+  const [uploading, setUploading] = useState(false);
+
+  async function handleLetterhead(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    setUploading(true);
+    try {
+      await hospitalApi.uploadLetterhead(hospitalId, file);
+      setHasLetterhead(true);
+      setCacheBust((n) => n + 1);
+      toast.push({ tone: "success", message: "Letterhead uploaded" });
+    } catch (err) {
+      toast.push({ tone: "danger", message: err instanceof Error ? err.message : "Could not upload the letterhead." });
+    } finally {
+      setUploading(false);
+    }
+  }
+
   return (
     <div className="grid gap-4 lg:grid-cols-3">
       <Card className="lg:col-span-2">
@@ -37,6 +61,27 @@ export function GeneralTab({ editor, hospitalId }: { editor: ConfigEditor; hospi
             { label: "Rule version", value: <span className="font-mono text-xs">{cfg.triage_rules?.version ?? "–"}</span> },
             { label: "Intake fields", value: <span className="tabular">{cfg.required_intake_fields?.length ?? 0}</span> },
           ]} />
+        </CardBody>
+      </Card>
+      <Card className="lg:col-span-3">
+        <CardHeader title="Letterhead" description="Used as the header of the doctor's report to the patient, in place of the plain name/address block, once uploaded." />
+        <CardBody className="space-y-3">
+          {hasLetterhead ? (
+            // eslint-disable-next-line @next/next/no-img-element -- admin-uploaded clinic asset, not a static import
+            <img
+              src={`${hospitalApi.letterheadUrl(hospitalId)}?v=${cacheBust}`}
+              alt="Clinic letterhead"
+              className="max-h-32 rounded-md border border-line bg-sunken object-contain"
+              onError={() => setHasLetterhead(false)}
+            />
+          ) : (
+            <p className="text-sm text-fg-subtle">No letterhead uploaded yet.</p>
+          )}
+          <label className="inline-flex w-fit cursor-pointer items-center gap-2 rounded-md border border-line px-3 py-2 text-sm font-medium hover:bg-sunken">
+            <Icons.upload size={16} />
+            {uploading ? "Uploading…" : "Upload letterhead"}
+            <input type="file" accept="image/png,image/jpeg" className="hidden" onChange={handleLetterhead} disabled={uploading} />
+          </label>
         </CardBody>
       </Card>
     </div>

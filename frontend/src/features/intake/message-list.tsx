@@ -7,8 +7,9 @@ import { Icons } from "@/components/ui/icons";
 import type { ChatMessage } from "@/features/intake/use-intake-session";
 
 // The assistant's own words, not the patient's - a patient typing "**test**" must stay
-// literal text, so markdown is only ever parsed on the assistant side.
-const MARKDOWN_COMPONENTS = {
+// literal text, so markdown is only ever parsed on the assistant side. Exported so any other
+// assistant bubble (e.g. the doctor's clinical assistant) renders prose the same way.
+export const MARKDOWN_COMPONENTS = {
   p: (props: React.ComponentPropsWithoutRef<"p">) => <p className="mb-2 last:mb-0" {...props} />,
   strong: (props: React.ComponentPropsWithoutRef<"strong">) => <strong className="font-semibold text-fg" {...props} />,
   em: (props: React.ComponentPropsWithoutRef<"em">) => <em className="italic" {...props} />,

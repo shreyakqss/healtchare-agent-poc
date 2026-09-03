@@ -59,6 +59,7 @@ def make_agent(
     role: str,
     instructions: list[str],
     output_schema: type[BaseModel] | None = None,
+    tools: list[Callable] | None = None,
 ) -> Agent:
     return Agent(
         name=name,
@@ -66,6 +67,7 @@ def make_agent(
         model=build_model(),
         instructions=instructions,
         output_schema=output_schema,
+        tools=tools,
         markdown=False,
         telemetry=False,
         retries=1,

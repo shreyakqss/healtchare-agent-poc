@@ -18,6 +18,7 @@ from app.agents import AgentUnavailable
 from app.agents.visit_reporter import VisitInputs, write_visit_summary
 from app.core.tracing import case_trace
 from app.db import db_session
+from app.domain import scheduling
 from app.domain.lifecycle import CaseStatus
 from app.integrations.hms import get_hms
 from app.integrations.hms.schemas import AppointmentRequest
@@ -52,6 +53,7 @@ async def write_summary(step_input: StepInput) -> StepOutput:
             notes="\n\n".join(n.notes for n in notes),
             prescription=latest.prescription,
             follow_up=latest.follow_up_instructions,
+            tests_ordered=latest.tests_ordered,
         )
         try:
             sections = (await write_visit_summary(inputs)).model_dump()
@@ -67,9 +69,14 @@ async def write_summary(step_input: StepInput) -> StepOutput:
             }
             generated_by = "fallback"
         sections["prescription"] = latest.prescription
+        sections["tests_ordered"] = latest.tests_ordered
         sections["consultation_mode"] = latest.consultation_mode
         sections["doctor"] = inputs.doctor
         sections["department"] = inputs.department
+        # The doctor's own final-draft report to the patient stands in for the model's draft,
+        # same as a clinician's edit stands in for an agent's - never silently discarded.
+        if latest.patient_report:
+            sections["patient_friendly_summary"] = latest.patient_report
         summary = case_repo.summary(db, case_id, "final_visit")
         if summary is None:
             db.add(ClinicalSummary(case_id=case_id, kind="final_visit", sections=sections, generated_by=generated_by))
@@ -138,12 +145,13 @@ async def create_care_task(step_input: StepInput) -> StepOutput:
 
         reference, slot, request_error = None, None, None
         if routing:
+            chosen = scheduling.chosen_slot(routing.slot_options or [], routing.selected_slot_id, routing.suggested_slot)
             request = AppointmentRequest(
                 case_id=str(case_id), patient_mrn=case.hms_patient_id,
                 patient_name=case_repo.demographics(db, case_id).get("name", "Unnamed patient"),
                 department_id=routing.department_id, practitioner_id=routing.doctor_id,
                 appointment_type_id=routing.appointment_type_id, priority=priority,
-                preferred_slot_id=(routing.suggested_slot or {}).get("id"),
+                preferred_slot_id=(chosen or {}).get("id"),
                 reason=follow_up or "Follow-up after consultation",
             )
             # The task is a draft either way: an HMS that refuses the request (no Appointment

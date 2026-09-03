@@ -92,6 +92,54 @@ def cleanup_synthetic_application_users():
         db.close()
 
 
+@pytest.fixture(scope="session", autouse=True)
+def cleanup_openemr_test_patients():
+    """The integration suite registers real patients in the test OpenEMR (see module docstring).
+    Track every MRN a fresh (non-linking) registration returns during the run, then delete exactly
+    those from OpenEMR once it ends - independent of Postgres, whose own test rows the
+    cleanup_synthetic_application_users fixture above already cleans up on its own schedule."""
+    from app.integrations.hms.openemr.client import FhirHMS
+
+    created_mrns: list[str] = []
+    original_register_patient = FhirHMS.register_patient
+
+    def tracking_register_patient(self, existing_mrn, registration):
+        patient = original_register_patient(self, existing_mrn, registration)
+        if existing_mrn is None and patient.mrn:
+            created_mrns.append(patient.mrn)
+        return patient
+
+    FhirHMS.register_patient = tracking_register_patient
+    try:
+        yield
+    finally:
+        FhirHMS.register_patient = original_register_patient
+
+    from app.core.config import settings
+
+    pids = sorted({mrn for mrn in created_mrns if mrn.isdigit()})
+    if not pids or not (settings.OPENEMR_MYSQL_USER and settings.OPENEMR_MYSQL_PASSWORD):
+        return
+
+    import pymysql
+
+    conn = pymysql.connect(
+        host=settings.OPENEMR_MYSQL_HOST,
+        port=settings.OPENEMR_MYSQL_PORT,
+        user=settings.OPENEMR_MYSQL_USER,
+        password=settings.OPENEMR_MYSQL_PASSWORD,
+        database=settings.OPENEMR_MYSQL_DB,
+    )
+    try:
+        placeholders = ",".join(["%s"] * len(pids))
+        with conn.cursor() as cursor:
+            for table in ("forms", "form_encounter", "form_soap", "patient_data"):
+                cursor.execute(f"DELETE FROM {table} WHERE pid IN ({placeholders})", pids)
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def _hospital_system_unavailable() -> str | None:
     """None when the configured hospital system answered; otherwise why it did not."""
     global _UNAVAILABLE

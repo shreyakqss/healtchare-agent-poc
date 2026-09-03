@@ -13,19 +13,27 @@ from fastapi import APIRouter, Depends, File, Form, Query, Response, UploadFile
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
+from app.agents import AgentUnavailable
 from app.api.deps import get_db
 from app.api.v1 import serializers
 from app.core.config import settings
-from app.core.errors import Conflict, Forbidden, NotFound
+from app.core.errors import Conflict, Forbidden, NotFound, ServiceUnavailable
 from app.domain.lifecycle import CaseStatus
 from app.models import MedicalAttachment
-from app.schemas.requests import AttachmentSkipRequest, ConsultationNoteRequest, FinalizeRequest
+from app.schemas.requests import (
+    AppointmentSlotRequest,
+    AttachmentSkipRequest,
+    ConsultationNoteRequest,
+    DoctorAssistantRequest,
+    FinalizeRequest,
+)
 from app.schemas.responses import (
     AttachmentResponse,
     AttachmentSkipResponse,
     CaseDetailResponse,
     CaseListItem,
     ConsultationNoteResponse,
+    DoctorAssistantResponse,
     PatientCaseResponse,
     PatientVisitItem,
 )
@@ -38,10 +46,12 @@ from app.security import (
     require_roles,
 )
 from app.services import (
+    appointment_service,
     attachment_service,
     attachments,
     case_repo,
     consultation_service,
+    doctor_assistant_service,
     prescreen_trigger,
     workflow_jobs,
 )
@@ -87,6 +97,20 @@ def get_patient_case(case_id: uuid.UUID, principal: PatientPrincipal, db: Sessio
     rate_limits.enforce("attachment.upload", principal.user_id)
     case = case_for_principal(db, case_id, principal, allow_clinician=False)
     return serializers.patient_case_detail(db, case)
+
+
+@router.post("/{case_id}/appointment-slot", response_model=PatientCaseResponse)
+def select_appointment_slot(
+    case_id: uuid.UUID,
+    payload: AppointmentSlotRequest,
+    principal: PatientPrincipal,
+    db: Session = Depends(get_db),
+):
+    """Patient's pick among the advisory slots offered at routing time. Never a booking - the
+    same request goes to the HMS at finalize time regardless of which option was picked."""
+    case = case_for_principal(db, case_id, principal, allow_clinician=False)
+    appointment_service.select_slot(db, case, payload.slot_id)
+    return serializers.patient_case_detail(db, case_repo.case_or_404(db, case_id))
 
 
 @router.get("/{case_id}", response_model=CaseDetailResponse)
@@ -144,7 +168,8 @@ def download_attachment(
         raise NotFound("Stored file is missing.") from None
     if not path.exists():
         raise NotFound("Stored file is missing.")
-    return FileResponse(path, media_type=row.mime_type, filename=row.filename)
+    # Inline, never a download: the clinician views it in the browser's own viewer.
+    return FileResponse(path, media_type=row.mime_type, filename=row.filename, content_disposition_type="inline")
 
 
 @router.post("/{case_id}/prescreen", response_model=PatientCaseResponse)
@@ -200,3 +225,24 @@ async def finalize(
         payload={"finalizer_id": identity.id, "finalizer_name": identity.name},
     )
     return serializers.case_detail(db, case_repo.case_or_404(db, case_id))
+
+
+@router.post("/{case_id}/assistant", response_model=DoctorAssistantResponse)
+async def doctor_assistant_chat(
+    case_id: uuid.UUID,
+    payload: DoctorAssistantRequest,
+    principal: ClinicianPrincipal,
+    db: Session = Depends(get_db),
+):
+    """A clinical assistant for the doctor working this case - discussion only, never a write
+    to the record. Not gated behind review/approval: available at any point in the case."""
+    rate_limits.enforce("doctor.assistant", principal.user_id)
+    case = case_for_principal(db, case_id, principal, allow_patient=False)
+    try:
+        reply = await doctor_assistant_service.chat(
+            db, case.id, payload.doctor_context, payload.message,
+            [t.model_dump() for t in payload.transcript],
+        )
+    except AgentUnavailable as exc:
+        raise ServiceUnavailable("The assistant is unavailable right now.") from exc
+    return DoctorAssistantResponse(reply=reply)

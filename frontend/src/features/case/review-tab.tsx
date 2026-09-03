@@ -1,10 +1,14 @@
-import type { CaseDetail } from "@/lib/api";
+import type { CaseDetail, HospitalIdentity } from "@/lib/api";
 import { Card, CardBody, CardHeader, SectionTitle } from "@/components/ui/card";
 import { Badge, PriorityBadge } from "@/components/ui/badge";
 import { Alert, EmptyState } from "@/components/ui/feedback";
 import { KeyValue } from "@/components/ui/data";
 import { Icons } from "@/components/ui/icons";
 import { formatDateTime, titleCase } from "@/lib/utils";
+import { ConsultationForm } from "@/features/doctor/consultation-form";
+import { DiscrepancyFlags } from "@/features/doctor/discrepancy-flags";
+import { ReviewForm } from "@/features/doctor/review-form";
+import type { Me } from "@/features/doctor/use-doctor";
 
 function str(v: unknown): string | null {
   return typeof v === "string" && v.trim() ? v : null;
@@ -18,7 +22,9 @@ function original(sections: Record<string, unknown>, key: string): string {
   return str(v) ?? "–";
 }
 
-export function ReviewTab({ detail }: { detail: CaseDetail }) {
+export function ReviewTab({ detail, me, onChanged, hospital }: {
+  detail: CaseDetail; me: Me | null; onChanged: () => Promise<void>; hospital: HospitalIdentity | null;
+}) {
   const review = detail.review;
   const sections = (detail.prescreening_summary?.sections ?? {}) as Record<string, unknown>;
   const fin = (detail.final_summary?.sections ?? {}) as Record<string, unknown>;
@@ -26,6 +32,10 @@ export function ReviewTab({ detail }: { detail: CaseDetail }) {
 
   return (
     <div className="space-y-5">
+      {me && detail.status === "NEEDS_REVIEW" ? <ReviewForm c={detail} me={me} onDone={onChanged} hospital={hospital} /> : null}
+      {me && detail.status === "APPROVED" ? <ConsultationForm c={detail} me={me} onDone={onChanged} hospital={hospital} /> : null}
+      <DiscrepancyFlags c={detail} />
+
       <Card>
         <CardHeader title="Clinician review" description="The gate: consultation notes and the visit summary are only possible after approve or approve-with-edits." />
         <CardBody>
@@ -75,7 +85,9 @@ export function ReviewTab({ detail }: { detail: CaseDetail }) {
                   <p className="mt-3 whitespace-pre-wrap text-sm leading-6">{n.notes}</p>
                   <KeyValue className="mt-3" columns={2} items={[
                     { label: "Prescription", value: n.prescription ?? <span className="text-fg-subtle">None</span> },
+                    { label: "Tests / investigations", value: n.tests_ordered ?? <span className="text-fg-subtle">None</span> },
                     { label: "Follow-up", value: n.follow_up_instructions ?? <span className="text-fg-subtle">None</span> },
+                    { label: "For other doctors", value: n.referral_notes ?? <span className="text-fg-subtle">None</span> },
                   ]} />
                 </li>
               ))}
@@ -99,6 +111,7 @@ export function ReviewTab({ detail }: { detail: CaseDetail }) {
               {str(fin.doctor_notes_summary) ? <div><SectionTitle>Doctor&rsquo;s notes</SectionTitle><p className="mt-1 text-sm leading-6">{str(fin.doctor_notes_summary)}</p></div> : null}
               {list(fin.follow_up_instructions).length ? <div><SectionTitle>Follow-up</SectionTitle><ul className="mt-1 list-disc space-y-0.5 pl-5 text-sm">{list(fin.follow_up_instructions).map((x, i) => <li key={i}>{x}</li>)}</ul></div> : null}
               {str(fin.prescription) ? <div><SectionTitle>Prescription</SectionTitle><p className="mt-1 text-sm">{str(fin.prescription)}</p></div> : null}
+              {str(fin.tests_ordered) ? <div><SectionTitle>Tests / investigations</SectionTitle><p className="mt-1 text-sm">{str(fin.tests_ordered)}</p></div> : null}
               {str(fin.patient_friendly_summary) ? <Alert tone="success" title="Patient-facing summary">{str(fin.patient_friendly_summary)}</Alert> : null}
             </div>
           )}

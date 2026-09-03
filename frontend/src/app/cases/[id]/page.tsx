@@ -6,6 +6,7 @@ import { serverApi } from "@/lib/api/server";
 import { shortId } from "@/lib/utils";
 import { AppShell } from "@/components/layout/app-shell";
 import { CaseView } from "@/features/case/case-view";
+import { resolveMe } from "@/features/doctor/use-doctor";
 
 export default async function CasePage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -18,14 +19,24 @@ export default async function CasePage({ params }: { params: Promise<{ id: strin
     if (err instanceof ApiError && err.status === 404) notFound();
     throw err;
   }
-  const audit = await serverApi.clinician.audit(id);
+  const [audit, config, roster] = await Promise.all([
+    serverApi.clinician.audit(id),
+    serverApi.clinician.config().catch(() => null),
+    serverApi.clinician.roster().catch(() => null),
+  ]);
+  // Best-effort: the roster/config calls above never block the case page if they fail.
+  const me = resolveMe(user.hms_username, roster?.doctors ?? [], config?.departments ?? []);
+  const specialty = roster?.doctors.find((d) => d.id === me?.id)?.specialty;
+  const doctorContext = me
+    ? `${me.name}${specialty ? `, ${specialty}` : ""} - ${me.department_name}`
+    : (user.display_name ?? "Doctor");
 
-  const name = detail.demographics?.name || "Case";
+  const name = detail.demographics?.name || "Visit";
 
   return (
     <AppShell
       title={name}
-      subtitle={`Case ${shortId(id)}`}
+      subtitle={`Visit ${shortId(id)}`}
       wide
       user={user}
       actions={
@@ -34,7 +45,7 @@ export default async function CasePage({ params }: { params: Promise<{ id: strin
         </Link>
       }
     >
-      <CaseView initialCase={detail} initialAudit={audit} />
+      <CaseView initialCase={detail} initialAudit={audit} doctorContext={doctorContext} me={me} hospital={config?.hospital ?? null} />
     </AppShell>
   );
 }

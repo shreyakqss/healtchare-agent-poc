@@ -53,7 +53,7 @@ export function CaseHeader({ detail, action }: { detail: CaseDetail; action?: Re
         </div>
 
         {terminalBad ? (
-          <Alert tone="danger" title={detail.status === "REJECTED" ? "Case rejected by the reviewing clinician" : "A workflow step failed"}>
+          <Alert tone="danger" title={detail.status === "REJECTED" ? "Visit rejected by the reviewing clinician" : "A workflow step failed"}>
             {detail.status === "REJECTED"
               ? "No patient-facing output is released. The audit trail records the decision."
               : "See the audit trail for the error. Pre-screening may be re-run from this state."}

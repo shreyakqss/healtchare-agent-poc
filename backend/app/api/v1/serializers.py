@@ -8,7 +8,7 @@ from collections import defaultdict
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.domain import intake_fields
+from app.domain import intake_fields, scheduling
 from app.models import (
     AllergyMedication,
     AuditEvent,
@@ -36,6 +36,7 @@ from app.schemas.responses import (
     EntryResponse,
     FactResponse,
     PatientCaseResponse,
+    PatientRoutingResponse,
     PatientVisitItem,
     ReviewResponse,
     RoutingResponse,
@@ -119,6 +120,20 @@ def routing_out(r: RoutingRecommendation | None) -> RoutingResponse | None:
         appointment_type_id=r.appointment_type_id, appointment_type_label=r.appointment_type_label, rationale=r.rationale,
         matched_keywords=list(r.matched_keywords or []),
         suggested_slot=SlotResponse(**r.suggested_slot) if r.suggested_slot else None,
+        slot_options=[SlotResponse(**s) for s in (r.slot_options or [])],
+        selected_slot_id=r.selected_slot_id,
+    )
+
+
+def patient_routing_out(r: RoutingRecommendation | None) -> PatientRoutingResponse | None:
+    if r is None:
+        return None
+    return PatientRoutingResponse(
+        department_id=r.department_id, department_name=r.department_name, doctor_id=r.doctor_id, doctor_name=r.doctor_name,
+        appointment_type_id=r.appointment_type_id, appointment_type_label=r.appointment_type_label,
+        suggested_slot=SlotResponse(**r.suggested_slot) if r.suggested_slot else None,
+        slot_options=[SlotResponse(**s) for s in (r.slot_options or [])],
+        selected_slot_id=r.selected_slot_id,
     )
 
 
@@ -150,7 +165,8 @@ def note_out(n: ConsultationNote) -> ConsultationNoteResponse:
     return ConsultationNoteResponse(
         id=str(n.id), doctor_id=n.doctor_id, doctor_name=display_name,
         consultation_mode=n.consultation_mode, notes=n.notes, prescription=n.prescription,
-        follow_up_instructions=n.follow_up_instructions, created_at=n.created_at,
+        follow_up_instructions=n.follow_up_instructions, tests_ordered=n.tests_ordered, referral_notes=n.referral_notes,
+        patient_report=n.patient_report, created_at=n.created_at,
     )
 
 
@@ -204,7 +220,6 @@ def case_detail(db: Session, case: PatientCase) -> CaseDetailResponse:
 def patient_case_detail(db: Session, case: PatientCase) -> PatientCaseResponse:
     session = case_repo.session_for(db, case)
     review = case_repo.latest_review(db, case.id)
-    approved = review is not None and review.decision in {"approve", "edit"}
     final_summary = case_repo.summary(db, case.id, "final_visit") if session.status == "COMPLETED" else None
     notes = case_repo.notes(db, case.id) if final_summary else []
     tasks = case_repo.tasks(db, case.id) if final_summary else []
@@ -212,7 +227,10 @@ def patient_case_detail(db: Session, case: PatientCase) -> PatientCaseResponse:
         case_id=str(case.id),
         status=session.status,
         review_decision=review.decision if review else None,
-        routing=routing_out(case_repo.latest_routing(db, case.id)) if approved else None,
+        # Shown as soon as it exists (not gated on approval) so the patient can pick a
+        # slot from the advisory routing while a clinician still reviews the case.
+        # Uses the trimmed patient projection - rationale/matched_keywords are rule evidence.
+        routing=patient_routing_out(case_repo.latest_routing(db, case.id)),
         final_summary=final_summary.sections if final_summary else None,
         consultation_mode=notes[-1].consultation_mode if notes else None,
         appointment_reference=tasks[0].hms_reference if tasks else None,
@@ -300,6 +318,7 @@ def case_list(db: Session, cases: list[PatientCase] | None = None) -> list[CaseL
     triage = latest(TriageResult)
     routing = latest(RoutingRecommendation)
     reviews = latest(ClinicalReview)
+    tasks = latest(CareTask)
     facts_by_case = defaultdict(list)
     for fact in (
         db.query(PatientFact)
@@ -328,9 +347,13 @@ def case_list(db: Session, cases: list[PatientCase] | None = None) -> list[CaseL
         case_triage = triage.get(case.id)
         case_routing = routing.get(case.id)
         review = reviews.get(case.id)
+        task = tasks.get(case.id)
         facts = facts_by_case[case.id]
         entries = entries_by_case[case.id]
-        reason = next((fact.value for fact in reversed(facts) if fact.kind == "reason_for_visit"), None)
+        # Joined, not just the last one: a single turn can name several problems at once
+        # ("fever and body ache") as separate reason_for_visit facts - a doctor needs all of them.
+        reasons = [fact.value for fact in facts if fact.kind == "reason_for_visit"]
+        reason = ", ".join(dict.fromkeys(reasons)) or None
         items.append(CaseListItem(
             case_id=str(case.id), session_id=str(case.session_id), status=session.status if session else "UNKNOWN",
             priority=case_triage.priority if case_triage else None,
@@ -341,6 +364,22 @@ def case_list(db: Session, cases: list[PatientCase] | None = None) -> list[CaseL
             chief_complaint=reason, demographics=case_repo.demographics_from_facts(facts), hms_patient_id=case.hms_patient_id,
             review_decision=review.decision if review else None,
             missing_count=len(intake_fields.missing_fields(required_fields, facts, entries)),
+            appointment_start=_appointment_start(case_routing, task),
             created_at=case.created_at, updated_at=updated.get(case.id),
         ))
     return items
+
+
+def _appointment_start(routing: RoutingRecommendation | None, task: CareTask | None) -> str | None:
+    """The doctor's calendar wants one time per case: the finalized slot once a CareTask exists
+    (payload["slot"], set by finalize.py from the HMS request result), else whichever slot -
+    patient-picked or sequential-default - stands on the routing recommendation."""
+    if task and task.payload and task.payload.get("slot"):
+        start = task.payload["slot"].get("start")
+        if start:
+            return start
+    if routing:
+        chosen = scheduling.chosen_slot(routing.slot_options or [], routing.selected_slot_id, routing.suggested_slot)
+        if chosen:
+            return chosen.get("start")
+    return None

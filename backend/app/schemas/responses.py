@@ -127,6 +127,10 @@ class SlotResponse(BaseModel):
     end: datetime
 
 
+class DoctorAssistantResponse(BaseModel):
+    reply: str
+
+
 class RoutingResponse(BaseModel):
     department_id: str
     department_name: str
@@ -137,6 +141,20 @@ class RoutingResponse(BaseModel):
     rationale: str
     matched_keywords: list[str]
     suggested_slot: SlotResponse | None
+    slot_options: list[SlotResponse]
+    selected_slot_id: str | None
+
+
+class PatientRoutingResponse(BaseModel):
+    department_id: str
+    department_name: str
+    doctor_id: str | None
+    doctor_name: str | None
+    appointment_type_id: str
+    appointment_type_label: str
+    suggested_slot: SlotResponse | None
+    slot_options: list[SlotResponse]
+    selected_slot_id: str | None
 
 
 class SummaryResponse(BaseModel):
@@ -167,6 +185,9 @@ class ConsultationNoteResponse(BaseModel):
     notes: str
     prescription: str | None
     follow_up_instructions: str | None
+    tests_ordered: str | None
+    referral_notes: str | None
+    patient_report: str | None
     created_at: datetime
 
 
@@ -235,6 +256,7 @@ class CaseListItem(BaseModel):
     hms_patient_id: str | None
     review_decision: str | None
     missing_count: int
+    appointment_start: datetime | None
     created_at: datetime
     updated_at: datetime | None
 
@@ -253,7 +275,7 @@ class PatientCaseResponse(BaseModel):
     case_id: str
     status: str
     review_decision: str | None
-    routing: RoutingResponse | None
+    routing: PatientRoutingResponse | None
     final_summary: dict[str, Any] | None
     consultation_mode: str | None
     appointment_reference: str | None

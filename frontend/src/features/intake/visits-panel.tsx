@@ -78,12 +78,7 @@ export function VisitsPanel({ currentCaseId, initialVisits }: {
                         <Button size="sm" variant="secondary" className="mt-2" onClick={() => void load(visit.case_id)}>Try again</Button>
                       </Alert>
                     ) : (
-                      <>
-                        <PatientResults detail={detail} />
-                        <div className="mt-3 flex justify-end">
-                          <Button size="sm" variant="ghost" icon={<Icons.refresh size={14} />} onClick={() => void load(visit.case_id)}>Check for updates</Button>
-                        </div>
-                      </>
+                      <PatientResults detail={detail} onUpdated={() => void load(visit.case_id)} onRefresh={() => void load(visit.case_id)} />
                     )}
                   </div>
                 ) : null}

@@ -58,3 +58,7 @@ class RoutingRecommendation(Base):
     matched_keywords: Mapped[list[Any]] = mapped_column(JSONB, default=list)
     # Earliest HMS slot found for the department at routing time (advisory only).
     suggested_slot: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    # The open HMS slots offered to the patient at routing time (advisory only).
+    slot_options: Mapped[list[Any]] = mapped_column(JSONB, default=list)
+    # Which of slot_options the patient picked; None means the earliest (suggested_slot) stands.
+    selected_slot_id: Mapped[str | None] = mapped_column(String(64))

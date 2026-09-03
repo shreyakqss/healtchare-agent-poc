@@ -10,6 +10,10 @@ export function proxy(request: NextRequest) {
     "default-src 'self'",
     `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'${development ? " 'unsafe-eval'" : ""}`,
     `style-src 'self' 'nonce-${nonce}'${development ? " 'unsafe-inline'" : ""}`,
+    // Scoped to the style ATTRIBUTE only (style-src still nonce-locks <style> tags/stylesheets):
+    // the calendar library positions events via inline style="..." at runtime, which a nonce
+    // can't cover (nonces apply to elements, not attributes) - deliberate, narrow exception.
+    "style-src-attr 'unsafe-inline'",
     "img-src 'self' blob: data:",
     "font-src 'self'",
     "connect-src 'self'",

@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import type { ClinicianCredentials } from "@/lib/api";
-import { Field, Input } from "@/components/ui";
+import { Input } from "@/components/ui";
 
 /** Username/password pair a clinician types for each gated action. Held in component state
  * only - never persisted - and cleared by the caller after a successful submit. */
@@ -13,31 +13,29 @@ export function useClinicianCredentials(initialUsername: string) {
   return { credentials, setCredentials, missing, clearPassword };
 }
 
+/** One line: the clinician's already-known hospital-system login (read from their Keycloak
+ * session, never typed) plus the single password field that actually authorizes the action -
+ * verified live against the hospital system itself, not just this app's session. No separate
+ * username box or paragraph; `value.username` still travels with the submit unchanged. */
 export function CredentialFields({ idPrefix, value, onChange, hint, disabled, signingInAs }: {
   idPrefix: string;
   value: ClinicianCredentials;
   onChange: (next: ClinicianCredentials) => void;
   hint: string;
   disabled?: boolean;
-  /** Display name of the clinician selected on the roster, when their login is known.
-   * Without it the pre-filled username is an unexplained string in a box. */
   signingInAs?: string | null;
 }) {
   return (
-    <div className="grid gap-3 sm:grid-cols-2">
-      {signingInAs ? (
-        <p className="text-xs text-fg-muted sm:col-span-2">
-          Signing as <span className="font-medium text-fg">{signingInAs}</span>. Enter the password for this
-          hospital-system login.
-        </p>
-      ) : null}
-      <Field label="Your HMS username" htmlFor={`${idPrefix}-username`}>
-        <Input id={`${idPrefix}-username`} value={value.username} disabled={disabled} readOnly autoComplete="username" />
-      </Field>
-      <Field label="Your HMS password" htmlFor={`${idPrefix}-password`} hint={hint}>
-        <Input id={`${idPrefix}-password`} type="password" value={value.password} disabled={disabled} autoComplete="current-password"
-          onChange={(e) => onChange({ ...value, password: e.target.value })} />
-      </Field>
+    <div className="flex flex-wrap items-center gap-2">
+      <label htmlFor={`${idPrefix}-password`} className="shrink-0 text-sm text-fg-muted">
+        {signingInAs ? <>Confirm as <span className="font-medium text-fg">{signingInAs}</span></> : "Password"}
+      </label>
+      <Input
+        id={`${idPrefix}-password`} type="password" value={value.password} disabled={disabled}
+        autoComplete="current-password" placeholder={hint} title={hint}
+        className="w-48"
+        onChange={(e) => onChange({ ...value, password: e.target.value })}
+      />
     </div>
   );
 }

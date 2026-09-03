@@ -75,3 +75,10 @@ class ConsultationNote(Base):
     notes: Mapped[str] = mapped_column(Text)
     prescription: Mapped[str | None] = mapped_column(Text)
     follow_up_instructions: Mapped[str | None] = mapped_column(Text)
+    tests_ordered: Mapped[str | None] = mapped_column(Text)
+    # For other clinicians on referral, never surfaced on the patient-facing summary or the
+    # patient endpoint's safe projection (see finalize.py: not written into ClinicalSummary.sections).
+    referral_notes: Mapped[str | None] = mapped_column(Text)
+    # The doctor's own final-draft report to the patient, in their own words. When set, this
+    # stands in for the model-drafted patient_friendly_summary at finalize time.
+    patient_report: Mapped[str | None] = mapped_column(Text)

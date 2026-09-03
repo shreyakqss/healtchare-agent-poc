@@ -135,21 +135,14 @@ export function PatientPortal({
                     </div>
                   </Alert>
                 ) : null}
-                <div className="rounded-lg border border-line bg-surface p-5 shadow-card">
-                  <div className="flex items-start gap-3">
-                    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-success-soft text-success" aria-hidden="true"><Icons.checkCircle size={18} /></span>
-                    <div className="min-w-0 flex-1">
-                      <h3 className="text-base font-semibold">Your answers are with the care team</h3>
-                      <p className="mt-1 text-sm leading-6 text-fg-muted">
-                        A clinician will review them shortly. You can close this page (your visit is saved under “My visits”), or check back here for updates.
-                      </p>
-                      <div className="mt-3">
-                        <Button size="sm" variant="secondary" loading={checking} icon={<Icons.refresh size={14} />} onClick={() => void checkUpdates()}>Check for updates</Button>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-                {state.lastCase ? <PatientResults detail={state.lastCase} /> : null}
+                {state.lastCase ? (
+                  <PatientResults
+                    detail={state.lastCase}
+                    onUpdated={() => void refreshCase()}
+                    onRefresh={() => void checkUpdates()}
+                    refreshing={checking}
+                  />
+                ) : null}
               </div>
             ) : !state.identityComplete ? (
               <IntakeForm

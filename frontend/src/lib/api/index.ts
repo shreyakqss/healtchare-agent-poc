@@ -1,7 +1,7 @@
 import { API_ROOT, http, readCookie, readSse } from "@/lib/api/client";
 import type {
-  AppointmentRequestResult, Attachment, AttachmentSkipResponse, AuditEvent, CaseDetail, CaseListItem, ConsultationNote,
-  ConsultationNoteRequest, FinalizeRequest, HMSPractitioner, HMSStatus, HospitalConfig,
+  AppointmentRequestResult, AssistantReply, AssistantTurn, Attachment, AttachmentSkipResponse, AuditEvent, CaseDetail,
+  CaseListItem, ConsultationNote, ConsultationNoteRequest, FinalizeRequest, HMSPractitioner, HMSStatus, HospitalConfig,
   HospitalSummary, IdentityFormRequest, IntakeConfig, LinkedPatientRecord, MessageResponse, PatientCase, PatientVisitItem,
   Review, ReviewRequest, Roster, SessionResponse, Slot, TurnEvent,
 } from "@/lib/api/types";
@@ -37,6 +37,7 @@ export const casesApi = {
   get: (caseId: string) => http.get<CaseDetail>(`/cases/${caseId}`),
   patientList: () => http.get<PatientVisitItem[]>("/cases/my-visits"),
   patientGet: (caseId: string) => http.get<PatientCase>(`/cases/${caseId}/patient-view`),
+  selectSlot: (caseId: string, slotId: string) => http.post<PatientCase>(`/cases/${caseId}/appointment-slot`, { slot_id: slotId }),
   audit: (caseId: string) => http.get<AuditEvent[]>(`/cases/${caseId}/audit`),
   upload: (caseId: string, file: File, kind: string, uploadedBy = "patient") => {
     const form = new FormData();
@@ -52,6 +53,8 @@ export const casesApi = {
   review: (caseId: string, body: ReviewRequest) => http.post<Review>(`/cases/${caseId}/review`, body),
   addNote: (caseId: string, body: ConsultationNoteRequest) => http.post<ConsultationNote>(`/cases/${caseId}/consultation-notes`, body),
   finalize: (caseId: string, body: FinalizeRequest) => http.post<CaseDetail>(`/cases/${caseId}/finalize`, body),
+  assistantChat: (caseId: string, message: string, doctorContext: string, transcript: AssistantTurn[]) =>
+    http.post<AssistantReply>(`/cases/${caseId}/assistant`, { message, doctor_context: doctorContext, transcript }),
 };
 
 export const hospitalApi = {
@@ -66,6 +69,12 @@ export const hospitalApi = {
   create: (hospital_id: string, yaml?: string) => http.post<HospitalSummary>("/hospital/hospitals", { hospital_id, yaml }),
   activate: (id: string) => http.post<HospitalSummary>(`/hospital/hospitals/${id}/activate`),
   remove: (id: string) => http.del<void>(`/hospital/hospitals/${id}`),
+  uploadLetterhead: (id: string, file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return http.form<HospitalSummary>(`/hospital/hospitals/${id}/letterhead`, form);
+  },
+  letterheadUrl: (id: string) => `${API_ROOT}/hospital/hospitals/${id}/letterhead/file`,
 };
 
 export const hmsApi = {

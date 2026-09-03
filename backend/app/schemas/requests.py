@@ -68,6 +68,26 @@ class ConsultationNoteRequest(BaseModel):
     notes: str = Field(min_length=1)
     prescription: str | None = None
     follow_up_instructions: str | None = None
+    tests_ordered: str | None = None
+    referral_notes: str | None = None
+    # The doctor's own final-draft report to the patient. Optional: when blank, the model
+    # drafts the patient-facing summary from these notes at finalize time, same as before.
+    patient_report: str | None = None
+
+
+class AppointmentSlotRequest(BaseModel):
+    slot_id: str = Field(min_length=1, max_length=64)
+
+
+class DoctorAssistantTurn(BaseModel):
+    role: Literal["doctor", "assistant"]
+    content: str = Field(min_length=1, max_length=4000)
+
+
+class DoctorAssistantRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=4000)
+    doctor_context: str = Field(min_length=1, max_length=300)
+    transcript: list[DoctorAssistantTurn] = Field(default_factory=list, max_length=20)
 
 
 class FinalizeRequest(BaseModel):

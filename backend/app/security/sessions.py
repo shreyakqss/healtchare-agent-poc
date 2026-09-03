@@ -207,7 +207,9 @@ def _sync_user(db: Session, claims: dict[str, Any]) -> ApplicationUser:
     return user
 
 
-def _finish_login(db: Session, tokens: dict[str, Any], access_claims: dict[str, Any], return_to: str) -> LoginSession:
+def _finish_login(
+    db: Session, tokens: dict[str, Any], access_claims: dict[str, Any], return_to: str, client_id: str
+) -> LoginSession:
     """Shared tail of every login path (authorization-code callback, self-registration):
     sync the CareFlow user row and mint a CareFlow session from already-verified tokens."""
     access_token = tokens["access_token"]
@@ -226,6 +228,7 @@ def _finish_login(db: Session, tokens: dict[str, Any], access_claims: dict[str, 
             user_id=user.id,
             csrf_hash=_hash(csrf_token),
             encryption_key_id=_active_key()[0],
+            client_id=client_id,
             access_token_ciphertext=_encrypt(access_token),
             refresh_token_ciphertext=_encrypt(
                 tokens.get("refresh_token") if isinstance(tokens.get("refresh_token"), str) else None
@@ -272,7 +275,7 @@ def complete_login(db: Session, code: str, state: str, transaction_cookie: str) 
         logger.warning("OIDC login exchange failed (%s)", type(exc).__name__)
         raise Unauthorized("Keycloak could not complete the login.") from exc
 
-    return _finish_login(db, tokens, access_claims, str(transaction.get("return_to")))
+    return _finish_login(db, tokens, access_claims, str(transaction.get("return_to")), settings.OIDC_WEB_CLIENT_ID)
 
 
 def self_register_patient(db: Session, return_to: str | None) -> tuple[LoginSession, str, str]:
@@ -312,7 +315,7 @@ def self_register_patient(db: Session, return_to: str | None) -> tuple[LoginSess
         logger.warning("Self-registration login failed (%s)", type(exc).__name__)
         raise Unauthorized("Could not sign in the new account.") from exc
 
-    session = _finish_login(db, tokens, access_claims, return_to or "/patient")
+    session = _finish_login(db, tokens, access_claims, return_to or "/patient", settings.KEYCLOAK_ADMIN_CLIENT_ID)
     return session, username, password
 
 
@@ -346,14 +349,11 @@ def _refresh(db: Session, row: AuthSession) -> ApplicationUser:
         row.revoked_at = _now()
         db.commit()
         raise Unauthorized("The CareFlow session expired. Sign in again.")
+    refresh_data = {"grant_type": "refresh_token", "client_id": row.client_id, "refresh_token": refresh_token}
+    if row.client_id == settings.KEYCLOAK_ADMIN_CLIENT_ID:
+        refresh_data["client_secret"] = settings.KEYCLOAK_ADMIN_CLIENT_SECRET
     try:
-        tokens = _token_request(
-            {
-                "grant_type": "refresh_token",
-                "client_id": settings.OIDC_WEB_CLIENT_ID,
-                "refresh_token": refresh_token,
-            }
-        )
+        tokens = _token_request(refresh_data)
         access_token = tokens["access_token"]
         if not isinstance(access_token, str):
             raise ValueError("missing access token")
@@ -421,13 +421,13 @@ def principal_from_session(db: Session, request: Request):
     )
 
 
-def revoke_session(db: Session, request: Request) -> str | None:
+def revoke_session(db: Session, request: Request) -> tuple[str | None, str]:
     raw_session = request.cookies.get(SESSION_COOKIE)
     if not raw_session:
-        return None
+        return None, settings.OIDC_WEB_CLIENT_ID
     row = db.query(AuthSession).filter(AuthSession.token_hash == _hash(raw_session)).first()
     if row is None:
-        return None
+        return None, settings.OIDC_WEB_CLIENT_ID
     csrf_cookie = request.cookies.get(CSRF_COOKIE)
     csrf_header = request.headers.get("x-csrf-token")
     if not csrf_cookie or not csrf_header or not hmac.compare_digest(csrf_cookie, csrf_header):
@@ -437,7 +437,7 @@ def revoke_session(db: Session, request: Request) -> str | None:
     id_token = _decrypt(row.id_token_ciphertext)
     row.revoked_at = _now()
     db.commit()
-    return id_token
+    return id_token, row.client_id
 
 
 def revoke_user_sessions(db: Session, user_id) -> int:
@@ -451,9 +451,9 @@ def revoke_user_sessions(db: Session, user_id) -> int:
     return revoked
 
 
-def keycloak_logout_url(id_token: str | None) -> str:
+def keycloak_logout_url(id_token: str | None, client_id: str | None = None) -> str:
     params = {
-        "client_id": settings.OIDC_WEB_CLIENT_ID,
+        "client_id": client_id or settings.OIDC_WEB_CLIENT_ID,
         "post_logout_redirect_uri": f"{settings.FRONTEND_URL.rstrip('/')}/",
     }
     if id_token:

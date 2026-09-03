@@ -45,7 +45,7 @@ export function OverviewTab({ detail }: { detail: CaseDetail }) {
           />
           <CardBody>
             {!s ? (
-              <EmptyState icon={<Icons.file size={20} />} title="No briefing yet" description="Pre-screening has not run for this case." />
+              <EmptyState icon={<Icons.file size={20} />} title="No briefing yet" description="Pre-screening has not run for this visit." />
             ) : (
               <div className="space-y-5">
                 <div>

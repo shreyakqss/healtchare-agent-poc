@@ -6,7 +6,7 @@ import { IconButton } from "@/components/ui/button";
 import { Icons } from "@/components/ui/icons";
 
 export function Dialog({ open, onClose, title, description, children, footer, size = "md" }: {
-  open: boolean; onClose: () => void; title: string; description?: ReactNode; children: ReactNode; footer?: ReactNode; size?: "md" | "lg";
+  open: boolean; onClose: () => void; title: string; description?: ReactNode; children: ReactNode; footer?: ReactNode; size?: "md" | "lg" | "xl";
 }) {
   const ref = useRef<HTMLDialogElement>(null);
   const titleId = `${useId()}-title`;
@@ -29,7 +29,7 @@ export function Dialog({ open, onClose, title, description, children, footer, si
       onClick={(e) => { if (e.target === ref.current) onClose(); }}
       className={cn(
         "m-auto w-[calc(100%-2rem)] rounded-lg border border-line bg-surface p-0 text-fg shadow-pop backdrop:bg-black/50",
-        size === "md" ? "max-w-lg" : "max-w-3xl",
+        size === "md" ? "max-w-lg" : size === "lg" ? "max-w-3xl" : "max-w-6xl",
       )}
     >
       <div className="flex items-start justify-between gap-4 border-b border-line px-5 py-4">

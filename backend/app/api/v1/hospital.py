@@ -4,15 +4,17 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, Depends, File, Response, UploadFile
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from app.agents import llm_available
 from app.api.deps import get_db
+from app.core.errors import NotFound
 from app.schemas.requests import HospitalYamlRequest, NewHospitalRequest
 from app.schemas.responses import RosterDoctor, RosterResponse
 from app.security import CurrentPrincipal, require_active_clinic, require_roles
-from app.services import hospital_config, triage_rules
+from app.services import hospital_config, letterhead, triage_rules
 from app.services.hms import effective_hospital, effective_roster
 
 router = APIRouter(prefix="/hospital", tags=["hospital"])
@@ -31,6 +33,7 @@ def _summary(hospital_id: str) -> dict:
         "departments": len(cfg.get("departments") or []),
         "doctors": len(cfg.get("doctors") or []),
         "rules": len((cfg.get("triage_rules") or {}).get("rules") or []),
+        "has_letterhead": letterhead.exists(hospital_id),
     }
 
 
@@ -53,7 +56,9 @@ def active_config(principal: StaffPrincipal):
     if "clinician" in principal.roles:
         require_active_clinic(principal)
     cfg = hospital_config.load()
-    return {"hospital_id": hospital_config.active_id(), **cfg, "hospital": effective_hospital()}
+    hospital_id = hospital_config.active_id()
+    hospital = {**effective_hospital(), "has_letterhead": letterhead.exists(hospital_id)}
+    return {"hospital_id": hospital_id, **cfg, "hospital": hospital}
 
 
 @router.get("/roster", response_model=RosterResponse)
@@ -121,3 +126,21 @@ def activate(hospital_id: str, _: AdminPrincipal, db: Session = Depends(get_db))
 def delete_hospital(hospital_id: str, _: AdminPrincipal):
     hospital_config.delete(hospital_id)
     return Response(status_code=204)
+
+
+@router.post("/hospitals/{hospital_id}/letterhead")
+async def upload_letterhead(hospital_id: str, _: AdminPrincipal, file: UploadFile = File(...)):
+    content = await file.read(letterhead.MAX_SIZE_BYTES + 1)
+    letterhead.save(hospital_id, file.filename or "letterhead", content)
+    return _summary(hospital_id)
+
+
+@router.get("/hospitals/{hospital_id}/letterhead/file")
+def letterhead_file(hospital_id: str, _: StaffPrincipal):
+    """Any clinician can view it - it renders on the report they draft, not just in the
+    admin editor that uploads it."""
+    try:
+        path = letterhead.path_for(hospital_id)
+    except FileNotFoundError:
+        raise NotFound("No letterhead uploaded for this clinic.") from None
+    return FileResponse(path, content_disposition_type="inline")

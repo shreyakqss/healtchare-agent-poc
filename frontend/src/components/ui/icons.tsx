@@ -34,6 +34,7 @@ export const Icons = {
   image: make(<><rect x="3" y="4" width="18" height="16" rx="2" /><circle cx="9" cy="10" r="1.5" /><path d="m21 16-5-5-9 9" /></>, "Image"),
   search: make(<><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></>, "Search"),
   chevronRight: make(<path d="m9 6 6 6-6 6" />, "ChevronRight"),
+  chevronLeft: make(<path d="m15 6-6 6 6 6" />, "ChevronLeft"),
   chevronDown: make(<path d="m6 9 6 6 6-6" />, "ChevronDown"),
   arrowLeft: make(<><path d="M19 12H5" /><path d="m12 19-7-7 7-7" /></>, "ArrowLeft"),
   arrowRight: make(<><path d="M5 12h14" /><path d="m12 5 7 7-7 7" /></>, "ArrowRight"),

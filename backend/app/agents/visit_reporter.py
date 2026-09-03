@@ -27,6 +27,7 @@ class VisitInputs:
     notes: str
     prescription: str | None
     follow_up: str | None
+    tests_ordered: str | None
 
 
 @lru_cache(maxsize=1)
@@ -45,6 +46,7 @@ def _prompt(i: VisitInputs) -> str:
         f"Department: {i.department or 'n/a'}; Doctor: {i.doctor or 'n/a'}; Mode: {i.consultation_mode}\n\n"
         f"Clinician notes:\n{i.notes}\n\n"
         f"Prescription (clinician's words): {i.prescription or '(none)'}\n"
+        f"Tests/investigations ordered (clinician's words): {i.tests_ordered or '(none)'}\n"
         f"Follow-up instructions (clinician's words): {i.follow_up or '(none)'}\n\n"
         "Write the visit summary."
     )

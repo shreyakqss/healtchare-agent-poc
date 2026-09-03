@@ -113,10 +113,10 @@ def logout(
     response: Response,
     db: Session = Depends(get_db),
 ):
-    id_token = revoke_session(db, request)
+    id_token, client_id = revoke_session(db, request)
     response.delete_cookie(SESSION_COOKIE, **_cookie_options())
     response.delete_cookie(CSRF_COOKIE, **_cookie_options(http_only=False))
-    return {"logout_url": keycloak_logout_url(id_token)}
+    return {"logout_url": keycloak_logout_url(id_token, client_id)}
 
 
 @router.post("/users/{user_id}/revoke-sessions")

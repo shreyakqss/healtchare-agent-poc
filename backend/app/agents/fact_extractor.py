@@ -25,14 +25,23 @@ INSTRUCTIONS = [
     "A condition the patient lives with (diabetes, asthma, hypertension) is a `history` fact even "
     "when mentioned beside the medication taken for it.",
     "One sentence usually carries SEVERAL facts - split it. A described problem gives reason_for_visit, "
-    "symptom and often duration at once.",
+    "symptom and often duration at once. Naming several problems gives one reason_for_visit and one symptom "
+    "fact PER problem - never combine them into a single comma-joined value.",
     'Example - "I want to see a doctor, I\'ve had chest pain since this morning" -> facts: '
     '[reason_for_visit "chest pain", symptom "chest pain", duration "since this morning"].',
+    'Example - "I have fever and body ache tho" -> facts: [reason_for_visit "fever", reason_for_visit '
+    '"body ache", symptom "fever", symptom "body ache"] - two separate problems, not one joined value.',
+    "Write each value the way an attentive clinic receptionist would jot it in the chart from a phone call: "
+    "the patient's own clinical wording, with the small talk, verbal tics and filler naturally left out - "
+    "never a diagnosis, paraphrase or addition of your own.",
     'Example - "I\'m Dev Sharma, 34, male" -> facts: [name "Dev Sharma", age "34", gender "male"].',
     'Example - "I have asthma, I take a salbutamol inhaler twice a day and I\'m allergic to penicillin" -> '
     'facts: [history "asthma"]; allergies_medications: [medication "salbutamol inhaler" (twice a day), '
     'allergy "penicillin"].',
     "Every medicine named goes in allergies_medications as a medication; every allergy as an allergy.",
+    "A vague reference to medications without naming any ('just the prescribed ones', 'whatever the doctor "
+    "gave me', 'my usual') is not a medication name - never invent an entry from it. Leave allergies_medications "
+    "empty for that reply; the assistant will ask which ones by name.",
     "When the clinic's question already named specific medications (e.g. from an uploaded prescription) and "
     "the patient confirms them without repeating the names ('yes, those', 'yes to all of them'), extract each "
     "named medication from the question text as its own medication entry. If the patient names only some of "

@@ -93,6 +93,7 @@ export interface ReviewRequest {
 export interface ConsultationNoteRequest {
   doctor_username: string; doctor_password: string; consultation_mode: "in_person" | "virtual";
   notes: string; prescription?: string; follow_up_instructions?: string;
+  tests_ordered?: string; referral_notes?: string; patient_report?: string;
 }
 export interface FinalizeRequest { finalizer_username: string; finalizer_password: string }
 
@@ -113,7 +114,12 @@ export interface Slot { id: string; practitioner_id: string; department_id: stri
 export interface Routing {
   department_id: string; department_name: string; doctor_id: string | null; doctor_name: string | null;
   appointment_type_id: string; appointment_type_label: string; rationale: string; matched_keywords: string[];
-  suggested_slot: Slot | null;
+  suggested_slot: Slot | null; slot_options: Slot[]; selected_slot_id: string | null;
+}
+export interface PatientRouting {
+  department_id: string; department_name: string; doctor_id: string | null; doctor_name: string | null;
+  appointment_type_id: string; appointment_type_label: string;
+  suggested_slot: Slot | null; slot_options: Slot[]; selected_slot_id: string | null;
 }
 export interface Summary {
   id: string; kind: "prescreening" | "final_visit"; sections: Record<string, unknown>;
@@ -122,7 +128,9 @@ export interface Summary {
 export interface Review { id: string; decision: ReviewDecision; reviewer_id: string; reviewer_role: string; edits: Record<string, string>; comment: string | null; created_at: string }
 export interface ConsultationNote {
   id: string; doctor_id: string; doctor_name: string | null; consultation_mode: "in_person" | "virtual";
-  notes: string; prescription: string | null; follow_up_instructions: string | null; created_at: string;
+  notes: string; prescription: string | null; follow_up_instructions: string | null;
+  tests_ordered: string | null; referral_notes: string | null;
+  patient_report: string | null; created_at: string;
 }
 export interface CareTask { id: string; task_type: string; status: string; priority: Priority; payload: Record<string, unknown>; hms_reference: string | null; notes: string | null; created_at: string }
 export interface Discrepancy {
@@ -136,7 +144,8 @@ export interface CaseListItem {
   case_id: string; session_id: string; status: CaseStatus; priority: Priority | null;
   department_id: string | null; department_name: string | null; doctor_id: string | null; doctor_name: string | null;
   chief_complaint: string | null; demographics: Record<string, string>; hms_patient_id: string | null;
-  review_decision: ReviewDecision | null; missing_count: number; created_at: string; updated_at: string | null;
+  review_decision: ReviewDecision | null; missing_count: number; appointment_start: string | null;
+  created_at: string; updated_at: string | null;
 }
 export interface ActiveIntake extends SessionResponse {
   identity_complete: boolean;
@@ -152,9 +161,12 @@ export interface PatientVisitItem {
   created_at: string; updated_at: string | null;
 }
 
+export interface AssistantTurn { role: "doctor" | "assistant"; content: string }
+export interface AssistantReply { reply: string }
+
 export interface PatientCase {
   case_id: string; status: CaseStatus; review_decision: ReviewDecision | null;
-  routing: Routing | null; final_summary: Record<string, unknown> | null;
+  routing: PatientRouting | null; final_summary: Record<string, unknown> | null;
   consultation_mode: "in_person" | "virtual" | null;
   appointment_reference: string | null; created_at: string;
 }
@@ -189,6 +201,7 @@ export interface HospitalIdentity {
   website?: string | null;
   address?: HMSAddress | null;
   source?: "hms" | "config";
+  has_letterhead?: boolean;
 }
 
 export interface HospitalConfig {
@@ -208,7 +221,7 @@ export interface IntakeConfig {
   required_attachment_kinds: string[];
   llm_configured: boolean;
 }
-export interface HospitalSummary { id: string; name: string; active: boolean; departments: number; doctors: number; rules: number }
+export interface HospitalSummary { id: string; name: string; active: boolean; departments: number; doctors: number; rules: number; has_letterhead: boolean }
 
 /** GET /hospital/roster - the doctors a case can be routed to (live HMS practitioners where known, YAML elsewhere). */
 /** `username` is the clinician's hospital-system login. `id` is a practitioner record id and is

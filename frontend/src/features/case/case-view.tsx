@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { casesApi, type AuditEvent, type CaseDetail } from "@/lib/api";
+import { casesApi, type AuditEvent, type CaseDetail, type HospitalIdentity } from "@/lib/api";
 import { Tabs } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { Icons } from "@/components/ui/icons";
@@ -12,11 +12,14 @@ import { TranscriptTab } from "@/features/case/transcript-tab";
 import { RecordsTab } from "@/features/case/records-tab";
 import { ReviewTab } from "@/features/case/review-tab";
 import { AuditTab } from "@/features/case/audit-tab";
-import { TraceTab } from "@/features/case/trace-tab";
+import { AssistantTab } from "@/features/case/assistant-tab";
+import type { Me } from "@/features/doctor/use-doctor";
 
-type TabId = "overview" | "conversation" | "records" | "review" | "audit" | "trace";
+type TabId = "overview" | "records" | "review" | "conversation" | "audit" | "assistant";
 
-export function CaseView({ initialCase, initialAudit }: { initialCase: CaseDetail; initialAudit: AuditEvent[] }) {
+export function CaseView({ initialCase, initialAudit, doctorContext, me, hospital }: {
+  initialCase: CaseDetail; initialAudit: AuditEvent[]; doctorContext: string; me: Me | null; hospital: HospitalIdentity | null;
+}) {
   const [detail, setDetail] = useState(initialCase);
   const [audit, setAudit] = useState(initialAudit);
   const [tab, setTab] = useState<TabId>("overview");
@@ -38,11 +41,11 @@ export function CaseView({ initialCase, initialAudit }: { initialCase: CaseDetai
 
   const tabs: Array<{ id: TabId; label: string; count?: number }> = [
     { id: "overview", label: "Overview" },
-    { id: "conversation", label: "Conversation", count: detail.transcript.length },
     { id: "records", label: "Facts & records", count: detail.facts.length + detail.allergies_medications.length + detail.attachments.length },
     { id: "review", label: "Review & visit" },
+    { id: "conversation", label: "Conversations", count: detail.transcript.length },
     { id: "audit", label: "Audit trail", count: audit.length },
-    { id: "trace", label: "Agent trace" },
+    { id: "assistant", label: "AI Assistant" },
   ];
 
   return (
@@ -68,11 +71,11 @@ export function CaseView({ initialCase, initialAudit }: { initialCase: CaseDetai
         key={tab}
       >
         {tab === "overview" && <OverviewTab detail={detail} />}
-        {tab === "conversation" && <TranscriptTab detail={detail} />}
         {tab === "records" && <RecordsTab detail={detail} />}
-        {tab === "review" && <ReviewTab detail={detail} />}
+        {tab === "review" && <ReviewTab detail={detail} me={me} onChanged={refresh} hospital={hospital} />}
+        {tab === "conversation" && <TranscriptTab detail={detail} />}
         {tab === "audit" && <AuditTab events={audit} />}
-        {tab === "trace" && <TraceTab detail={detail} events={audit} />}
+        {tab === "assistant" && <AssistantTab caseId={detail.case_id} doctorContext={doctorContext} />}
       </div>
     </div>
   );

@@ -26,6 +26,8 @@ def record_note(db: Session, case: PatientCase, payload: ConsultationNoteRequest
         case_id=case.id, doctor_id=identity.id, doctor_name=identity.name,
         consultation_mode=payload.consultation_mode, notes=payload.notes,
         prescription=payload.prescription, follow_up_instructions=payload.follow_up_instructions,
+        tests_ordered=payload.tests_ordered, referral_notes=payload.referral_notes,
+        patient_report=payload.patient_report,
     )
     db.add(note)
     audit.record(db, case.id, f"doctor:{identity.id}", "consultation.recorded", {

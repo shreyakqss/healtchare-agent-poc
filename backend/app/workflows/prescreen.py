@@ -14,9 +14,9 @@ from app.agents.discrepancy_checker import check as check_discrepancies_llm
 from app.agents.schemas import DiscrepancyResult
 from app.agents.summary_writer import SummaryInputs, write_prescreening
 from app.core.tracing import case_trace
-from app.db import db_session
+from app.db import db_session, utcnow
 from app.domain import routing as routing_rules
-from app.domain import triage_engine
+from app.domain import scheduling, triage_engine
 from app.domain.lifecycle import CaseStatus
 from app.integrations.hms import get_hms
 from app.models import ClinicalDiscrepancy, ClinicalSummary, RoutingRecommendation, TriageResult
@@ -164,8 +164,16 @@ async def navigate_care(step_input: StepInput) -> StepOutput:
         decision = routing_rules.route(
             case_repo.facts(db, case_id), config, urgency["priority"], urgency.get("specialty_hint"),
         )
-        slots = get_hms().available_slots(decision.department["id"], decision.doctor["id"] if decision.doctor else None, limit=1)
-        slot = slots[0].model_dump(mode="json") if slots else None
+        slots = get_hms().available_slots(decision.department["id"], decision.doctor["id"] if decision.doctor else None, limit=8)
+        if not slots and decision.doctor:
+            # This install's HMS has no Slot resource to offer (advisory-only per HMSClient's
+            # contract) - fall back to a synthetic business-hours window on the doctor's
+            # working days rather than leaving the patient with nothing to pick from.
+            slots = scheduling.fallback_slots(
+                decision.department["id"], decision.doctor["id"], decision.doctor.get("working_days") or [], utcnow(),
+            )
+        slot_options = [s.model_dump(mode="json") for s in slots]
+        slot = slot_options[0] if slot_options else None
         db.add(RoutingRecommendation(
             case_id=case_id,
             department_id=decision.department["id"], department_name=decision.department["name"],
@@ -173,6 +181,7 @@ async def navigate_care(step_input: StepInput) -> StepOutput:
             doctor_name=decision.doctor["name"] if decision.doctor else None,
             appointment_type_id=decision.appointment_type["id"], appointment_type_label=decision.appointment_type["label"],
             rationale=decision.rationale, matched_keywords=decision.matched_keywords, suggested_slot=slot,
+            slot_options=slot_options,
         ))
         case.specialty_hint = decision.department["id"]
         audit.record(db, case_id, "system:care_navigator", "routing.recommended",

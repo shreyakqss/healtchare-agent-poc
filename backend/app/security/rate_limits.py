@@ -23,6 +23,7 @@ POLICIES = {
     "attachment.upload": (20, 300),
     "case.prescreen": (10, 600),
     "clinician.verify": (10, 300),
+    "doctor.assistant": (30, 300),
 }
 
 

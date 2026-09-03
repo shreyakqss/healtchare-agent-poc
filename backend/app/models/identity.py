@@ -34,6 +34,7 @@ class AuthSession(Base):
     )
     csrf_hash: Mapped[str] = mapped_column(String(64))
     encryption_key_id: Mapped[str] = mapped_column(String(32), default="legacy", server_default="legacy")
+    client_id: Mapped[str] = mapped_column(String(255), default="careflow-web", server_default="careflow-web")
     access_token_ciphertext: Mapped[str] = mapped_column(Text)
     refresh_token_ciphertext: Mapped[str | None] = mapped_column(Text)
     id_token_ciphertext: Mapped[str | None] = mapped_column(Text)
