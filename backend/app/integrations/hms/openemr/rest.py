@@ -138,6 +138,12 @@ class StandardApi:
         """Facilities on file. OpenEMR flags the one that is a `service_location`."""
         return self._list("facility")
 
+    def calendar_events(self) -> list[dict[str, Any]]:
+        """Every calendar row: provider blocks ("In Office", category 2, no patient) as well as
+        patient appointments. Recurrence rules are not returned, so office hours must be entered
+        as individual (non-repeating) events to be seen here."""
+        return self._list("appointment")
+
     def practitioner_usernames(self) -> dict[str, str]:
         """`{practitioner uuid: login username}` for the clinicians who have one.
 

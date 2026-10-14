@@ -1,5 +1,6 @@
-"""Fallback appointment slots for when the HMS has no real Slot resource to offer (this POC's
-OpenEMR install has none configured). Advisory only, same as a real HMS slot - the patient's pick
+"""Appointment slots for when the HMS has no real Slot resource to offer (this POC's OpenEMR
+install has none): carved from the practitioner's published office hours when the HMS has them,
+else a synthetic business-hours window. Advisory only, same as a real HMS slot - the patient's pick
 still only becomes an appointment *request* at finalize time. Pure: no I/O, no clock of its own."""
 
 from __future__ import annotations
@@ -22,6 +23,35 @@ def chosen_slot(
     options, else the sequential default. Shared by the doctor calendar (serializers.py) and
     the appointment request finalize.py sends to the HMS - both must agree on one slot."""
     return next((s for s in slot_options if s.get("id") == selected_slot_id), suggested_slot)
+
+
+def slots_within_hours(
+    hours: list[tuple[datetime, datetime]],
+    busy: list[tuple[datetime, datetime]],
+    department_id: str,
+    practitioner_id: str,
+    now: datetime,
+    count: int = 8,
+) -> list[HMSSlot]:
+    """Half-hour slots inside the practitioner's published office hours (HMS "In Office"
+    blocks), earliest first, skipping anything already past or overlapping a busy interval
+    (an existing appointment). All datetimes must be timezone-aware."""
+    slots: list[HMSSlot] = []
+    step = timedelta(minutes=INTERVAL_MINUTES)
+    for block_start, block_end in sorted(hours):
+        slot_start = block_start
+        while slot_start + step <= block_end and len(slots) < count:
+            slot_end = slot_start + step
+            if slot_start >= now and not any(b_start < slot_end and slot_start < b_end for b_start, b_end in busy):
+                slots.append(HMSSlot(
+                    id=f"hours-{practitioner_id}-{slot_start.strftime('%Y%m%dT%H%M')}",
+                    practitioner_id=practitioner_id, department_id=department_id,
+                    start=slot_start, end=slot_end,
+                ))
+            slot_start = slot_end
+        if len(slots) >= count:
+            break
+    return slots
 
 
 def fallback_slots(

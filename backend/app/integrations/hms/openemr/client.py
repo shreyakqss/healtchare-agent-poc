@@ -24,13 +24,15 @@ import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlsplit
+from zoneinfo import ZoneInfo
 
 import httpx
 
 from app.core.errors import HMSRejected
+from app.domain import scheduling
 from app.integrations.hms.openemr import fhir
 from app.integrations.hms.openemr.auth import (
     TIMEOUT_SECONDS,
@@ -69,6 +71,40 @@ STATUS_CACHE_SECONDS = 30.0
 _COUNT_PAGE_SIZE = 500
 _MIME_EXTENSIONS = {"text/plain": "txt", "application/json": "json", "application/pdf": "pdf", "text/markdown": "md"}
 APPOINTMENT_REQUEST_TITLE = "CareFlow appointment request"
+# OpenEMR calendar: category 2 is a provider's "In Office" block; a status of "x"/"%" is a
+# cancellation, so that appointment no longer occupies the provider's time.
+IN_OFFICE_CATEGORY_ID = "2"
+_CANCELLED_STATUSES = {"x", "%"}
+
+
+def _event_interval(event: dict[str, Any], tz: ZoneInfo) -> tuple[datetime, datetime] | None:
+    """`(start, end)` of a calendar row in the clinic's timezone - OpenEMR stores bare local times."""
+    try:
+        day = event["pc_eventDate"]
+        start = datetime.fromisoformat(f"{day}T{event['pc_startTime']}").replace(tzinfo=tz)
+        end = datetime.fromisoformat(f"{day}T{event['pc_endTime']}").replace(tzinfo=tz)
+    except (KeyError, TypeError, ValueError):
+        return None
+    return (start, end) if end > start else None
+
+
+def _office_hours_and_busy(
+    events: list[dict[str, Any]], practitioner_id: str, tz: ZoneInfo
+) -> tuple[list[tuple[datetime, datetime]], list[tuple[datetime, datetime]]]:
+    """Split one practitioner's calendar rows into published office hours and booked time."""
+    hours: list[tuple[datetime, datetime]] = []
+    busy: list[tuple[datetime, datetime]] = []
+    for event in events:
+        if event.get("pce_aid_uuid") != practitioner_id:
+            continue
+        interval = _event_interval(event, tz)
+        if interval is None:
+            continue
+        if str(event.get("pc_catid")) == IN_OFFICE_CATEGORY_ID:
+            hours.append(interval)
+        elif event.get("pc_pid") and event.get("pc_apptstatus") not in _CANCELLED_STATUSES:
+            busy.append(interval)
+    return hours, busy
 
 
 def _document_filename(title: str, content_type: str) -> str:
@@ -453,7 +489,18 @@ class FhirHMS:
         return out
 
     def available_slots(self, department_id: str, practitioner_id: str | None = None, limit: int = 5) -> list[HMSSlot]:
-        """Advisory only - an install without a Slot endpoint (404 on 8.3) simply offers no slot."""
+        """Advisory only. A practitioner's "In Office" calendar blocks come first: OpenEMR 8.3
+        has no Slot endpoint (404), so those published hours are the real schedule. Without
+        blocks, a FHIR Slot search; an install with neither simply offers no slot."""
+        if practitioner_id:
+            from app.services import hospital_config  # the clinic's timezone for OpenEMR's bare times
+
+            tz = ZoneInfo(hospital_config.hospital().get("timezone") or "UTC")
+            hours, busy = _office_hours_and_busy(self._rest.calendar_events(), practitioner_id, tz)
+            if hours:
+                return scheduling.slots_within_hours(
+                    hours, busy, department_id, practitioner_id, datetime.now(UTC), count=limit
+                )
         params: dict[str, Any] = {"status": "free", "_count": limit}
         if practitioner_id:
             params["schedule.actor"] = f"Practitioner/{practitioner_id}"

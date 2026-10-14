@@ -51,9 +51,10 @@ class Settings(BaseSettings):
 
     # LLM — every model call goes through app/agents/llm.py (agno OpenAIChat).
     LLM_BASE_URL: str = "https://api.openai.com/v1"
-    LLM_MODEL: str = "gpt-5.4-nano"
+    LLM_MODEL: str = "gpt-4.1-mini"
     LLM_TIMEOUT_SECONDS: float = 120.0
-    LLM_SUPPORTS_EFFORT: bool = True
+    # True only for reasoning models (gpt-5*, o-series); gpt-4.1* rejects reasoning_effort.
+    LLM_SUPPORTS_EFFORT: bool = False
     LLM_EFFORT: str = "low"
     OPENAI_API_KEY: str | None = None
 

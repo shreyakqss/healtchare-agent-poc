@@ -1,158 +1,183 @@
-# Configurable hospital. Everything here is demonstration data for a synthetic
-# POC — no real organisation, clinician, or clinical protocol is represented.
-#
-# One file per clinic in this directory; the file name is the hospital id, and
-# `active.txt` beside them names the one currently live. Edit here and re-run
-# `python scripts/seed.py`, or use the /hospital page — both go through the same
-# validation and the same triage-rule sync.
-
 hospital:
   id: qss-demo-clinic
-  name: QSS Demo Clinic
+  name: Santom Hospital
   timezone: Asia/Kolkata
-
+  phone: '8769987654'
+  email: santonhospital@gmail.com
+  website: null
+  address:
+    line1: '136'
+    line2: null
+    city: delhi
+    state: Choose...
+    postal_code: '110006'
+    country: india
+  source: hms
+  has_letterhead: false
 appointment_types:
-  - id: urgent_slot
-    label: Urgent same-day slot
-    duration_minutes: 20
-  - id: in_person_consult
-    label: In-person consultation
-    duration_minutes: 30
-  - id: video_consult
-    label: Video consultation
-    duration_minutes: 20
-  - id: routine_followup
-    label: Routine follow-up
-    duration_minutes: 15
-
-# Departments are clinic policy: the hospital system has no equivalent concept, and the
-# routing keywords, triage `specialty_hint`s and appointment map below all reference these
-# ids. `specialty_codes` / `specialty_names` are how a practitioner in the hospital system
-# is recognised as belonging to a department - NUCC taxonomy codes first (exact, stable),
-# their names as a fallback for systems that only send text. The department flagged
-# `default: true` also absorbs practitioners whose only specialty is a generic one.
+- id: urgent_slot
+  label: Urgent same-day slot
+  duration_minutes: 20
+- id: in_person_consult
+  label: In-person consultation
+  duration_minutes: 30
+- id: video_consult
+  label: Video consultation
+  duration_minutes: 20
+- id: routine_followup
+  label: Routine follow-up
+  duration_minutes: 15
 departments:
-  - id: general_medicine
-    name: General Medicine
-    default: true
-    specialty_codes: ["207R00000X", "208D00000X", "207Q00000X"]
-    specialty_names: [Internal Medicine, General Practice, Family Medicine]
-  - id: cardiology
-    name: Cardiology
-    specialty_codes: ["207RC0000X"]
-    specialty_names: [Cardiovascular Disease, Cardiology]
-  - id: pulmonology
-    name: Pulmonology
-    specialty_codes: ["207RP1001X"]
-    specialty_names: [Pulmonary Disease, Pulmonology, Respiratory Medicine]
-  - id: orthopedics
-    name: Orthopedics
-    specialty_codes: ["207X00000X"]
-    specialty_names: [Orthopaedic Surgery, Orthopedic Surgery, Orthopaedics]
-  - id: dermatology
-    name: Dermatology
-    specialty_codes: ["207N00000X"]
-    specialty_names: [Dermatology]
-  - id: ent
-    name: ENT
-    specialty_codes: ["207Y00000X"]
-    specialty_names: [Otolaryngology, ENT, Ear Nose and Throat]
-
-# No `doctors:` list: the roster comes from the hospital system (GET /hospital/roster),
-# matched to the departments above by specialty. Add a `doctors:` block here only to cover
-# a department the hospital system has nobody for.
-
-# Keyword -> department. First match wins; unmatched cases fall back to the
-# department flagged `default: true` above.
+- id: general_medicine
+  name: General Medicine
+  default: true
+  specialty_codes:
+  - 207R00000X
+  - 208D00000X
+  - 207Q00000X
+  specialty_names:
+  - Internal Medicine
+  - General Practice
+  - Family Medicine
+- id: cardiology
+  name: Cardiology
+  specialty_codes:
+  - 207RC0000X
+  specialty_names:
+  - Cardiovascular Disease
+  - Cardiology
+- id: pulmonology
+  name: Pulmonology
+  specialty_codes:
+  - 207RP1001X
+  specialty_names:
+  - Pulmonary Disease
+  - Pulmonology
+  - Respiratory Medicine
+- id: orthopedics
+  name: Orthopedics
+  specialty_codes:
+  - 207X00000X
+  specialty_names:
+  - Orthopaedic Surgery
+  - Orthopedic Surgery
+  - Orthopaedics
+- id: dermatology
+  name: Dermatology
+  specialty_codes:
+  - 207N00000X
+  specialty_names:
+  - Dermatology
+- id: ent
+  name: ENT
+  specialty_codes:
+  - 207Y00000X
+  specialty_names:
+  - Otolaryngology
+  - ENT
+  - Ear Nose and Throat
 specialty_map:
   cardiology:
-    [chest pain, palpitations, heart, irregular heartbeat, chest tightness]
+  - chest pain
+  - palpitations
+  - heart
+  - irregular heartbeat
+  - chest tightness
   pulmonology:
-    [shortness of breath, breathlessness, wheezing, persistent cough, asthma]
-  orthopedics: [joint pain, back pain, fracture, knee, shoulder, sprain]
-  dermatology: [rash, skin, itching, hives, acne, lesion]
-  ent: [sore throat, ear pain, sinus, hearing, nasal congestion]
-
-# Administrative urgency only — these decide how soon someone is seen and by
-# which desk, never what is wrong with the patient. The rule engine is the only
-# thing that sets a priority; the LLM writes the explanation prose.
-#
-# Evaluation order is high -> medium -> low; the first matching rule wins, and
-# TR-LOW-000 is the guaranteed fallback so every result carries a rule id.
+  - shortness of breath
+  - breathlessness
+  - wheezing
+  - persistent cough
+  - asthma
+  orthopedics:
+  - joint pain
+  - back pain
+  - fracture
+  - knee
+  - shoulder
+  - sprain
+  dermatology:
+  - rash
+  - skin
+  - itching
+  - hives
+  - acne
+  - lesion
+  ent:
+  - sore throat
+  - ear pain
+  - sinus
+  - hearing
+  - nasal congestion
 triage_rules:
-  version: "2026.08.1"
+  version: 2026.08.1
   rules:
-    - code: TR-HIGH-001
-      priority: high
-      condition:
-        any_symptom:
-          [
-            chest pain,
-            chest tightness,
-            shortness of breath,
-            breathlessness,
-            severe bleeding,
-            fainting,
-            loss of consciousness,
-          ]
-      action: Route to an urgent same-day slot and flag for immediate staff attention.
-      explanation: The patient reported a symptom the clinic has designated for same-day administrative escalation.
-      specialty_hint: cardiology
-
-    - code: TR-HIGH-002
-      priority: high
-      condition:
-        allergy_conflict: true
-      action: Flag the allergy and medication conflict for clinician attention before any appointment is confirmed.
-      explanation: A reported allergy overlaps with a reported current medication, which the clinic always escalates for human review.
-
-    - code: TR-MED-001
-      priority: medium
-      condition:
-        min_duration_days: 14
-      action: Offer an in-person consultation within the week.
-      explanation: The reported symptom duration exceeds the clinic's two-week threshold for a prompt in-person review.
-
-    - code: TR-MED-002
-      priority: medium
-      condition:
-        any_symptom: [fever, persistent cough, vomiting, dizziness]
-        any_history: [diabetes, hypertension, asthma, immunocompromised]
-      action: Offer an in-person consultation within the week.
-      explanation: A reported symptom combined with an existing condition on the clinic's watch list warrants a prompt review.
-
-    - code: TR-LOW-000
-      priority: low
-      condition: {}
-      action: Offer a routine consultation at the next available slot.
-      explanation: No rule for elevated administrative urgency matched, so the case follows the standard routine pathway.
-
-# Which appointment type each priority maps to.
+  - code: TR-HIGH-001
+    priority: high
+    condition:
+      any_symptom:
+      - chest pain
+      - chest tightness
+      - shortness of breath
+      - breathlessness
+      - severe bleeding
+      - fainting
+      - loss of consciousness
+    action: Route to an urgent same-day slot and flag for immediate staff attention.
+    explanation: The patient reported a symptom the clinic has designated for same-day
+      administrative escalation.
+    specialty_hint: cardiology
+  - code: TR-HIGH-002
+    priority: high
+    condition:
+      allergy_conflict: true
+    action: Flag the allergy and medication conflict for clinician attention before
+      any appointment is confirmed.
+    explanation: A reported allergy overlaps with a reported current medication, which
+      the clinic always escalates for human review.
+  - code: TR-MED-001
+    priority: medium
+    condition:
+      min_duration_days: 14
+    action: Offer an in-person consultation within the week.
+    explanation: The reported symptom duration exceeds the clinic's two-week threshold
+      for a prompt in-person review.
+  - code: TR-MED-002
+    priority: medium
+    condition:
+      any_symptom:
+      - fever
+      - persistent cough
+      - vomiting
+      - dizziness
+      any_history:
+      - diabetes
+      - hypertension
+      - asthma
+      - immunocompromised
+    action: Offer an in-person consultation within the week.
+    explanation: A reported symptom combined with an existing condition on the clinic's
+      watch list warrants a prompt review.
+  - code: TR-LOW-000
+    priority: low
+    condition: {}
+    action: Offer a routine consultation at the next available slot.
+    explanation: No rule for elevated administrative urgency matched, so the case
+      follows the standard routine pathway.
 priority_appointment_map:
   high: urgent_slot
   medium: in_person_consult
   low: routine_followup
-
-# Fields the intake assistant must collect before pre-screening can run, asked
-# in this order. The complaint comes first because that is what the patient
-# opened the chat to talk about; the identifying details follow, and one
-# introduction ("I'm Dev Sharma, 34, male") usually closes all three at once.
 required_intake_fields:
-  - reason_for_visit
-  - symptom
-  - duration
-  - name
-  - age
-  - gender
-  - history
-  - medication
-  - allergy
-  - contact_preference
-
-# Documents the clinic asks patients to bring/upload before submitting intake.
-# Empty by design: attaching is offered from the composer's paperclip whenever the patient
-# has something, and nothing is chased. Listing a kind here brings back the prompt that asks
-# for it by name and holds pre-screening until it is uploaded or explicitly skipped
-# (POST /cases/{id}/attachments/skip) - which reads as nagging to a walk-in carrying no
-# paperwork.
+- reason_for_visit
+- symptom
+- duration
+- name
+- age
+- gender
+- history
+- medication
+- allergy
+- contact_preference
 required_attachment_kinds: []
+doctors: []
