@@ -70,7 +70,7 @@ export function AppointmentSlotPicker({ caseId, routing, locked, onUpdated }: {
     () => (routing.slot_options.length ? routing.slot_options : routing.suggested_slot ? [routing.suggested_slot] : []),
     [routing.slot_options, routing.suggested_slot],
   );
-  const [selectedId, setSelectedId] = useState<string | null>(routing.selected_slot_id ?? options[0]?.id ?? null);
+  const [selectedId, setSelectedId] = useState<string | null>(routing.selected_slot_id ?? options.find((s) => !s.taken)?.id ?? null);
   const [pendingId, setPendingId] = useState<string | null>(null);
 
   const days = useMemo(() => {
@@ -94,7 +94,7 @@ export function AppointmentSlotPicker({ caseId, routing, locked, onUpdated }: {
   const [syncedKey, setSyncedKey] = useState(routingKey);
   if (routingKey !== syncedKey) {
     setSyncedKey(routingKey);
-    const next = routing.selected_slot_id ?? options[0]?.id ?? null;
+    const next = routing.selected_slot_id ?? options.find((s) => !s.taken)?.id ?? null;
     setSelectedId(next);
     const slot = options.find((s) => s.id === next) ?? null;
     setActiveDate(slot ? new Date(slot.start) : availableDates[0]);
@@ -108,7 +108,7 @@ export function AppointmentSlotPicker({ caseId, routing, locked, onUpdated }: {
   }
 
   async function pick(slot: Slot) {
-    if (slot.id === selectedId || locked) return;
+    if (slot.id === selectedId || locked || slot.taken) return;
     setPendingId(slot.id);
     try {
       const updated = await casesApi.selectSlot(caseId, slot.id);
@@ -163,18 +163,23 @@ export function AppointmentSlotPicker({ caseId, routing, locked, onUpdated }: {
                 {slots.map((slot) => {
                   const active = slot.id === selectedId;
                   const busy = pendingId === slot.id;
+                  const taken = !active && Boolean(slot.taken);
                   return (
                     <button
                       key={slot.id}
                       type="button"
-                      disabled={locked || pendingId !== null}
+                      disabled={locked || taken || pendingId !== null}
                       onClick={() => void pick(slot)}
                       aria-pressed={active}
+                      aria-label={taken ? `${TIME_LABEL.format(new Date(slot.start))}, already booked` : undefined}
+                      title={taken ? "Already booked by another patient" : undefined}
                       className={cn(
                         "inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-[13px] font-medium transition-colors disabled:cursor-default",
                         active
                           ? "border-brand bg-brand text-brand-fg"
-                          : "border-line bg-surface text-fg hover:border-brand-ring hover:bg-brand-soft disabled:hover:border-line disabled:hover:bg-surface",
+                          : taken
+                            ? "cursor-not-allowed border-line bg-sunken text-fg-subtle line-through opacity-60"
+                            : "border-line bg-surface text-fg hover:border-brand-ring hover:bg-brand-soft disabled:hover:border-line disabled:hover:bg-surface",
                       )}
                     >
                       {busy ? <Spinner className="h-3.5 w-3.5" /> : active ? <Icons.check size={13} /> : null}

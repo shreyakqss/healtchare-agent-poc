@@ -9,6 +9,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.domain import intake_fields, scheduling
+from app.integrations.hms import get_hms
 from app.models import (
     AllergyMedication,
     AuditEvent,
@@ -46,7 +47,7 @@ from app.schemas.responses import (
     TranscriptMessage,
     TriageResponse,
 )
-from app.services import case_repo, hospital_config
+from app.services import case_repo, hospital_config, slot_hold_service
 
 
 def session_out(db: Session, session: IntakeSession, case: PatientCase) -> SessionResponse:
@@ -125,15 +126,18 @@ def routing_out(r: RoutingRecommendation | None) -> RoutingResponse | None:
     )
 
 
-def patient_routing_out(r: RoutingRecommendation | None) -> PatientRoutingResponse | None:
+def patient_routing_out(db: Session, r: RoutingRecommendation | None) -> PatientRoutingResponse | None:
+    """Times are the live list (slot_hold_service.live_options), times other patients hold
+    included but flagged `taken` so the picker greys them out, and the selection is whichever
+    time the case actually holds - the default included - so the picker never highlights another."""
     if r is None:
         return None
     return PatientRoutingResponse(
         department_id=r.department_id, department_name=r.department_name, doctor_id=r.doctor_id, doctor_name=r.doctor_name,
         appointment_type_id=r.appointment_type_id, appointment_type_label=r.appointment_type_label,
         suggested_slot=SlotResponse(**r.suggested_slot) if r.suggested_slot else None,
-        slot_options=[SlotResponse(**s) for s in (r.slot_options or [])],
-        selected_slot_id=r.selected_slot_id,
+        slot_options=[SlotResponse(**s) for s in slot_hold_service.live_options(db, get_hms(), r, include_taken=True)],
+        selected_slot_id=slot_hold_service.current_slot_id(r),
     )
 
 
@@ -230,7 +234,7 @@ def patient_case_detail(db: Session, case: PatientCase) -> PatientCaseResponse:
         # Shown as soon as it exists (not gated on approval) so the patient can pick a
         # slot from the advisory routing while a clinician still reviews the case.
         # Uses the trimmed patient projection - rationale/matched_keywords are rule evidence.
-        routing=patient_routing_out(case_repo.latest_routing(db, case.id)),
+        routing=patient_routing_out(db, case_repo.latest_routing(db, case.id)),
         final_summary=final_summary.sections if final_summary else None,
         consultation_mode=notes[-1].consultation_mode if notes else None,
         appointment_reference=tasks[0].hms_reference if tasks else None,

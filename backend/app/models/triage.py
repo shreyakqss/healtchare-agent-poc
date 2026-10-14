@@ -1,7 +1,8 @@
 import uuid
+from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Boolean, ForeignKey, String, Text, UniqueConstraint, Uuid
+from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text, UniqueConstraint, Uuid
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -62,3 +63,18 @@ class RoutingRecommendation(Base):
     slot_options: Mapped[list[Any]] = mapped_column(JSONB, default=list)
     # Which of slot_options the patient picked; None means the earliest (suggested_slot) stands.
     selected_slot_id: Mapped[str | None] = mapped_column(String(64))
+
+class SlotHold(Base):
+    """One case's claim on one practitioner time. CareFlow never books in the HMS calendar,
+    so this is what keeps two open cases off the same doctor at the same time. The unique
+    (practitioner, start) index is the guard; a case holds at most one time. Released when
+    the case is rejected; a completed case keeps its time."""
+
+    __tablename__ = "slot_holds"
+    __table_args__ = (UniqueConstraint("practitioner_id", "slot_start", name="uq_slot_holds_practitioner_start"),)
+
+    case_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("patient_cases.id", ondelete="CASCADE"), unique=True
+    )
+    practitioner_id: Mapped[str] = mapped_column(String(64), index=True)
+    slot_start: Mapped[datetime] = mapped_column(DateTime(timezone=True))

@@ -110,7 +110,11 @@ export interface Triage {
   evidence: Array<{ rule_code: string; matched_on: string; keyword?: string; text: string; fact_kind: string; days?: number; threshold_days?: number }>;
   created_at: string;
 }
-export interface Slot { id: string; practitioner_id: string; department_id: string; start: string; end: string }
+export interface Slot {
+  id: string; practitioner_id: string; department_id: string; start: string; end: string;
+  /** Another patient holds this time: shown greyed out, not pickable. Patient view only. */
+  taken?: boolean;
+}
 export interface Routing {
   department_id: string; department_name: string; doctor_id: string | null; doctor_name: string | null;
   appointment_type_id: string; appointment_type_label: string; rationale: string; matched_keywords: string[];

@@ -20,7 +20,7 @@ from app.domain import scheduling, triage_engine
 from app.domain.lifecycle import CaseStatus
 from app.integrations.hms import get_hms
 from app.models import ClinicalDiscrepancy, ClinicalSummary, RoutingRecommendation, TriageResult
-from app.services import audit, case_repo, hospital_config, lifecycle, triage_rules
+from app.services import audit, case_repo, hospital_config, lifecycle, slot_hold_service, triage_rules
 from app.services.hms import effective_doctors_config
 from app.workflows.common import case_id_from, complete_step, completed_step, step
 
@@ -164,16 +164,26 @@ async def navigate_care(step_input: StepInput) -> StepOutput:
         decision = routing_rules.route(
             case_repo.facts(db, case_id), config, urgency["priority"], urgency.get("specialty_hint"),
         )
-        slots = get_hms().available_slots(decision.department["id"], decision.doctor["id"] if decision.doctor else None, limit=8)
-        if not slots and decision.doctor:
+        doctor_id = decision.doctor["id"] if decision.doctor else None
+        slot_options = slot_hold_service.open_slots(db, get_hms(), decision.department["id"], doctor_id, 8, excluding_case=case_id)
+        if not slot_options and decision.doctor:
             # This install's HMS has no Slot resource to offer (advisory-only per HMSClient's
             # contract) - fall back to a synthetic business-hours window on the doctor's
             # working days rather than leaving the patient with nothing to pick from.
+            held = len(slot_hold_service.held_starts(db, doctor_id, excluding_case=case_id))
             slots = scheduling.fallback_slots(
                 decision.department["id"], decision.doctor["id"], decision.doctor.get("working_days") or [], utcnow(),
+                count=8 + held,
             )
-        slot_options = [s.model_dump(mode="json") for s in slots]
-        slot = slot_options[0] if slot_options else None
+            slot_options = slot_hold_service.free_of_holds(db, [s.model_dump(mode="json") for s in slots], case_id)[:8]
+        # The default is held too: it is what the doctor's calendar shows for this case.
+        slot = slot_hold_service.hold_first_free(db, case_id, slot_options, "system:care_navigator")
+        if slot is None:
+            # Nothing holdable (no doctor, all taken, or doctor-less slots): a re-route must not
+            # leave the case blocking its previous doctor's time.
+            slot_hold_service.release(db, case_id, "system:care_navigator")
+            if slot_options and not slot_options[0].get("practitioner_id"):
+                slot = slot_options[0]
         db.add(RoutingRecommendation(
             case_id=case_id,
             department_id=decision.department["id"], department_name=decision.department["name"],

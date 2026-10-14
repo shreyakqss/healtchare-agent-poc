@@ -8,7 +8,7 @@ from app.models.clinical import ClinicalDiscrepancy, ClinicalReview, ClinicalSum
 from app.models.facts import AllergyMedication, MedicalAttachment, PatientFact
 from app.models.identity import ApplicationUser, AuthSession, CaseOwner, RateLimitBucket
 from app.models.intake import IntakeMessage, IntakeSession
-from app.models.triage import RoutingRecommendation, TriageResult, TriageRule
+from app.models.triage import RoutingRecommendation, SlotHold, TriageResult, TriageRule
 from app.models.workflow import WorkflowJob, WorkflowOperation
 
 __all__ = [
@@ -30,6 +30,7 @@ __all__ = [
     "IntakeMessage",
     "IntakeSession",
     "RoutingRecommendation",
+    "SlotHold",
     "TriageResult",
     "TriageRule",
     "WorkflowJob",

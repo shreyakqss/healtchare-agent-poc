@@ -125,6 +125,8 @@ class SlotResponse(BaseModel):
     department_id: str
     start: datetime
     end: datetime
+    # Another patient holds this time: shown greyed out in the patient's picker, not pickable.
+    taken: bool = False
 
 
 class DoctorAssistantResponse(BaseModel):
