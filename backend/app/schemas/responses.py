@@ -147,6 +147,11 @@ class RoutingResponse(BaseModel):
     selected_slot_id: str | None
 
 
+class WeeklyHoursResponse(BaseModel):
+    days: list[str]  # mon, tue, ... sharing the hours below
+    times: list[list[str]]  # [["10:00", "13:00"], ...] clinic-local
+
+
 class PatientRoutingResponse(BaseModel):
     department_id: str
     department_name: str
@@ -157,6 +162,8 @@ class PatientRoutingResponse(BaseModel):
     suggested_slot: SlotResponse | None
     slot_options: list[SlotResponse]
     selected_slot_id: str | None
+    # The doctor's weekly consulting hours from the HMS calendar; empty when it publishes none.
+    doctor_hours: list[WeeklyHoursResponse] = []
 
 
 class SummaryResponse(BaseModel):

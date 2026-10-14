@@ -230,6 +230,10 @@ def test_a_time_taken_after_routing_drops_out_and_cannot_be_picked(make_case, do
     with SessionLocal() as db:
         ids = [s["id"] for s in slot_hold_service.live_options(db, get_hms(), routing_of(db, mine))]
         assert target["id"] not in ids and free[0]["id"] in ids  # my own time stays listed
+        shown = slot_hold_service.live_options(db, get_hms(), routing_of(db, mine), include_taken=True)
+        flags = {s["id"]: s["taken"] for s in shown}
+        assert flags[target["id"]] is True and flags[free[0]["id"]] is False  # greyed out, not hidden
+        assert sum(not taken for taken in flags.values()) == 8  # still 8 pickable times
         with pytest.raises(Conflict):
             appointment_service.select_slot(db, db.get(PatientCase, mine), target["id"])
     assert held(mine) == datetime.fromisoformat(free[0]["start"])

@@ -24,7 +24,7 @@ import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
@@ -57,6 +57,7 @@ from app.integrations.hms.schemas import (
     HMSPractitioner,
     HMSSlot,
     HMSStatus,
+    HMSWeeklyHours,
     PatientRegistration,
     VerifiedIdentity,
 )
@@ -508,6 +509,17 @@ class FhirHMS:
             fhir.slot_from_resource(res, department_id=department_id, practitioner_id=practitioner_id)
             for res in self._search_or_empty("Slot", **params)
         ]
+
+    def office_hours(self, practitioner_id: str) -> list[HMSWeeklyHours]:
+        """The weekly pattern of the practitioner's "In Office" blocks over the next two weeks
+        (two, so a day off this week or a one-off block cannot hide a regular working day)."""
+        from app.services import hospital_config  # the clinic's timezone for OpenEMR's bare times
+
+        tz = ZoneInfo(hospital_config.hospital().get("timezone") or "UTC")
+        hours, _ = _office_hours_and_busy(self._rest.calendar_events(), practitioner_id, tz)
+        today = datetime.now(tz).replace(hour=0, minute=0, second=0, microsecond=0)
+        window = [(start, end) for start, end in hours if today <= start < today + timedelta(days=14)]
+        return scheduling.weekly_hours(window)
 
     # --- write side (standard API; drafts only) --------------------------------------
 

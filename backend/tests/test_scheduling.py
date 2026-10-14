@@ -48,3 +48,18 @@ def test_openemr_calendar_rows_split_into_office_hours_and_bookings():
     hours, busy = _office_hours_and_busy(events, "p1", IST)
     assert hours == [(at(15, 11), at(15, 14))]
     assert busy == [(at(15, 12), at(15, 12, 15))]
+
+
+def test_weekly_hours_groups_days_sharing_the_same_hours_monday_first():
+    # 2026-10-12 is a Monday. Two weeks, so a missed day in one week still shows up.
+    blocks = []
+    for week in (0, 7):
+        for day in (12, 13, 14, 15, 16):  # Mon-Fri, split shift
+            blocks += [(at(day + week, 10), at(day + week, 13)), (at(day + week, 16), at(day + week, 19))]
+        blocks.append((at(17 + week, 9), at(17 + week, 12)))  # Saturday morning only
+    hours = scheduling.weekly_hours(blocks)
+    assert [(h.days, h.times) for h in hours] == [
+        (["mon", "tue", "wed", "thu", "fri"], [["10:00", "13:00"], ["16:00", "19:00"]]),
+        (["sat"], [["09:00", "12:00"]]),
+    ]
+    assert scheduling.weekly_hours([]) == []

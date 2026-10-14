@@ -5,7 +5,7 @@ import { casesApi } from "@/lib/api";
 import type { PatientCase, PatientVisitItem } from "@/lib/api";
 import { cn, formatDateTime, shortId } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { Alert, EmptyState, Skeleton } from "@/components/ui/feedback";
+import { Alert, EmptyState, Skeleton, useToast } from "@/components/ui/feedback";
 import { Icons } from "@/components/ui/icons";
 import { PatientResults } from "@/features/intake/patient-results";
 
@@ -19,6 +19,8 @@ export function VisitsPanel({ currentCaseId, initialVisits }: {
   const [refreshing, setRefreshing] = useState(false);
   const [open, setOpen] = useState<string | null>(null);
   const [details, setDetails] = useState<Record<string, Loaded>>({});
+  const [checking, setChecking] = useState<string | null>(null);
+  const toast = useToast();
 
   async function load(caseId: string) {
     setOpen(caseId);
@@ -31,10 +33,42 @@ export function VisitsPanel({ currentCaseId, initialVisits }: {
     }
   }
 
+  // Re-fetch one open visit in place: the loaded card stays up (no skeleton flash) and a failure
+  // keeps what was there. Returns false so callers can say so.
+  async function reloadDetail(caseId: string): Promise<boolean> {
+    try {
+      const detail = await casesApi.patientGet(caseId);
+      setDetails((current) => ({ ...current, [caseId]: detail }));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async function checkVisit(caseId: string) {
+    setChecking(caseId);
+    try {
+      if (!(await reloadDetail(caseId))) toast.push({ tone: "danger", message: "Could not check for updates. Please try again." });
+    } finally {
+      setChecking(null);
+    }
+  }
+
+  // The list alone never changes what an open visit shows (status, appointment times), so
+  // refresh the open one too.
   async function refresh() {
     setRefreshing(true);
     try {
-      setVisits(await casesApi.patientList());
+      const [list, detailOk] = await Promise.all([
+        casesApi.patientList(),
+        open ? reloadDetail(open) : Promise.resolve(true),
+      ]);
+      setVisits(list);
+      toast.push(detailOk
+        ? { tone: "success", message: "Your visits are up to date." }
+        : { tone: "danger", message: "Could not refresh the open visit. Please try again." });
+    } catch {
+      toast.push({ tone: "danger", message: "Could not refresh your visits. Please try again." });
     } finally {
       setRefreshing(false);
     }
@@ -78,7 +112,12 @@ export function VisitsPanel({ currentCaseId, initialVisits }: {
                         <Button size="sm" variant="secondary" className="mt-2" onClick={() => void load(visit.case_id)}>Try again</Button>
                       </Alert>
                     ) : (
-                      <PatientResults detail={detail} onUpdated={() => void load(visit.case_id)} onRefresh={() => void load(visit.case_id)} />
+                      <PatientResults
+                        detail={detail}
+                        onUpdated={(updated) => setDetails((current) => ({ ...current, [visit.case_id]: updated }))}
+                        onRefresh={() => void checkVisit(visit.case_id)}
+                        refreshing={checking === visit.case_id}
+                      />
                     )}
                   </div>
                 ) : null}

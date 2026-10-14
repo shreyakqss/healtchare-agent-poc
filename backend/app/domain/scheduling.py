@@ -7,13 +7,14 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
-from app.integrations.hms.schemas import HMSSlot
+from app.integrations.hms.schemas import HMSSlot, HMSWeeklyHours
 
 START_HOUR = 9
 END_HOUR = 17
 INTERVAL_MINUTES = 30
 MAX_DAYS_AHEAD = 14
 ALL_DAYS = {"mon", "tue", "wed", "thu", "fri"}
+WEEK = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
 
 
 def chosen_slot(
@@ -82,3 +83,21 @@ def fallback_slots(
                 slot_start = slot_end
         cursor = (cursor + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
     return slots
+
+
+def weekly_hours(blocks: list[tuple[datetime, datetime]]) -> list[HMSWeeklyHours]:
+    """A practitioner's published office-hour blocks (clinic-local, aware) as a weekly pattern:
+    days sharing identical hours grouped together, Monday first. Pass a window of at least a
+    week so every working day is seen; a day's hours are the union of what it shows anywhere
+    in the window."""
+    by_day: dict[str, set[tuple[str, str]]] = {}
+    for start, end in blocks:
+        by_day.setdefault(start.strftime("%a").lower(), set()).add((start.strftime("%H:%M"), end.strftime("%H:%M")))
+    groups: dict[tuple[tuple[str, str], ...], list[str]] = {}
+    for day in WEEK:
+        if day in by_day:
+            groups.setdefault(tuple(sorted(by_day[day])), []).append(day)
+    return sorted(
+        (HMSWeeklyHours(days=days, times=[list(t) for t in times]) for times, days in groups.items()),
+        key=lambda h: WEEK.index(h.days[0]),
+    )

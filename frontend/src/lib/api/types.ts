@@ -124,7 +124,11 @@ export interface PatientRouting {
   department_id: string; department_name: string; doctor_id: string | null; doctor_name: string | null;
   appointment_type_id: string; appointment_type_label: string;
   suggested_slot: Slot | null; slot_options: Slot[]; selected_slot_id: string | null;
+  /** The doctor's weekly consulting hours, clinic-local; empty when the hospital publishes none. */
+  doctor_hours?: WeeklyHours[];
 }
+/** Days (mon, tue, ...) sharing the same hours, e.g. times [["10:00", "13:00"], ["16:00", "19:00"]]. */
+export interface WeeklyHours { days: string[]; times: [string, string][] }
 export interface Summary {
   id: string; kind: "prescreening" | "final_visit"; sections: Record<string, unknown>;
   evidence: unknown[]; missing_information: string[]; generated_by: "llm" | "fallback"; created_at: string;

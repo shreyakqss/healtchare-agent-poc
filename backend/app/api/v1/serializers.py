@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 from collections import defaultdict
 
+import httpx
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -46,8 +48,11 @@ from app.schemas.responses import (
     SummaryResponse,
     TranscriptMessage,
     TriageResponse,
+    WeeklyHoursResponse,
 )
 from app.services import case_repo, hospital_config, slot_hold_service
+
+logger = logging.getLogger(__name__)
 
 
 def session_out(db: Session, session: IntakeSession, case: PatientCase) -> SessionResponse:
@@ -138,7 +143,19 @@ def patient_routing_out(db: Session, r: RoutingRecommendation | None) -> Patient
         suggested_slot=SlotResponse(**r.suggested_slot) if r.suggested_slot else None,
         slot_options=[SlotResponse(**s) for s in slot_hold_service.live_options(db, get_hms(), r, include_taken=True)],
         selected_slot_id=slot_hold_service.current_slot_id(r),
+        doctor_hours=[WeeklyHoursResponse(**h.model_dump()) for h in _doctor_hours(r.doctor_id)],
     )
+
+
+def _doctor_hours(doctor_id: str | None) -> list:
+    """Display-only, so an HMS that cannot answer just means no hours shown."""
+    if not doctor_id:
+        return []
+    try:
+        return get_hms().office_hours(doctor_id)
+    except httpx.HTTPError as exc:
+        logger.warning("doctor hours unavailable (%s)", type(exc).__name__)
+        return []
 
 
 def summary_out(s: ClinicalSummary | None) -> SummaryResponse | None:

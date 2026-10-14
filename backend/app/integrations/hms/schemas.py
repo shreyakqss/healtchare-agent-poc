@@ -105,6 +105,13 @@ class HMSSlot(BaseModel):
     end: datetime
 
 
+class HMSWeeklyHours(BaseModel):
+    """Days (FHIR mon/tue/... codes) that share the same clinic-local hours, e.g.
+    days=["mon", "tue"], times=[["10:00", "13:00"], ["16:00", "19:00"]]."""
+    days: list[str]
+    times: list[list[str]]
+
+
 class AppointmentRequest(BaseModel):
     case_id: str
     patient_mrn: str | None
