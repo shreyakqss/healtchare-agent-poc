@@ -2,14 +2,15 @@
 
 import Link from "next/link";
 import { useState } from "react";
-import { casesApi, type CaseListItem, type HospitalConfig, type Roster } from "@/lib/api";
+import { casesApi, type CaseListItem, type HospitalConfig, type Roster, type WeeklyHours } from "@/lib/api";
+import { DoctorHours } from "@/features/scheduling/doctor-hours";
 import { Alert, Avatar, Button, Icons, PriorityBadge, StatusBadge, useToast } from "@/components/ui";
 import { DoctorCalendar } from "@/features/doctor/doctor-calendar";
 import { resolveMe } from "@/features/doctor/use-doctor";
 import { isMine } from "@/features/doctor/worklist";
 
-export function DoctorWorkspace({ initialCases, initialConfig, initialRoster, authenticatedHmsUsername }: {
-  initialCases: CaseListItem[]; initialConfig: HospitalConfig | null; initialRoster: Roster | null;
+export function DoctorWorkspace({ initialCases, initialConfig, initialRoster, initialHours, authenticatedHmsUsername }: {
+  initialCases: CaseListItem[]; initialConfig: HospitalConfig | null; initialRoster: Roster | null; initialHours: WeeklyHours[];
   authenticatedHmsUsername: string | null;
 }) {
   // The roster endpoint merges live hospital-system practitioners over the clinic config; if
@@ -58,7 +59,8 @@ export function DoctorWorkspace({ initialCases, initialConfig, initialRoster, au
         <p className="ml-auto hidden text-xs text-fg-subtle sm:block">Reviews, notes and releases are verified against your hospital-system login.</p>
       </div>
 
-      <div className="flex items-center justify-end">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        {initialHours.length ? <DoctorHours hours={initialHours} /> : <span />}
         <Button variant="secondary" onClick={refreshList} loading={refreshing} icon={<Icons.refresh size={16} />}>
           Refresh
         </Button>

@@ -137,3 +137,14 @@ class NewDoctorRequest(BaseModel):
 
 class ExtendHoursRequest(BaseModel):
     weeks: int = Field(ge=1, le=26)
+
+
+class ChangeHoursRequest(BaseModel):
+    """Admin > Doctors > Edit hours: from `start_date` on, these hours replace what was published."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    days: list[str] = Field(default_factory=list)
+    ranges: list[tuple[str, str]] = Field(default_factory=list)
+    start_date: date
+    weeks: int = Field(ge=1, le=26)

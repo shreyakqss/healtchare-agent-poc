@@ -10,6 +10,7 @@ import type {
   CaseListItem,
   Health,
   AdminDoctors,
+  WeeklyHours,
   HMSStatus,
   HospitalConfig,
   HospitalSummary,
@@ -54,6 +55,7 @@ export const serverApi = {
     audit: (id: string) => serverRequest<AuditEvent[]>(`/cases/${encodeURIComponent(id)}/audit`),
     config: () => serverRequest<HospitalConfig & { hospital_id: string }>("/hospital/config"),
     roster: () => serverRequest<Roster>("/hospital/roster"),
+    myHours: () => serverRequest<WeeklyHours[]>("/hospital/my-hours"),
   },
   admin: {
     hospitals: () => serverRequest<HospitalSummary[]>("/hospital/hospitals"),

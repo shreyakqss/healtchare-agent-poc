@@ -282,6 +282,12 @@ export interface NewDoctorRequest {
   username: string; password: string; npi: string; department_id: string; specialty_code: string; licence: string;
   days: string[]; ranges: [string, string][]; start_date: string; weeks: number;
 }
+export interface ChangeHoursRequest { days: string[]; ranges: [string, string][]; start_date: string; weeks: number }
+export interface HoursChangePreview {
+  problems: string[]; hours: WeeklyHours[]; hours_until: string | null;
+  /** Clinic-local times patients already hold that the new hours leave out (their holds are kept). */
+  held_outside: string[];
+}
 export interface DoctorPreview {
   problems: string[]; clinic: { id: string; name: string }; hours: WeeklyHours[]; blocks: number; hours_until: string | null;
 }

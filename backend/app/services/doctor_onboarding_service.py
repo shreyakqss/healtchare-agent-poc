@@ -27,8 +27,8 @@ from app.domain import provider as rules
 from app.domain import scheduling
 from app.integrations.hms.openemr import fhir, provisioning
 from app.integrations.keycloak import admin_client
-from app.models import ConsultationNote, IntakeSession, PatientCase, RoutingRecommendation
-from app.schemas.requests import NewDoctorRequest
+from app.models import ConsultationNote, IntakeSession, PatientCase, RoutingRecommendation, SlotHold
+from app.schemas.requests import ChangeHoursRequest, NewDoctorRequest
 from app.security.oidc import CurrentPrincipal
 from app.services import audit, hospital_config
 
@@ -227,6 +227,64 @@ def extend_hours(db: Session, principal: CurrentPrincipal, provider_id: int, wee
     provisioning.add_office_blocks(provider_id, clinic.facility_id, new)
     audit.record_admin(db, clinic.id, _actor(principal), "doctor.hours_extended", {
         "openemr_user_id": provider_id, "weeks": weeks, "hours_until": str(max(d for d, _, _ in new)),
+    })
+    db.commit()
+    return next(d for d in list_doctors(clinic) if d["id"] == provider_id)
+
+
+def _held_outside(db: Session, clinic: Clinic, practitioner_id: str, from_day: date,
+                  blocks: list[provisioning.Block]) -> list[datetime]:
+    """Times patients already hold with this doctor, on or after `from_day`, that the new hours
+    no longer cover. Those holds stay (CareFlow never moves a patient's time by itself)."""
+    covered = [
+        (datetime.combine(d, s, clinic.timezone), datetime.combine(d, e, clinic.timezone)) for d, s, e in blocks
+    ]
+    out = []
+    for (start,) in db.query(SlotHold.slot_start).filter(SlotHold.practitioner_id == practitioner_id):
+        local = start.astimezone(clinic.timezone)
+        if local.date() < from_day:
+            continue
+        end = local + timedelta(minutes=scheduling.INTERVAL_MINUTES)
+        if not any(s <= local and end <= e for s, e in covered):
+            out.append(local)
+    return sorted(out)
+
+
+def _hours_change(db: Session, clinic: Clinic, provider_id: int, form: ChangeHoursRequest):
+    doctor = _own_doctor(clinic, provider_id)
+    found = rules.hours_problems(form.days, form.ranges)
+    if form.start_date < clinic.today():
+        found.append("New hours cannot start in the past.")
+    if not doctor.active:
+        found.append("Reactivate this doctor before changing their hours.")
+    blocks = [] if found else rules.expand_hours(form.days, form.ranges, form.start_date, form.weeks)
+    stranded = _held_outside(db, clinic, doctor.uuid, form.start_date, blocks) if blocks else []
+    return doctor, blocks, found, stranded
+
+
+def preview_hours(db: Session, principal: CurrentPrincipal, provider_id: int, form: ChangeHoursRequest) -> dict[str, Any]:
+    """The new hours as patients will see them, and whose held times they would leave out. Writes nothing."""
+    clinic = clinic_for(principal)
+    _, blocks, found, stranded = _hours_change(db, clinic, provider_id, form)
+    return {
+        "problems": found,
+        "hours": _weekly(clinic, blocks, form.start_date),
+        "hours_until": max((d for d, _, _ in blocks), default=None),
+        "held_outside": [t.isoformat() for t in stranded],
+    }
+
+
+def change_hours(db: Session, principal: CurrentPrincipal, provider_id: int, form: ChangeHoursRequest) -> dict[str, Any]:
+    """Replace the doctor's published hours from `start_date` on. Earlier days, booked
+    appointments and times patients already hold are kept."""
+    clinic = clinic_for(principal)
+    doctor, blocks, found, stranded = _hours_change(db, clinic, provider_id, form)
+    if found:
+        raise Unprocessable(" ".join(found))
+    provisioning.replace_office_blocks(doctor.id, clinic.facility_id, form.start_date, blocks)
+    audit.record_admin(db, clinic.id, _actor(principal), "doctor.hours_changed", {
+        "openemr_user_id": doctor.id, "days": form.days, "ranges": [list(r) for r in form.ranges],
+        "from": str(form.start_date), "hours_until": str(blocks[-1][0]), "held_outside": len(stranded),
     })
     db.commit()
     return next(d for d in list_doctors(clinic) if d["id"] == provider_id)

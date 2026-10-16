@@ -288,6 +288,25 @@ def add_office_blocks(user_id: int, facility_id: int, blocks: list[Block]) -> No
         _insert_blocks(cur, user_id, facility_id, blocks)
 
 
+# The rows `_insert_blocks` writes: one-off "In Office" blocks and their zero-length "Out Of
+# Office" closers, never a patient's appointment and never a repeating series.
+_OWN_HOURS = (
+    "e.pc_aid = %s AND e.pc_eventDate >= %s AND e.pc_recurrtype = 0"
+    " AND (e.pc_pid = '' OR e.pc_pid IS NULL)"
+    " AND (e.pc_catid = %s OR (e.pc_catid = %s AND e.pc_duration = 0 AND e.pc_startTime = e.pc_endTime))"
+)
+
+
+def replace_office_blocks(user_id: int, facility_id: int, from_day: date, blocks: list[Block]) -> None:
+    """From `from_day` on, the doctor's published hours become exactly `blocks`, all or nothing.
+    Earlier days and booked appointments are left alone."""
+    args = (str(user_id), from_day, IN_OFFICE, OUT_OF_OFFICE)
+    with _transaction() as cur:
+        cur.execute(f"DELETE r FROM uuid_registry r JOIN openemr_postcalendar_events e ON e.uuid = r.uuid WHERE {_OWN_HOURS}", args)
+        cur.execute(f"DELETE e FROM openemr_postcalendar_events e WHERE {_OWN_HOURS}", args)
+        _insert_blocks(cur, user_id, facility_id, blocks)
+
+
 def delete_provider(user_id: int) -> None:
     """Undo `create_provider` - the rollback when a later step (Keycloak) fails."""
     with _transaction() as cur:

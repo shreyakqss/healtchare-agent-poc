@@ -1,6 +1,6 @@
 import { API_ROOT, http, readCookie, readSse } from "@/lib/api/client";
 import type {
-  AdminDoctor, AdminDoctors, DoctorPreview, DoctorRemoval, DoctorRemovalCheck, NewDoctorRequest, AppointmentRequestResult, AssistantReply, AssistantTurn, Attachment, AttachmentSkipResponse, AuditEvent, CaseDetail,
+  AdminDoctor, AdminDoctors, ChangeHoursRequest, DoctorPreview, HoursChangePreview, DoctorRemoval, DoctorRemovalCheck, NewDoctorRequest, AppointmentRequestResult, AssistantReply, AssistantTurn, Attachment, AttachmentSkipResponse, AuditEvent, CaseDetail,
   CaseListItem, ConsultationNote, ConsultationNoteRequest, FinalizeRequest, HMSPractitioner, HMSStatus, HospitalConfig,
   HospitalSummary, IdentityFormRequest, IntakeConfig, LinkedPatientRecord, MessageResponse, PatientCase, PatientVisitItem,
   Review, ReviewRequest, Roster, SessionResponse, Slot, TurnEvent,
@@ -90,6 +90,8 @@ export const adminDoctorsApi = {
   preview: (body: NewDoctorRequest) => http.post<DoctorPreview>("/admin/doctors/preview", body),
   create: (body: NewDoctorRequest) => http.post<AdminDoctor>("/admin/doctors", body),
   extendHours: (id: number, weeks: number) => http.post<AdminDoctor>(`/admin/doctors/${id}/extend-hours`, { weeks }),
+  previewHours: (id: number, body: ChangeHoursRequest) => http.post<HoursChangePreview>(`/admin/doctors/${id}/hours/preview`, body),
+  changeHours: (id: number, body: ChangeHoursRequest) => http.put<AdminDoctor>(`/admin/doctors/${id}/hours`, body),
   removalCheck: (id: number) => http.get<DoctorRemovalCheck>(`/admin/doctors/${id}/removal`),
   remove: (id: number) => http.del<DoctorRemoval>(`/admin/doctors/${id}`),
   reactivate: (id: number) => http.post<AdminDoctor>(`/admin/doctors/${id}/reactivate`),

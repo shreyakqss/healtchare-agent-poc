@@ -3,7 +3,7 @@ OpenEMR and Keycloak (test instances only) and removes every doctor it creates."
 
 import random
 import uuid
-from datetime import date, time, timedelta
+from datetime import date, datetime, time, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -16,7 +16,7 @@ from app.integrations.hms.openemr import provisioning
 from app.integrations.keycloak import admin_client
 from app.main import app
 from app.models import AdminAuditEvent
-from app.schemas.requests import NewDoctorRequest
+from app.schemas.requests import ChangeHoursRequest, NewDoctorRequest
 from app.security import CurrentPrincipal, authenticate
 from app.services import doctor_onboarding_service as onboarding
 from tests.helpers import BASE
@@ -109,6 +109,9 @@ def test_only_admins_reach_the_doctor_endpoints():
             user_id=p.user_id, subject=p.subject, roles=frozenset({r}), clinic_id=CLINIC, auth_method="test")
         assert client.get(f"{BASE}/admin/doctors").status_code == 403
         assert client.post(f"{BASE}/admin/doctors", json=form().model_dump(mode="json")).status_code == 403
+        change = {"days": ["mon"], "ranges": [["10:00", "12:00"]], "start_date": str(date.today()), "weeks": 1}
+        assert client.put(f"{BASE}/admin/doctors/1/hours", json=change).status_code == 403
+        assert client.post(f"{BASE}/admin/doctors/1/hours/preview", json=change).status_code == 403
     client.close()
 
 
@@ -283,3 +286,72 @@ def test_open_cases_block_removal(created):
         assert provisioning.provider(3, doctor["id"]).active
     finally:
         _drop_session(open_case)
+
+
+# --- hours: editable by admins only ---------------------------------------------------------
+
+def _next(weekday: int) -> date:
+    today = date.today()
+    return today + timedelta(days=(weekday - today.weekday()) % 7 or 7)
+
+
+@pytest.mark.integration
+def test_admin_replaces_hours_from_a_date_and_earlier_days_are_kept(created):
+    new = form(days=["mon", "tue", "wed", "thu", "fri"], ranges=[("10:00", "13:00")], start_date=date.today(), weeks=3)
+    created.append(new.username)
+    with SessionLocal() as db:
+        doctor = onboarding.create(db, admin(), new)
+    before = provisioning.office_blocks(doctor["id"])
+    switch = _next(0) + timedelta(days=7)  # a Monday at least a week out
+    change = ChangeHoursRequest(days=["tue", "thu"], ranges=[("15:00", "17:00"), ("09:00", "11:00")], start_date=switch, weeks=2)
+    with SessionLocal() as db:
+        preview = onboarding.preview_hours(db, admin(), doctor["id"], change)
+        assert preview["problems"] == [] and preview["held_outside"] == []
+        updated = onboarding.change_hours(db, admin(), doctor["id"], change)
+    after = provisioning.office_blocks(doctor["id"])
+    assert sorted(b for b in after if b[0] < switch) == sorted(b for b in before if b[0] < switch)
+    later = sorted(b for b in after if b[0] >= switch)
+    assert {b[0].weekday() for b in later} == {1, 3} and len(later) == 2 * 2 * 2
+    assert {(b[1], b[2]) for b in later} == {(time(9), time(11)), (time(15), time(17))}
+    assert updated["hours_until"] == max(b[0] for b in later)
+    with SessionLocal() as db:
+        event = db.query(AdminAuditEvent).filter(AdminAuditEvent.action == "doctor.hours_changed",
+                                                 AdminAuditEvent.payload["openemr_user_id"].astext == str(doctor["id"])).one()
+        assert event.payload["from"] == str(switch)
+
+
+@pytest.mark.integration
+def test_changing_hours_warns_about_held_times_it_leaves_out_and_refuses_bad_input(created):
+    from zoneinfo import ZoneInfo
+
+    from app.models import SlotHold
+    new = form(days=["mon", "tue", "wed", "thu", "fri"], ranges=[("10:00", "13:00")], weeks=3)
+    created.append(new.username)
+    with SessionLocal() as db:
+        doctor = onboarding.create(db, admin(), new)
+        clinic = onboarding.clinic_for(admin())
+    session_id = _case_routed_to(doctor["practitioner_id"], "NEEDS_REVIEW")
+    monday = _next(0)
+    held_at = datetime.combine(monday, time(10, 30), clinic.timezone)
+    try:
+        with SessionLocal() as db:
+            from app.models import PatientCase
+            case_id = db.query(PatientCase.id).filter(PatientCase.session_id == session_id).scalar()
+            db.add(SlotHold(case_id=case_id, practitioner_id=doctor["practitioner_id"], slot_start=held_at))
+            db.commit()
+            afternoons = ChangeHoursRequest(days=["mon"], ranges=[("14:00", "16:00")], start_date=monday, weeks=1)
+            mornings = ChangeHoursRequest(days=["mon"], ranges=[("10:00", "12:00")], start_date=monday, weeks=1)
+            stranded = onboarding.preview_hours(db, admin(), doctor["id"], afternoons)["held_outside"]
+            assert [datetime.fromisoformat(t) for t in stranded] == [held_at.astimezone(ZoneInfo(str(clinic.timezone)))]
+            assert onboarding.preview_hours(db, admin(), doctor["id"], mornings)["held_outside"] == []
+            for bad in (
+                ChangeHoursRequest(days=["mon"], ranges=[("10:00", "12:00")], start_date=date.today() - timedelta(days=1), weeks=1),
+                ChangeHoursRequest(days=[], ranges=[("10:00", "12:00")], start_date=monday, weeks=1),
+                ChangeHoursRequest(days=["mon"], ranges=[("12:00", "10:00")], start_date=monday, weeks=1),
+            ):
+                with pytest.raises(Unprocessable):
+                    onboarding.change_hours(db, admin(), doctor["id"], bad)
+            with pytest.raises(NotFound):
+                onboarding.change_hours(db, admin(), 1, mornings)  # not a doctor at this hospital
+    finally:
+        _drop_session(session_id)

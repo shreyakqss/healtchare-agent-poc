@@ -1,4 +1,4 @@
-"""Admin > Doctors: list, check, add, and extend the hours of the admin's own hospital's doctors."""
+"""Admin > Doctors: list, check, add, and change the hours of the admin's own hospital's doctors."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
-from app.schemas.requests import ExtendHoursRequest, NewDoctorRequest
+from app.schemas.requests import ChangeHoursRequest, ExtendHoursRequest, NewDoctorRequest
 from app.security import CurrentPrincipal, require_roles
 from app.services import doctor_onboarding_service as onboarding
 
@@ -41,6 +41,17 @@ def create(body: NewDoctorRequest, principal: AdminPrincipal, db: Session = Depe
 @router.post("/{provider_id}/extend-hours")
 def extend_hours(provider_id: int, body: ExtendHoursRequest, principal: AdminPrincipal, db: Session = Depends(get_db)):
     return onboarding.extend_hours(db, principal, provider_id, body.weeks)
+
+
+@router.post("/{provider_id}/hours/preview")
+def preview_hours(provider_id: int, body: ChangeHoursRequest, principal: AdminPrincipal, db: Session = Depends(get_db)):
+    """The new hours as patients will see them, and held times they would leave out. Writes nothing."""
+    return onboarding.preview_hours(db, principal, provider_id, body)
+
+
+@router.put("/{provider_id}/hours")
+def change_hours(provider_id: int, body: ChangeHoursRequest, principal: AdminPrincipal, db: Session = Depends(get_db)):
+    return onboarding.change_hours(db, principal, provider_id, body)
 
 
 @router.get("/{provider_id}/removal")

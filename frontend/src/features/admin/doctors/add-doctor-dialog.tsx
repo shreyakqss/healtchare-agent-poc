@@ -3,13 +3,9 @@
 import { useState } from "react";
 import { adminDoctorsApi, ApiError } from "@/lib/api";
 import type { AdminDoctor, DoctorDepartmentOption, DoctorPreview, NewDoctorRequest } from "@/lib/api/types";
-import { cn } from "@/lib/utils";
-import { Alert, Button, Dialog, Field, IconButton, Icons, Input, KeyValue, SectionTitle, Select } from "@/components/ui";
+import { Alert, Button, Dialog, Field, Icons, Input, KeyValue, SectionTitle, Select } from "@/components/ui";
 import { DoctorHours } from "@/features/scheduling/doctor-hours";
-
-const WEEK = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
-const WEEK_OPTIONS = [4, 8, 12, 26];
-const MAX_RANGES = 3;
+import { HoursFields, hoursIssue, sortedRanges } from "@/features/admin/doctors/hours-fields";
 
 type Draft = NewDoctorRequest;
 
@@ -35,12 +31,8 @@ function draftIssues(d: Draft, confirm: string): Partial<Record<IssueKey, string
   if (confirm !== d.password) issues.confirm = "Passwords do not match";
   if (!/^\d{10}$/.test(d.npi)) issues.npi = "10 digits";
   if (!d.specialty_code) issues.specialty_code = "Pick a specialty";
-  if (!d.days.length) issues.hours = "Pick at least one working day";
-  else if (d.ranges.some(([s, e]) => !s || !e || e <= s)) issues.hours = "Each range must end after it starts";
-  else {
-    const sorted = [...d.ranges].sort(([a], [b]) => a.localeCompare(b));
-    if (sorted.some(([s], i) => i > 0 && s < sorted[i - 1][1])) issues.hours = "Time ranges overlap";
-  }
+  const hours = hoursIssue(d);
+  if (hours) issues.hours = hours;
   return issues;
 }
 
@@ -61,7 +53,7 @@ export function AddDoctorDialog({ open, onClose, onCreated, clinic, departments 
   const set = (patch: Partial<Draft>) => setDraft((d) => ({ ...d, ...patch }));
   const department = departments.find((d) => d.department_id === draft.department_id);
   const specialtyTitle = department?.specialties.find((s) => s.code === draft.specialty_code)?.title;
-  const body = (): NewDoctorRequest => ({ ...draft, ranges: [...draft.ranges].sort(([a], [b]) => a.localeCompare(b)) });
+  const body = (): NewDoctorRequest => ({ ...draft, ranges: sortedRanges(draft.ranges) });
 
   function close() {
     if (busy) return;
@@ -165,62 +157,8 @@ export function AddDoctorDialog({ open, onClose, onCreated, clinic, departments 
 
           <section className="space-y-3">
             <SectionTitle>Consulting hours</SectionTitle>
-            <div className="grid gap-5 lg:grid-cols-[1fr_auto]">
-              <div className="space-y-4">
-                <div>
-                  <p className="mb-1.5 text-sm font-medium">Working days</p>
-                  <div className="flex flex-wrap gap-1" role="group" aria-label="Working days">
-                    {WEEK.map((day) => {
-                      const on = draft.days.includes(day);
-                      return (
-                        <button key={day} type="button" aria-pressed={on}
-                          onClick={() => set({ days: on ? draft.days.filter((x) => x !== day) : WEEK.filter((x) => x === day || draft.days.includes(x)) })}
-                          className={cn("h-8 w-11 rounded-sm text-xs font-medium uppercase transition-colors", on ? "bg-brand text-brand-fg" : "bg-sunken text-fg-muted hover:text-fg")}>
-                          {day}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-                <div>
-                  <p className="mb-1.5 text-sm font-medium">Time ranges <span className="font-normal text-fg-subtle">(clinic time)</span></p>
-                  <div className="space-y-2">
-                    {draft.ranges.map(([start, end], i) => (
-                      <div key={i} className="flex items-center gap-2">
-                        <Input type="time" step={1800} aria-label={`Range ${i + 1} start`} className="h-9 w-32 tabular-nums" value={start}
-                          onChange={(e) => set({ ranges: draft.ranges.map((r, j) => (j === i ? [e.target.value, r[1]] : r)) })} />
-                        <span className="text-fg-subtle" aria-hidden>–</span>
-                        <Input type="time" step={1800} aria-label={`Range ${i + 1} end`} className="h-9 w-32 tabular-nums" value={end}
-                          onChange={(e) => set({ ranges: draft.ranges.map((r, j) => (j === i ? [r[0], e.target.value] : r)) })} />
-                        <IconButton size="sm" label="Remove range" icon={<Icons.trash size={14} />} disabled={draft.ranges.length === 1}
-                          onClick={() => set({ ranges: draft.ranges.filter((_, j) => j !== i) })} />
-                      </div>
-                    ))}
-                  </div>
-                  {draft.ranges.length < MAX_RANGES ? (
-                    <Button size="sm" variant="ghost" className="mt-2" icon={<Icons.plus size={14} />}
-                      onClick={() => set({ ranges: [...draft.ranges, ["", ""]] })}>Add range</Button>
-                  ) : null}
-                </div>
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <Field label="Starting" required htmlFor="d-start">
-                    <Input id="d-start" type="date" min={clinic.today} value={draft.start_date} onChange={(e) => set({ start_date: e.target.value })} />
-                  </Field>
-                  <Field label="Publish for" required htmlFor="d-weeks" hint="Extend later from the doctors list.">
-                    <Select id="d-weeks" value={draft.weeks} onChange={(e) => set({ weeks: Number(e.target.value) })}>
-                      {WEEK_OPTIONS.map((w) => <option key={w} value={w}>{w} weeks</option>)}
-                    </Select>
-                  </Field>
-                </div>
-                {show("hours") ? <p role="alert" className="text-xs text-danger">{show("hours")}</p> : null}
-              </div>
-              <div>
-                <p className="mb-1.5 text-sm font-medium">What patients will see</p>
-                {draft.days.length && !issues.hours ? (
-                  <DoctorHours hours={[{ days: draft.days, times: [...draft.ranges].sort(([a], [b]) => a.localeCompare(b)) }]} />
-                ) : <p className="text-xs text-fg-subtle">Pick days and valid times to preview.</p>}
-              </div>
-            </div>
+            <HoursFields value={draft} onChange={set} today={clinic.today} error={show("hours")} idPrefix="d"
+              weeksHint="Change or extend later from the doctors list." />
           </section>
         </div>
       ) : preview ? (

@@ -10,9 +10,10 @@ from sqlalchemy.orm import Session
 
 from app.agents import llm_available
 from app.api.deps import get_db
+from app.api.v1.serializers import _doctor_hours
 from app.core.errors import NotFound
 from app.schemas.requests import HospitalYamlRequest, NewHospitalRequest
-from app.schemas.responses import RosterDoctor, RosterResponse
+from app.schemas.responses import RosterDoctor, RosterResponse, WeeklyHoursResponse
 from app.security import CurrentPrincipal, require_active_clinic, require_roles
 from app.services import hospital_config, letterhead, triage_rules
 from app.services.hms import effective_hospital, effective_roster
@@ -77,6 +78,17 @@ def roster(principal: ClinicianPrincipal):
             for d in doctors
         ],
     )
+
+
+@router.get("/my-hours", response_model=list[WeeklyHoursResponse])
+def my_hours(principal: ClinicianPrincipal):
+    """The signed-in doctor's own weekly consulting hours, read-only. Only an admin changes them."""
+    require_active_clinic(principal)
+    if not principal.hms_username:
+        return []
+    _, doctors = effective_roster()
+    me = next((d for d in doctors if (d.get("username") or "").casefold() == principal.hms_username.casefold()), None)
+    return [WeeklyHoursResponse(**h.model_dump()) for h in _doctor_hours(me["id"] if me else None)]
 
 
 @router.get("/hospitals")

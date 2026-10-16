@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 import { PageHeader } from "@/components/layout/page-header";
 import { clockLabel, daysLabel } from "@/features/scheduling/doctor-hours";
 import { AddDoctorDialog } from "@/features/admin/doctors/add-doctor-dialog";
+import { EditHoursDialog } from "@/features/admin/doctors/edit-hours-dialog";
 
 const WEEK_OPTIONS = [4, 8, 12, 26];
 const RUNNING_LOW_DAYS = 14;
@@ -46,6 +47,7 @@ export function DoctorsConsole({ initial }: { initial: AdminDoctors }) {
   const [doctors, setDoctors] = useState(initial.doctors);
   const [adding, setAdding] = useState(false);
   const [extending, setExtending] = useState<AdminDoctor | null>(null);
+  const [editing, setEditing] = useState<AdminDoctor | null>(null);
   const [weeks, setWeeks] = useState(8);
   const [saving, setSaving] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -122,7 +124,7 @@ export function DoctorsConsole({ initial }: { initial: AdminDoctors }) {
         ) : (
           <Table regionLabel="Doctors">
             <thead>
-              <tr><Th>Doctor</Th><Th>Department</Th><Th>NPI</Th><Th>Consulting hours</Th><Th>Login</Th><Th className="w-32"><span className="sr-only">Actions</span></Th></tr>
+              <tr><Th>Doctor</Th><Th>Department</Th><Th>NPI</Th><Th>Consulting hours</Th><Th>Login</Th><Th className="w-56"><span className="sr-only">Actions</span></Th></tr>
             </thead>
             <tbody>
               {doctors.map((d) => (
@@ -146,6 +148,7 @@ export function DoctorsConsole({ initial }: { initial: AdminDoctors }) {
                   <Td className="text-right">
                     {d.active ? (
                       <div className="flex items-center justify-end gap-1">
+                        <Button size="sm" variant="secondary" icon={<Icons.clock size={14} />} onClick={() => setEditing(d)}>Edit hours</Button>
                         <Button size="sm" variant="secondary" icon={<Icons.calendar size={14} />} disabled={!d.can_extend}
                           title={d.can_extend ? undefined : "No published hours to continue"}
                           onClick={() => { setWeeks(8); setExtending(d); }}>Extend hours</Button>
@@ -216,6 +219,15 @@ export function DoctorsConsole({ initial }: { initial: AdminDoctors }) {
           </div>
         )}
       </Dialog>
+
+      {editing ? (
+        <EditHoursDialog key={editing.id} doctor={editing} today={clinic.today} onClose={() => setEditing(null)}
+          onSaved={(updated) => {
+            setDoctors((list) => list.map((d) => (d.id === updated.id ? updated : d)));
+            toast.push({ tone: "success", message: `${updated.name}'s new hours are published until ${dateLabel(updated.hours_until ?? "")}.` });
+            setEditing(null);
+          }} />
+      ) : null}
 
       <Dialog open={extending !== null} onClose={() => setExtending(null)} title="Extend consulting hours"
         description={extending ? `Publish ${extending.name}'s current weekly hours for more weeks.` : undefined}
