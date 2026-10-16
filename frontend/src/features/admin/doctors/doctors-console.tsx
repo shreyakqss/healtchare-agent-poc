@@ -2,15 +2,14 @@
 
 import { useState } from "react";
 import { adminDoctorsApi, ApiError } from "@/lib/api";
-import type { AdminDoctor, AdminDoctors, DoctorRemovalCheck } from "@/lib/api/types";
-import { Alert, Badge, Button, Card, CardHeader, Dialog, EmptyState, Field, IconButton, Icons, Select, Skeleton, Table, Td, Th, useToast } from "@/components/ui";
+import type { AdminDoctor, AdminDoctors, DoctorDetails, DoctorRemovalCheck } from "@/lib/api/types";
+import { Alert, Badge, Button, Card, CardHeader, Dialog, EmptyState, IconButton, Icons, Skeleton, Table, Td, Th, useToast } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import { PageHeader } from "@/components/layout/page-header";
 import { clockLabel, daysLabel } from "@/features/scheduling/doctor-hours";
 import { AddDoctorDialog } from "@/features/admin/doctors/add-doctor-dialog";
-import { EditHoursDialog } from "@/features/admin/doctors/edit-hours-dialog";
+import { EditDoctorDialog } from "@/features/admin/doctors/edit-doctor-dialog";
 
-const WEEK_OPTIONS = [4, 8, 12, 26];
 const RUNNING_LOW_DAYS = 14;
 
 /** "2026-11-11" -> "11 Nov 2026", read as a calendar date (never shifted by the browser's timezone). */
@@ -46,9 +45,8 @@ function HoursCell({ doctor, today }: { doctor: AdminDoctor; today: string }) {
 export function DoctorsConsole({ initial }: { initial: AdminDoctors }) {
   const [doctors, setDoctors] = useState(initial.doctors);
   const [adding, setAdding] = useState(false);
-  const [extending, setExtending] = useState<AdminDoctor | null>(null);
-  const [editing, setEditing] = useState<AdminDoctor | null>(null);
-  const [weeks, setWeeks] = useState(8);
+  const [editingDetails, setEditingDetails] = useState<{ doctor: AdminDoctor; details: DoctorDetails } | null>(null);
+  const [loadingDetails, setLoadingDetails] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [removing, setRemoving] = useState<AdminDoctor | null>(null);
@@ -66,18 +64,13 @@ export function DoctorsConsole({ initial }: { initial: AdminDoctors }) {
     catch (e) { toast.push({ tone: "danger", message: msg(e) }); }
     finally { setRefreshing(false); }
   }
-  async function extend() {
-    if (!extending) return;
-    setSaving(true);
-    try {
-      const updated = await adminDoctorsApi.extendHours(extending.id, weeks);
-      setDoctors((list) => list.map((d) => (d.id === updated.id ? updated : d)));
-      toast.push({ tone: "success", message: `${updated.name}'s hours are now published until ${dateLabel(updated.hours_until ?? "")}.` });
-      setExtending(null);
-    } catch (e) { toast.push({ tone: "danger", message: msg(e) }); }
-    finally { setSaving(false); }
-  }
 
+  async function askEdit(doctor: AdminDoctor) {
+    setLoadingDetails(doctor.id);
+    try { setEditingDetails({ doctor, details: await adminDoctorsApi.details(doctor.id) }); }
+    catch (e) { toast.push({ tone: "danger", message: msg(e) }); }
+    finally { setLoadingDetails(null); }
+  }
   async function askRemove(doctor: AdminDoctor) {
     setRemoving(doctor); setRemoval(null);
     try { setRemoval(await adminDoctorsApi.removalCheck(doctor.id)); }
@@ -124,7 +117,7 @@ export function DoctorsConsole({ initial }: { initial: AdminDoctors }) {
         ) : (
           <Table regionLabel="Doctors">
             <thead>
-              <tr><Th>Doctor</Th><Th>Department</Th><Th>NPI</Th><Th>Consulting hours</Th><Th>Login</Th><Th className="w-56"><span className="sr-only">Actions</span></Th></tr>
+              <tr><Th>Doctor</Th><Th>Department</Th><Th>NPI</Th><Th>Consulting hours</Th><Th>Login</Th><Th className="w-24"><span className="sr-only">Actions</span></Th></tr>
             </thead>
             <tbody>
               {doctors.map((d) => (
@@ -148,10 +141,8 @@ export function DoctorsConsole({ initial }: { initial: AdminDoctors }) {
                   <Td className="text-right">
                     {d.active ? (
                       <div className="flex items-center justify-end gap-1">
-                        <Button size="sm" variant="secondary" icon={<Icons.clock size={14} />} onClick={() => setEditing(d)}>Edit hours</Button>
-                        <Button size="sm" variant="secondary" icon={<Icons.calendar size={14} />} disabled={!d.can_extend}
-                          title={d.can_extend ? undefined : "No published hours to continue"}
-                          onClick={() => { setWeeks(8); setExtending(d); }}>Extend hours</Button>
+                        <IconButton size="sm" label={`Edit ${d.name}`} icon={<Icons.edit size={14} />}
+                          disabled={loadingDetails === d.id} onClick={() => askEdit(d)} />
                         <IconButton size="sm" label={`Remove ${d.name}`} icon={<Icons.trash size={14} />} onClick={() => askRemove(d)} />
                       </div>
                     ) : (
@@ -220,35 +211,17 @@ export function DoctorsConsole({ initial }: { initial: AdminDoctors }) {
         )}
       </Dialog>
 
-      {editing ? (
-        <EditHoursDialog key={editing.id} doctor={editing} today={clinic.today} onClose={() => setEditing(null)}
-          onSaved={(updated) => {
+      {editingDetails ? (
+        <EditDoctorDialog key={editingDetails.doctor.id} doctor={editingDetails.doctor} details={editingDetails.details}
+          departments={departments} today={clinic.today} onClose={() => setEditingDetails(null)}
+          onSaved={(updated, message) => {
             setDoctors((list) => list.map((d) => (d.id === updated.id ? updated : d)));
-            toast.push({ tone: "success", message: `${updated.name}'s new hours are published until ${dateLabel(updated.hours_until ?? "")}.` });
-            setEditing(null);
+            toast.push({ tone: "success", message });
+            setEditingDetails(null);
           }} />
       ) : null}
 
-      <Dialog open={extending !== null} onClose={() => setExtending(null)} title="Extend consulting hours"
-        description={extending ? `Publish ${extending.name}'s current weekly hours for more weeks.` : undefined}
-        footer={<>
-          <Button variant="secondary" onClick={() => setExtending(null)} disabled={saving}>Cancel</Button>
-          <Button onClick={extend} loading={saving} icon={<Icons.check size={16} />}>Extend hours</Button>
-        </>}>
-        {extending ? (
-          <div className="space-y-4">
-            <p className="text-sm text-fg-muted">
-              Currently published until <span className="font-medium text-fg">{extending.hours_until ? dateLabel(extending.hours_until) : "–"}</span>.
-              The last published week is repeated, day by day.
-            </p>
-            <Field label="Add" htmlFor="extend-weeks">
-              <Select id="extend-weeks" value={weeks} onChange={(e) => setWeeks(Number(e.target.value))}>
-                {WEEK_OPTIONS.map((w) => <option key={w} value={w}>{w} weeks</option>)}
-              </Select>
-            </Field>
-          </div>
-        ) : null}
-      </Dialog>
+
     </div>
   );
 }

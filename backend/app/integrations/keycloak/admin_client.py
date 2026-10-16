@@ -169,6 +169,26 @@ def set_enabled(username: str, enabled: bool) -> bool:
     return True
 
 
+def set_email(username: str, email: str) -> None:
+    """Change a login's email. Conflict if another login already uses it; no login, nothing to do."""
+    base, headers, user = _user_by_username(username)
+    if user is None:
+        return
+    try:
+        taken = httpx.get(f"{base}/users", params={"email": email, "exact": "true"}, headers=headers, timeout=10.0)
+        taken.raise_for_status()
+        if any(u["id"] != user["id"] for u in taken.json()):
+            raise Conflict("That email is already used by another login.")
+        response = httpx.put(f"{base}/users/{user['id']}", headers=headers,
+                             json={**user, "email": email, "emailVerified": True}, timeout=10.0)
+    except httpx.HTTPError as exc:
+        raise ServiceUnavailable("The login system could not update the account.") from exc
+    if response.status_code == 409:
+        raise Conflict("That email is already used by another login.")
+    if response.status_code >= 400:
+        raise ServiceUnavailable("The login system could not update the account.")
+
+
 def delete_username(username: str) -> None:
     _, _, user = _user_by_username(username)
     if user is not None:

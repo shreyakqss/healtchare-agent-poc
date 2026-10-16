@@ -279,9 +279,14 @@ export interface AdminDoctors {
 }
 export interface NewDoctorRequest {
   title: string; first_name: string; last_name: string; email: string; phone: string;
-  username: string; password: string; npi: string; department_id: string; specialty_code: string; licence: string;
+  username: string; password: string; department_id: string; specialty_code: string; licence: string;
   days: string[]; ranges: [string, string][]; start_date: string; weeks: number;
 }
+/** Admin > Doctors > Edit. Name, NPI, username and department are fixed at onboarding and not part of it. */
+export interface DoctorDetails {
+  title: string; email: string; phone: string; licence: string; department_id: string | null; specialty_code: string;
+}
+export interface UpdateDoctorRequest { title: string; email: string; phone: string; licence: string; specialty_code: string }
 export interface ChangeHoursRequest { days: string[]; ranges: [string, string][]; start_date: string; weeks: number }
 export interface HoursChangePreview {
   problems: string[]; hours: WeeklyHours[]; hours_until: string | null;

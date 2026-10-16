@@ -1,7 +1,6 @@
 """Admin > Doctors. The rules are unit tests; the onboarding itself runs against the live
 OpenEMR and Keycloak (test instances only) and removes every doctor it creates."""
 
-import random
 import uuid
 from datetime import date, datetime, time, timedelta
 
@@ -16,22 +15,13 @@ from app.integrations.hms.openemr import provisioning
 from app.integrations.keycloak import admin_client
 from app.main import app
 from app.models import AdminAuditEvent
-from app.schemas.requests import ChangeHoursRequest, NewDoctorRequest
+from app.schemas.requests import ChangeHoursRequest, NewDoctorRequest, UpdateDoctorRequest
 from app.security import CurrentPrincipal, authenticate
 from app.services import doctor_onboarding_service as onboarding
 from tests.helpers import BASE
 
 CLINIC = "qss-demo-clinic"
 PASSWORD = "Onboard#2026x"
-
-
-def valid_npi() -> str:
-    for _ in range(100):
-        npi = f"19{random.randint(0, 9_999_999):07d}"
-        for check in "0123456789":
-            if rules.npi_is_valid(npi + check):
-                return npi + check
-    raise AssertionError("no NPI")
 
 
 def admin(clinic_id: str | None = CLINIC) -> CurrentPrincipal:
@@ -44,7 +34,7 @@ def form(**overrides) -> NewDoctorRequest:
     tag = uuid.uuid4().hex[:8]
     values = dict(
         first_name="Test", last_name=f"Doctor{tag}", email=f"onboard-{tag}@example.test",
-        username=f"testdoc{tag}", password=PASSWORD, npi=valid_npi(), department_id="cardiology",
+        username=f"testdoc{tag}", password=PASSWORD, department_id="cardiology",
         specialty_code="207RC0000X", days=["mon", "wed", "fri"], ranges=[("10:00", "13:00"), ("16:00", "18:00")],
         start_date=date.today(), weeks=2,
     )
@@ -57,6 +47,14 @@ def test_npi_check_digit():
     assert rules.npi_is_valid("1234567893")  # CMS's worked example
     assert not rules.npi_is_valid("1234567890")
     assert not rules.npi_is_valid("12345")
+    assert rules.npi_from("123456789") == "1234567893"
+
+
+def test_onboarding_generates_the_npi_and_never_takes_one():
+    with pytest.raises(ValueError):
+        NewDoctorRequest(**{**form().model_dump(), "npi": "1234567893"})
+    npis = {onboarding._new_npi() for _ in range(5)} if provisioning.configured() else set()
+    assert all(rules.npi_is_valid(n) and n[0] in "12" for n in npis)
 
 
 def test_password_follows_openemr_secure_password_rule():
@@ -171,14 +169,13 @@ def test_duplicates_and_bad_details_are_refused_before_anything_is_written(creat
     created.append(new.username)
     with SessionLocal() as db:
         onboarding.create(db, admin(), new)
-    again = form(username=new.username, npi=new.npi, email=new.email)
+    again = form(username=new.username, email=new.email)
     found = onboarding.problems(onboarding.clinic_for(admin()), again)
     assert "That username is already used in the hospital system." in found
-    assert "A practitioner with that NPI already exists." in found
-    bad = form(npi="1234567890", specialty_code="207X00000X")
+    bad = form(specialty_code="207X00000X")
     with SessionLocal() as db, pytest.raises(Unprocessable):
         onboarding.create(db, admin(), bad)
-    assert provisioning.clashes(bad.username, bad.npi) == []
+    assert provisioning.clashes(bad.username) == []
 
 
 @pytest.mark.integration
@@ -189,10 +186,13 @@ def test_a_failed_login_step_leaves_no_half_created_doctor(created, monkeypatch)
     def fail(*_, **__):
         raise ServiceUnavailable("simulated Keycloak failure")
 
+    issued: list[str] = []
+    real_new_npi = onboarding._new_npi
+    monkeypatch.setattr(onboarding, "_new_npi", lambda: issued.append(real_new_npi()) or issued[-1])
     monkeypatch.setattr(admin_client, "create_clinician", fail)
     with SessionLocal() as db, pytest.raises(ServiceUnavailable):
         onboarding.create(db, admin(), new)
-    assert provisioning.clashes(new.username, new.npi) == []
+    assert issued and provisioning.clashes(new.username, issued[0]) == []
 
 
 @pytest.mark.integration
@@ -242,7 +242,7 @@ def test_a_never_used_doctor_is_erased_from_both_systems(created):
         doctor = onboarding.create(db, admin(), new)
         assert onboarding.removal_check(db, admin(), doctor["id"])["mode"] == "delete"
         assert onboarding.remove(db, admin(), doctor["id"])["result"] == "deleted"
-    assert provisioning.clashes(new.username, new.npi) == []
+    assert provisioning.clashes(new.username, doctor["npi"]) == []
     assert not admin_client.username_or_email_taken(new.username, new.email)
 
 
@@ -321,7 +321,7 @@ def test_admin_replaces_hours_from_a_date_and_earlier_days_are_kept(created):
 
 
 @pytest.mark.integration
-def test_changing_hours_warns_about_held_times_it_leaves_out_and_refuses_bad_input(created):
+def test_changing_hours_is_refused_while_a_patient_holds_a_time_it_leaves_out(created):
     from zoneinfo import ZoneInfo
 
     from app.models import SlotHold
@@ -344,6 +344,14 @@ def test_changing_hours_warns_about_held_times_it_leaves_out_and_refuses_bad_inp
             stranded = onboarding.preview_hours(db, admin(), doctor["id"], afternoons)["held_outside"]
             assert [datetime.fromisoformat(t) for t in stranded] == [held_at.astimezone(ZoneInfo(str(clinic.timezone)))]
             assert onboarding.preview_hours(db, admin(), doctor["id"], mornings)["held_outside"] == []
+            before = provisioning.office_blocks(doctor["id"])
+            with pytest.raises(Conflict):
+                onboarding.change_hours(db, admin(), doctor["id"], afternoons)
+            assert sorted(provisioning.office_blocks(doctor["id"])) == sorted(before)  # nothing was written
+            # Starting the new hours after the held day is fine, and so is keeping the time covered.
+            onboarding.change_hours(db, admin(), doctor["id"], ChangeHoursRequest(
+                days=["mon"], ranges=[("14:00", "16:00")], start_date=monday + timedelta(days=1), weeks=1))
+            onboarding.change_hours(db, admin(), doctor["id"], mornings)
             for bad in (
                 ChangeHoursRequest(days=["mon"], ranges=[("10:00", "12:00")], start_date=date.today() - timedelta(days=1), weeks=1),
                 ChangeHoursRequest(days=[], ranges=[("10:00", "12:00")], start_date=monday, weeks=1),
@@ -355,3 +363,98 @@ def test_changing_hours_warns_about_held_times_it_leaves_out_and_refuses_bad_inp
                 onboarding.change_hours(db, admin(), 1, mornings)  # not a doctor at this hospital
     finally:
         _drop_session(session_id)
+
+
+# --- edit details: everything but name, NPI and username -----------------------------------
+
+def _edit(doctor_form: NewDoctorRequest, **overrides) -> UpdateDoctorRequest:
+    values = dict(title=doctor_form.title, email=doctor_form.email, phone=doctor_form.phone,
+                  specialty_code=doctor_form.specialty_code, licence=doctor_form.licence)
+    return UpdateDoctorRequest(**{**values, **overrides})
+
+
+def _keycloak_email(username: str) -> str | None:
+    _, _, user = admin_client._user_by_username(username)
+    return user.get("email") if user else None
+
+
+def test_name_npi_username_and_department_are_not_editable():
+    with pytest.raises(ValueError):
+        UpdateDoctorRequest(email="a@b.test", specialty_code="207RC0000X", npi="1234567893")
+    principal = admin()
+    app.dependency_overrides[authenticate] = lambda: principal
+    try:
+        with TestClient(app) as client:
+            for field, value in (("first_name", "X"), ("last_name", "Y"), ("username", "renamed"), ("npi", "1234567893"),
+                                 ("password", "Secret#2026x"), ("department_id", "pulmonology")):
+                body = {"email": "a@b.test", "specialty_code": "207RC0000X", field: value}
+                assert client.put(f"{BASE}/admin/doctors/1", json=body).status_code == 422, field
+    finally:
+        app.dependency_overrides.pop(authenticate)
+
+
+@pytest.mark.integration
+def test_admin_edits_details_in_both_systems_and_identity_stays(created):
+    new = form(department_id="general_medicine", specialty_code="207R00000X")
+    created.append(new.username)
+    with SessionLocal() as db:
+        doctor = onboarding.create(db, admin(), new)
+    email = f"edited-{uuid.uuid4().hex[:8]}@example.test"
+    change = _edit(new, title="Prof.", email=email, phone="+91 98765 43210", licence="MH-12345",
+                   specialty_code="207Q00000X")  # another General Medicine specialty
+    with SessionLocal() as db:
+        updated = onboarding.update_doctor(db, admin(), doctor["id"], change)
+    assert updated["department_id"] == "general_medicine" and updated["name"].startswith("Prof. ")
+    assert (updated["npi"], updated["username"], updated["practitioner_id"]) == (doctor["npi"], doctor["username"], doctor["practitioner_id"])
+    assert onboarding.doctor_details(admin(), doctor["id"]) == {
+        "title": "Prof.", "email": email, "phone": "+91 98765 43210", "licence": "MH-12345",
+        "specialty_code": "207Q00000X", "department_id": "general_medicine"}
+    assert _keycloak_email(new.username) == email
+    live = next(p for p in get_hms().list_practitioners() if p.id == doctor["practitioner_id"])
+    assert live.department_id == "general_medicine"
+    with SessionLocal() as db:
+        event = db.query(AdminAuditEvent).filter(AdminAuditEvent.action == "doctor.updated",
+                                                 AdminAuditEvent.payload["username"].astext == new.username).one()
+        assert event.payload["changes"]["email"] == [new.email, email]
+        assert set(event.payload["changes"]) == {"title", "email", "phone", "licence", "specialty_code"}
+
+
+@pytest.mark.integration
+def test_the_department_is_frozen(created):
+    new = form()  # cardiology
+    created.append(new.username)
+    with SessionLocal() as db:
+        doctor = onboarding.create(db, admin(), new)
+        with pytest.raises(Unprocessable):
+            onboarding.update_doctor(db, admin(), doctor["id"], _edit(new, specialty_code="207RP1001X"))  # pulmonology's
+    details = onboarding.doctor_details(admin(), doctor["id"])
+    assert (details["department_id"], details["specialty_code"]) == ("cardiology", new.specialty_code)
+
+
+@pytest.mark.integration
+def test_an_email_another_login_uses_is_refused_and_openemr_is_put_back(created):
+    first, second = form(), form()
+    created += [first.username, second.username]
+    with SessionLocal() as db:
+        onboarding.create(db, admin(), first)
+        doctor = onboarding.create(db, admin(), second)
+        with pytest.raises(Conflict):
+            onboarding.update_doctor(db, admin(), doctor["id"], _edit(second, email=first.email, phone="+91 1"))
+    assert onboarding.doctor_details(admin(), doctor["id"])["email"] == second.email
+    assert onboarding.doctor_details(admin(), doctor["id"])["phone"] == second.phone
+    assert _keycloak_email(second.username) == second.email
+
+
+@pytest.mark.integration
+def test_unknown_specialty_and_deactivated_doctors_are_refused(created):
+    new = form()
+    created.append(new.username)
+    with SessionLocal() as db:
+        doctor = onboarding.create(db, admin(), new)
+        with pytest.raises(Unprocessable):
+            onboarding.update_doctor(db, admin(), doctor["id"], _edit(new, specialty_code="NOT-A-CODE"))
+        with pytest.raises(NotFound):
+            onboarding.update_doctor(db, admin(), 1, _edit(new))
+        provisioning.set_active(doctor["id"], False)
+        with pytest.raises(Conflict):
+            onboarding.update_doctor(db, admin(), doctor["id"], _edit(new, phone="+91 2"))

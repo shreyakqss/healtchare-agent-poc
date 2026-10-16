@@ -15,6 +15,7 @@ that facility's doctors. Passwords are passed through, never stored, logged or a
 from __future__ import annotations
 
 import logging
+import secrets
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Any
@@ -28,7 +29,7 @@ from app.domain import scheduling
 from app.integrations.hms.openemr import fhir, provisioning
 from app.integrations.keycloak import admin_client
 from app.models import ConsultationNote, IntakeSession, PatientCase, RoutingRecommendation, SlotHold
-from app.schemas.requests import ChangeHoursRequest, NewDoctorRequest
+from app.schemas.requests import ChangeHoursRequest, NewDoctorRequest, UpdateDoctorRequest
 from app.security.oidc import CurrentPrincipal
 from app.services import audit, hospital_config
 
@@ -140,8 +141,6 @@ def problems(clinic: Clinic, form: NewDoctorRequest) -> list[str]:
         found.append("Username: 3-32 characters, starting with a letter; letters, numbers, dot, dash, underscore.")
     if problem := rules.password_problem(form.password, form.username):
         found.append(problem)
-    if not rules.npi_is_valid(form.npi):
-        found.append("NPI must be 10 digits with a valid check digit.")
     department = next((d for d in clinic.departments if d.get("id") == form.department_id), None)
     if department is None:
         found.append("Pick one of this hospital's departments.")
@@ -153,10 +152,19 @@ def problems(clinic: Clinic, form: NewDoctorRequest) -> list[str]:
     if form.start_date < clinic.today():
         found.append("Hours cannot start in the past.")
     if not found:  # only worth asking both systems once the form itself is sound
-        found += provisioning.clashes(form.username, form.npi)
+        found += provisioning.clashes(form.username)
         if admin_client.username_or_email_taken(form.username, form.email):
             found.append("That username or email already has a CareFlow login.")
     return found
+
+
+def _new_npi() -> str:
+    """A valid NPI no practitioner holds. Synthetic: this POC holds test data only."""
+    for _ in range(20):
+        npi = rules.npi_from(secrets.choice("12") + "".join(secrets.choice("0123456789") for _ in range(8)))
+        if not provisioning.clashes("", npi):
+            return npi
+    raise ServiceUnavailable("Could not generate an unused NPI. Try again.")
 
 
 def preview(clinic: Clinic, form: NewDoctorRequest) -> dict[str, Any]:
@@ -180,7 +188,7 @@ def create(db: Session, principal: CurrentPrincipal, form: NewDoctorRequest) -> 
     blocks = rules.expand_hours(form.days, form.ranges, form.start_date, form.weeks)
     spec = provisioning.ProviderSpec(
         username=form.username, password=form.password, title=form.title, first_name=form.first_name,
-        last_name=form.last_name, email=form.email, phone=form.phone, npi=form.npi,
+        last_name=form.last_name, email=form.email, phone=form.phone, npi=_new_npi(),
         specialty_code=form.specialty_code,
         role_code=rules.role_code_for(form.specialty_code, set(provisioning.list_titles(ROLE_LIST))),
         licence=form.licence, facility_id=clinic.facility_id,
@@ -200,7 +208,7 @@ def create(db: Session, principal: CurrentPrincipal, form: NewDoctorRequest) -> 
         raise
     audit.record_admin(db, clinic.id, _actor(principal), "doctor.created", {
         "practitioner_id": created.uuid, "openemr_user_id": created.id, "username": form.username,
-        "npi": form.npi, "department_id": form.department_id, "specialty_code": form.specialty_code,
+        "npi": spec.npi, "department_id": form.department_id, "specialty_code": form.specialty_code,
         "keycloak_user_id": login_id, "hours_blocks": len(blocks), "hours_until": str(blocks[-1][0]),
     })
     db.commit()
@@ -234,15 +242,17 @@ def extend_hours(db: Session, principal: CurrentPrincipal, provider_id: int, wee
 
 def _held_outside(db: Session, clinic: Clinic, practitioner_id: str, from_day: date,
                   blocks: list[provisioning.Block]) -> list[datetime]:
-    """Times patients already hold with this doctor, on or after `from_day`, that the new hours
-    no longer cover. Those holds stay (CareFlow never moves a patient's time by itself)."""
+    """Upcoming times patients already hold with this doctor, on or after `from_day`, that the
+    new hours no longer cover. While there are any, the change is refused (CareFlow never moves
+    a patient's time by itself)."""
+    now = datetime.now(clinic.timezone)
     covered = [
         (datetime.combine(d, s, clinic.timezone), datetime.combine(d, e, clinic.timezone)) for d, s, e in blocks
     ]
     out = []
     for (start,) in db.query(SlotHold.slot_start).filter(SlotHold.practitioner_id == practitioner_id):
         local = start.astimezone(clinic.timezone)
-        if local.date() < from_day:
+        if local.date() < from_day or local < now:
             continue
         end = local + timedelta(minutes=scheduling.INTERVAL_MINUTES)
         if not any(s <= local and end <= e for s, e in covered):
@@ -275,19 +285,77 @@ def preview_hours(db: Session, principal: CurrentPrincipal, provider_id: int, fo
 
 
 def change_hours(db: Session, principal: CurrentPrincipal, provider_id: int, form: ChangeHoursRequest) -> dict[str, Any]:
-    """Replace the doctor's published hours from `start_date` on. Earlier days, booked
-    appointments and times patients already hold are kept."""
+    """Replace the doctor's published hours from `start_date` on. Earlier days and booked
+    appointments are kept. Refused while a patient holds a time the new hours would not cover."""
     clinic = clinic_for(principal)
     doctor, blocks, found, stranded = _hours_change(db, clinic, provider_id, form)
     if found:
         raise Unprocessable(" ".join(found))
+    if stranded:
+        n = len(stranded)
+        raise Conflict(f"{n} patient{'s' if n != 1 else ''} already hold{'s' if n == 1 else ''} a time the new hours "
+                       "would not cover. Keep those times inside the new hours, or start the new hours after them.")
     provisioning.replace_office_blocks(doctor.id, clinic.facility_id, form.start_date, blocks)
     audit.record_admin(db, clinic.id, _actor(principal), "doctor.hours_changed", {
         "openemr_user_id": doctor.id, "days": form.days, "ranges": [list(r) for r in form.ranges],
-        "from": str(form.start_date), "hours_until": str(blocks[-1][0]), "held_outside": len(stranded),
+        "from": str(form.start_date), "hours_until": str(blocks[-1][0]),
     })
     db.commit()
     return next(d for d in list_doctors(clinic) if d["id"] == provider_id)
+
+
+# --- edit details ------------------------------------------------------------------------
+# Name, NPI, username and department were fixed at onboarding and are not editable (the
+# username is the doctor's login in both systems and what every sign-off is checked against).
+# The password is not edited here. Hours have their own requests.
+
+EDITABLE = ("title", "email", "phone", "licence", "specialty_code")
+
+
+def doctor_details(principal: CurrentPrincipal, provider_id: int) -> dict[str, Any]:
+    """The Edit form's starting values."""
+    clinic = clinic_for(principal)
+    doctor = _own_doctor(clinic, provider_id)
+    details = provisioning.profile(doctor.id) or {}
+    return {**details, "department_id": _department(clinic, details.get("specialty_code", ""))}
+
+
+def update_doctor(db: Session, principal: CurrentPrincipal, provider_id: int, form: UpdateDoctorRequest) -> dict[str, Any]:
+    clinic = clinic_for(principal)
+    doctor = _own_doctor(clinic, provider_id)
+    if not doctor.active:
+        raise Conflict("Reactivate this doctor before editing their details.")
+    before = provisioning.profile(doctor.id)
+    if before is None:
+        raise NotFound("No such doctor at your hospital.")
+    # The department is fixed: a new specialty must keep the doctor where they are.
+    department_id = _department(clinic, before["specialty_code"])
+    department = next((d for d in clinic.departments if d.get("id") == department_id), {})
+    if form.specialty_code != before["specialty_code"]:
+        if form.specialty_code not in (department.get("specialty_codes") or []):
+            raise Unprocessable("The department cannot change; pick a specialty within it.")
+        if form.specialty_code not in provisioning.list_titles(SPECIALTY_LIST):
+            raise Unprocessable("The hospital system does not know that specialty code.")
+    after = {field: getattr(form, field) for field in EDITABLE}
+    changes = {f: [before[f], after[f]] for f in EDITABLE if before[f] != after[f]}
+    if not changes:
+        return next(d for d in list_doctors(clinic) if d["id"] == doctor.id)
+
+    role_code = rules.role_code_for(form.specialty_code, set(provisioning.list_titles(ROLE_LIST)))
+    old_role = rules.role_code_for(before["specialty_code"], set(provisioning.list_titles(ROLE_LIST)))
+    # OpenEMR first, then the login's email; a login failure puts OpenEMR back.
+    provisioning.update_profile(doctor.id, clinic.facility_id, after, role_code)
+    if "email" in changes:
+        try:
+            admin_client.set_email(doctor.username, form.email)
+        except Exception:
+            logger.warning("Doctor email update failed in the login system; restoring OpenEMR details")
+            provisioning.update_profile(doctor.id, clinic.facility_id, before, old_role)
+            raise
+    audit.record_admin(db, clinic.id, _actor(principal), "doctor.updated",
+                       {"openemr_user_id": doctor.id, "username": doctor.username, "changes": changes})
+    db.commit()
+    return next(d for d in list_doctors(clinic) if d["id"] == doctor.id)
 
 
 # --- removal -----------------------------------------------------------------------------

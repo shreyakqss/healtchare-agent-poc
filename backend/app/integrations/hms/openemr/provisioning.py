@@ -137,12 +137,13 @@ def facility_name(facility_id: int) -> str | None:
     return row["name"] if row else None
 
 
-def clashes(username: str, npi: str) -> list[str]:
-    """What already exists with this username or NPI (OpenEMR usernames are case-insensitive)."""
+def clashes(username: str, npi: str = "") -> list[str]:
+    """What already exists with this username or NPI (OpenEMR usernames are case-insensitive).
+    An empty NPI checks the username only."""
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
             "SELECT LOWER(username) = LOWER(%s) AS u, npi = %s AS n FROM users"
-            " WHERE LOWER(username) = LOWER(%s) OR npi = %s",
+            " WHERE LOWER(username) = LOWER(%s) OR (npi = %s AND npi <> '')",
             (username, npi, username, npi),
         )
         rows = cur.fetchall()
@@ -186,6 +187,23 @@ def providers(facility_id: int) -> list[Provider]:
 
 def provider(facility_id: int, provider_id: int) -> Provider | None:
     return next((p for p in providers(facility_id) if p.id == provider_id), None)
+
+
+def profile(user_id: int) -> dict[str, str] | None:
+    """The editable onboarding details as OpenEMR holds them (name, NPI and username are not)."""
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT u.title, u.email, u.phonew1, u.state_license_number, COALESCE(s.field_value, u.taxonomy) AS specialty"
+            " FROM users u LEFT JOIN facility_user_ids s"
+            "   ON s.uid = u.id AND s.facility_id = u.facility_id AND s.field_id = 'specialty_code'"
+            " WHERE u.id = %s",
+            (user_id,),
+        )
+        r = cur.fetchone()
+    if r is None:
+        return None
+    return {"title": r["title"] or "", "email": r["email"] or "", "phone": r["phonew1"] or "",
+            "licence": r["state_license_number"] or "", "specialty_code": r["specialty"] or ""}
 
 
 def office_blocks(user_id: int) -> list[Block]:
@@ -347,6 +365,22 @@ def usage(user_id: int, username: str) -> dict[str, int]:
         )
         appointments = cur.fetchone()["n"]
     return {"encounters": encounters, "forms": forms, "appointments": appointments}
+
+
+def update_profile(user_id: int, facility_id: int, details: dict[str, str], role_code: str) -> None:
+    """Write the editable details (see `profile`) in one transaction. The specialty lives both on
+    the user (taxonomy) and in the facility ids FHIR reads, alongside the matching provider role."""
+    with _transaction() as cur:
+        cur.execute(
+            "UPDATE users SET title = %s, email = %s, phonew1 = %s, state_license_number = %s, taxonomy = %s,"
+            " last_updated = NOW() WHERE id = %s",
+            (details["title"], details["email"], details["phone"], details["licence"], details["specialty_code"], user_id),
+        )
+        for field, value in (("specialty_code", details["specialty_code"]), ("role_code", role_code)):
+            cur.execute(
+                "UPDATE facility_user_ids SET field_value = %s WHERE uid = %s AND facility_id = %s AND field_id = %s",
+                (value, user_id, facility_id, field),
+            )
 
 
 def set_active(user_id: int, active: bool) -> None:

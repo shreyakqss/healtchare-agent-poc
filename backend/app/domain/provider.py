@@ -31,6 +31,15 @@ def npi_is_valid(npi: str) -> bool:
     return (10 - total % 10) % 10 == int(npi[9])
 
 
+def npi_from(first_nine: str) -> str:
+    """The NPI whose first nine digits these are: the Luhn check digit appended. Callers pass
+    nine digits starting with 1 or 2, the only leading digits CMS issues."""
+    for check in "0123456789":
+        if npi_is_valid(first_nine + check):
+            return first_nine + check
+    raise ValueError("not nine digits")
+
+
 def password_problem(password: str, username: str) -> str | None:
     """OpenEMR's "secure password" rule (three of: lower, upper, digit, symbol), which the
     same password must also pass in Keycloak."""

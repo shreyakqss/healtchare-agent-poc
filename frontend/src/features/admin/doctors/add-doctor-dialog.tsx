@@ -13,7 +13,7 @@ function emptyDraft(departments: DoctorDepartmentOption[], today: string): Draft
   const first = departments.find((d) => d.specialties.length) ?? departments[0];
   return {
     title: "Dr.", first_name: "", last_name: "", email: "", phone: "", username: "", password: "",
-    npi: "", department_id: first?.department_id ?? "", specialty_code: first?.specialties[0]?.code ?? "", licence: "",
+    department_id: first?.department_id ?? "", specialty_code: first?.specialties[0]?.code ?? "", licence: "",
     days: ["mon", "tue", "wed", "thu", "fri"], ranges: [["10:00", "13:00"], ["16:00", "19:00"]], start_date: today, weeks: 12,
   };
 }
@@ -29,7 +29,6 @@ function draftIssues(d: Draft, confirm: string): Partial<Record<IssueKey, string
   if (!/^[a-z][a-z0-9._-]{2,31}$/.test(d.username)) issues.username = "3-32 lowercase letters, numbers, . _ -; starts with a letter";
   if (d.password.length < 9) issues.password = "At least 9 characters";
   if (confirm !== d.password) issues.confirm = "Passwords do not match";
-  if (!/^\d{10}$/.test(d.npi)) issues.npi = "10 digits";
   if (!d.specialty_code) issues.specialty_code = "Pick a specialty";
   const hours = hoursIssue(d);
   if (hours) issues.hours = hours;
@@ -147,10 +146,6 @@ export function AddDoctorDialog({ open, onClose, onCreated, clinic, departments 
                   {(department?.specialties ?? []).map((s) => <option key={s.code} value={s.code}>{s.title} ({s.code})</option>)}
                 </Select>
               </Field>
-              <Field label="NPI" required htmlFor="d-npi" error={show("npi")} hint="10-digit National Provider Identifier.">
-                <Input id="d-npi" inputMode="numeric" maxLength={10} className="font-mono" value={draft.npi}
-                  onChange={(e) => set({ npi: e.target.value.replace(/\D/g, "") })} />
-              </Field>
               <Field label="Licence number" htmlFor="d-licence"><Input id="d-licence" value={draft.licence} onChange={(e) => set({ licence: e.target.value })} /></Field>
             </div>
           </section>
@@ -158,7 +153,7 @@ export function AddDoctorDialog({ open, onClose, onCreated, clinic, departments 
           <section className="space-y-3">
             <SectionTitle>Consulting hours</SectionTitle>
             <HoursFields value={draft} onChange={set} today={clinic.today} error={show("hours")} idPrefix="d"
-              weeksHint="Change or extend later from the doctors list." />
+              weeksHint="Change or extend later with the edit button." />
           </section>
         </div>
       ) : preview ? (
@@ -175,7 +170,7 @@ export function AddDoctorDialog({ open, onClose, onCreated, clinic, departments 
             { label: "Hospital", value: preview.clinic.name },
             { label: "Department", value: department?.department_name },
             { label: "Specialty", value: specialtyTitle ? `${specialtyTitle} (${draft.specialty_code})` : draft.specialty_code },
-            { label: "NPI", value: <span className="font-mono">{draft.npi}</span> },
+            { label: "NPI", value: <span className="text-fg-muted">Generated when the doctor is created</span> },
             { label: "Username", value: <span className="font-mono">{draft.username}</span> },
             { label: "Email", value: draft.email },
             { label: "Hours published", value: preview.hours_until ? `${preview.blocks} sessions, until ${preview.hours_until}` : "–" },

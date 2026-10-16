@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
-from app.schemas.requests import ChangeHoursRequest, ExtendHoursRequest, NewDoctorRequest
+from app.schemas.requests import ChangeHoursRequest, ExtendHoursRequest, NewDoctorRequest, UpdateDoctorRequest
 from app.security import CurrentPrincipal, require_roles
 from app.services import doctor_onboarding_service as onboarding
 
@@ -36,6 +36,17 @@ def preview(body: NewDoctorRequest, principal: AdminPrincipal):
 @router.post("", status_code=201)
 def create(body: NewDoctorRequest, principal: AdminPrincipal, db: Session = Depends(get_db)):
     return onboarding.create(db, principal, body)
+
+
+@router.get("/{provider_id}")
+def details(provider_id: int, principal: AdminPrincipal):
+    """The editable details, to prefill Edit. Name, NPI and username are not among them."""
+    return onboarding.doctor_details(principal, provider_id)
+
+
+@router.put("/{provider_id}")
+def update(provider_id: int, body: UpdateDoctorRequest, principal: AdminPrincipal, db: Session = Depends(get_db)):
+    return onboarding.update_doctor(db, principal, provider_id, body)
 
 
 @router.post("/{provider_id}/extend-hours")

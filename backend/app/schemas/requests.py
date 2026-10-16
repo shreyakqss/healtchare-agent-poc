@@ -109,7 +109,8 @@ class HospitalYamlRequest(BaseModel):
 
 
 class NewDoctorRequest(BaseModel):
-    """Admin > Doctors > Add doctor. The hospital is never a field: it is the admin's own."""
+    """Admin > Doctors > Add doctor. The hospital is never a field: it is the admin's own, and the
+    NPI is generated (synthetic test data only; a real NPI is issued by CMS)."""
 
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
@@ -120,7 +121,6 @@ class NewDoctorRequest(BaseModel):
     phone: str = Field(default="", max_length=30)
     username: str = Field(min_length=3, max_length=32)
     password: str = Field(min_length=1, max_length=128)
-    npi: str = Field(min_length=1, max_length=10)
     department_id: str = Field(min_length=1, max_length=100)
     specialty_code: str = Field(min_length=1, max_length=20)
     licence: str = Field(default="", max_length=60)
@@ -137,6 +137,20 @@ class NewDoctorRequest(BaseModel):
 
 class ExtendHoursRequest(BaseModel):
     weeks: int = Field(ge=1, le=26)
+
+
+class UpdateDoctorRequest(BaseModel):
+    """Admin > Doctors > Edit. Name, NPI, username and department are fixed at onboarding, so they
+    are not fields here (extra="forbid" refuses them); the specialty may change within the
+    department. The password is not edited here; hours have their own requests."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    title: str = Field(default="Dr.", max_length=30)
+    email: str = Field(pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$", max_length=254)
+    phone: str = Field(default="", max_length=30)
+    specialty_code: str = Field(min_length=1, max_length=20)
+    licence: str = Field(default="", max_length=60)
 
 
 class ChangeHoursRequest(BaseModel):

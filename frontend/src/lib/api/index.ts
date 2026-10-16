@@ -1,6 +1,6 @@
 import { API_ROOT, http, readCookie, readSse } from "@/lib/api/client";
 import type {
-  AdminDoctor, AdminDoctors, ChangeHoursRequest, DoctorPreview, HoursChangePreview, DoctorRemoval, DoctorRemovalCheck, NewDoctorRequest, AppointmentRequestResult, AssistantReply, AssistantTurn, Attachment, AttachmentSkipResponse, AuditEvent, CaseDetail,
+  AdminDoctor, AdminDoctors, ChangeHoursRequest, DoctorDetails, UpdateDoctorRequest, DoctorPreview, HoursChangePreview, DoctorRemoval, DoctorRemovalCheck, NewDoctorRequest, AppointmentRequestResult, AssistantReply, AssistantTurn, Attachment, AttachmentSkipResponse, AuditEvent, CaseDetail,
   CaseListItem, ConsultationNote, ConsultationNoteRequest, FinalizeRequest, HMSPractitioner, HMSStatus, HospitalConfig,
   HospitalSummary, IdentityFormRequest, IntakeConfig, LinkedPatientRecord, MessageResponse, PatientCase, PatientVisitItem,
   Review, ReviewRequest, Roster, SessionResponse, Slot, TurnEvent,
@@ -89,6 +89,8 @@ export const adminDoctorsApi = {
   list: () => http.get<AdminDoctors>("/admin/doctors"),
   preview: (body: NewDoctorRequest) => http.post<DoctorPreview>("/admin/doctors/preview", body),
   create: (body: NewDoctorRequest) => http.post<AdminDoctor>("/admin/doctors", body),
+  details: (id: number) => http.get<DoctorDetails>(`/admin/doctors/${id}`),
+  update: (id: number, body: UpdateDoctorRequest) => http.put<AdminDoctor>(`/admin/doctors/${id}`, body),
   extendHours: (id: number, weeks: number) => http.post<AdminDoctor>(`/admin/doctors/${id}/extend-hours`, { weeks }),
   previewHours: (id: number, body: ChangeHoursRequest) => http.post<HoursChangePreview>(`/admin/doctors/${id}/hours/preview`, body),
   changeHours: (id: number, body: ChangeHoursRequest) => http.put<AdminDoctor>(`/admin/doctors/${id}/hours`, body),
