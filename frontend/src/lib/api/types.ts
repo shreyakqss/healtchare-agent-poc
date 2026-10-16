@@ -251,3 +251,37 @@ export interface HMSDocument { reference: string; title: string; content_type: s
 export interface AppointmentRequestResult { reference: string; status: string; slot: Slot | null }
 
 export interface Health { status: string; version: string }
+
+/* ---------- Admin > Doctors ---------- */
+export interface AdminDoctor {
+  id: number; practitioner_id: string; name: string; username: string; npi: string;
+  specialty_code: string; specialty: string; department_id: string | null; active: boolean;
+  /** null when the login system could not be asked. */
+  has_login: boolean | null;
+  hours: WeeklyHours[]; hours_until: string | null;
+  /** Active and has hours to continue. */
+  can_extend: boolean;
+}
+export interface DoctorRemovalCheck {
+  doctor: { id: number; name: string; username: string; active: boolean };
+  /** "delete" when the doctor was never used, else "deactivate" (history is kept). */
+  mode: "delete" | "deactivate";
+  blocked_by_open_cases: number;
+  last_in_department: boolean;
+  history: { encounters: number; forms: number; appointments: number; cases: number; notes: number };
+}
+export interface DoctorRemoval { result: "deleted" | "deactivated"; doctor: AdminDoctor | null }
+export interface DoctorDepartmentOption {
+  department_id: string; department_name: string; specialties: { code: string; title: string }[];
+}
+export interface AdminDoctors {
+  clinic: { id: string; name: string; today: string }; doctors: AdminDoctor[]; departments: DoctorDepartmentOption[];
+}
+export interface NewDoctorRequest {
+  title: string; first_name: string; last_name: string; email: string; phone: string;
+  username: string; password: string; npi: string; department_id: string; specialty_code: string; licence: string;
+  days: string[]; ranges: [string, string][]; start_date: string; weeks: number;
+}
+export interface DoctorPreview {
+  problems: string[]; clinic: { id: string; name: string }; hours: WeeklyHours[]; blocks: number; hours_until: string | null;
+}

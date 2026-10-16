@@ -486,6 +486,8 @@ class FhirHMS:
                 if pid in seen:
                     continue
                 seen.add(pid)
+            if res.get("active") is False:  # deactivated in Admin > Doctors: never routed to again
+                continue
             out.append(fhir.practitioner_from_resource(res, roles.get(pid or ""), usernames.get(pid or "")))
         return out
 
@@ -637,7 +639,12 @@ class FhirHMS:
         if not sub:
             return VerifiedIdentity(id=username, name=username)
         try:
-            name = fhir.human_name(self._request("GET", f"Practitioner/{sub}").json())
+            practitioner = self._request("GET", f"Practitioner/{sub}").json()
         except Exception:  # noqa: BLE001 - the name is cosmetic; the verified id is what matters
-            name = username
-        return VerifiedIdentity(id=sub, name=name)
+            return VerifiedIdentity(id=sub, name=username)
+        # OpenEMR's password grant still succeeds for a deactivated user (confirmed live), so a
+        # doctor deactivated in Admin > Doctors is refused here.
+        if practitioner.get("active") is False:
+            logger.info("verify_credentials: practitioner is deactivated")
+            return None
+        return VerifiedIdentity(id=sub, name=fhir.human_name(practitioner))

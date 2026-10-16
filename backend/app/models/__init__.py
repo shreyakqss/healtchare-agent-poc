@@ -1,7 +1,7 @@
 """Import every model here so `Base.metadata` is complete."""
 
 from app.db.base import Base
-from app.models.audit import AuditEvent
+from app.models.audit import AdminAuditEvent, AuditEvent
 from app.models.care_task import CareTask
 from app.models.case import PatientCase
 from app.models.clinical import ClinicalDiscrepancy, ClinicalReview, ClinicalSummary, ConsultationNote
@@ -13,6 +13,7 @@ from app.models.workflow import WorkflowJob, WorkflowOperation
 
 __all__ = [
     "Base",
+    "AdminAuditEvent",
     "AuditEvent",
     "CareTask",
     "PatientCase",

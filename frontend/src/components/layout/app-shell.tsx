@@ -16,7 +16,10 @@ const PRIMARY: NavItem[] = [
   { href: "/patient", label: "Patient intake", icon: "user" },
   { href: "/doctor", label: "Doctor", icon: "stethoscope" },
 ];
-const SECONDARY: NavItem[] = [{ href: "/admin", label: "Configuration", icon: "settings" }];
+const SECONDARY: NavItem[] = [
+  { href: "/admin", label: "Configuration", icon: "settings" },
+  { href: "/admin/doctors", label: "Doctors", icon: "stethoscope" },
+];
 
 export function AppShell({ children, title, subtitle, actions, wide, user }: {
   children: ReactNode; title?: ReactNode; subtitle?: ReactNode; actions?: ReactNode; wide?: boolean; user: AuthUser;
@@ -35,12 +38,14 @@ export function AppShell({ children, title, subtitle, actions, wide, user }: {
   const visible = (item: NavItem) => (
     (item.href === "/patient" && user.roles.includes("patient"))
     || (item.href === "/doctor" && user.roles.includes("clinician"))
-    || (item.href === "/admin" && user.roles.includes("admin"))
+    || (item.href.startsWith("/admin") && user.roles.includes("admin"))
   );
   const nav = (items: NavItem[]) =>
     items.filter(visible).map((item) => {
       const Icon = Icons[item.icon];
-      const active = pathname === item.href || pathname.startsWith(item.href + "/");
+      // A deeper item that matches (Admin > Doctors) wins over its parent (Configuration).
+      const matches = (href: string) => pathname === href || pathname.startsWith(href + "/");
+      const active = matches(item.href) && !items.some((other) => other.href.startsWith(item.href + "/") && matches(other.href));
       return (
         <Link
           key={item.href} href={item.href} onClick={() => setOpen(false)}

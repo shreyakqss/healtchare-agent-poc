@@ -8,5 +8,5 @@ data/
 !.env.example
 # macOS Finder metadata
 .DS_Store
-
+.claude
 .creds

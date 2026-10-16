@@ -70,6 +70,10 @@ tokens must never be exposed to browser code or storage.
   Restricted actions are code-gated, and generated answers are checked before delivery.
 - The HMS adapter receives appointment *requests* only; `CareTask.status` is always `draft`. Against
 OpenEMR that is a chart note for scheduling staff - never a calendar event, which would be a booking.
+  One documented exception: Admin > Doctors (`services/doctor_onboarding_service.py`) creates a practitioner and
+  publishes their "In Office" availability blocks through `integrations/hms/openemr/provisioning.py`, the only code
+  that writes OpenEMR's database directly. Availability, never a patient booking. Admins act only on their own
+  `clinic_id`'s doctors.
 - OpenEMR is the source of truth for patients, practitioners and documents. Patient self-service record search/linking
   is disabled until identity-proofing and proxy rules exist; the identity form creates the OpenEMR record. Departments, routing keywords
   and triage rules stay clinic policy in `data/hospitals/*.yaml`, and practitioners map to a department by

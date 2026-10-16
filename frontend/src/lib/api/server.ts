@@ -9,6 +9,7 @@ import type {
   CaseDetail,
   CaseListItem,
   Health,
+  AdminDoctors,
   HMSStatus,
   HospitalConfig,
   HospitalSummary,
@@ -58,5 +59,6 @@ export const serverApi = {
     hospitals: () => serverRequest<HospitalSummary[]>("/hospital/hospitals"),
     config: () => serverRequest<HospitalConfig & { hospital_id: string }>("/hospital/config"),
     hms: () => serverRequest<HMSStatus>("/hms/status"),
+    doctors: () => serverRequest<AdminDoctors>("/admin/doctors"),
   },
 };

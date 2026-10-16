@@ -2,6 +2,7 @@ hospital:
   id: qss-demo-clinic
   name: Santom Hospital
   timezone: Asia/Kolkata
+  hms_facility_id: 3
   phone: '8769987654'
   email: santonhospital@gmail.com
   website: null

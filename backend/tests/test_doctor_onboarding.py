@@ -1,0 +1,285 @@
+"""Admin > Doctors. The rules are unit tests; the onboarding itself runs against the live
+OpenEMR and Keycloak (test instances only) and removes every doctor it creates."""
+
+import random
+import uuid
+from datetime import date, time, timedelta
+
+import pytest
+from fastapi.testclient import TestClient
+
+from app.core.errors import Conflict, Forbidden, NotFound, ServiceUnavailable, Unprocessable
+from app.db import SessionLocal
+from app.domain import provider as rules
+from app.integrations.hms import get_hms
+from app.integrations.hms.openemr import provisioning
+from app.integrations.keycloak import admin_client
+from app.main import app
+from app.models import AdminAuditEvent
+from app.schemas.requests import NewDoctorRequest
+from app.security import CurrentPrincipal, authenticate
+from app.services import doctor_onboarding_service as onboarding
+from tests.helpers import BASE
+
+CLINIC = "qss-demo-clinic"
+PASSWORD = "Onboard#2026x"
+
+
+def valid_npi() -> str:
+    for _ in range(100):
+        npi = f"19{random.randint(0, 9_999_999):07d}"
+        for check in "0123456789":
+            if rules.npi_is_valid(npi + check):
+                return npi + check
+    raise AssertionError("no NPI")
+
+
+def admin(clinic_id: str | None = CLINIC) -> CurrentPrincipal:
+    user_id = uuid.uuid4()
+    return CurrentPrincipal(user_id=user_id, subject=str(user_id), roles=frozenset({"admin"}),
+                            username="test.admin", clinic_id=clinic_id, auth_method="test")
+
+
+def form(**overrides) -> NewDoctorRequest:
+    tag = uuid.uuid4().hex[:8]
+    values = dict(
+        first_name="Test", last_name=f"Doctor{tag}", email=f"onboard-{tag}@example.test",
+        username=f"testdoc{tag}", password=PASSWORD, npi=valid_npi(), department_id="cardiology",
+        specialty_code="207RC0000X", days=["mon", "wed", "fri"], ranges=[("10:00", "13:00"), ("16:00", "18:00")],
+        start_date=date.today(), weeks=2,
+    )
+    return NewDoctorRequest(**{**values, **overrides})
+
+
+# --- rules (no I/O) ----------------------------------------------------------------------
+
+def test_npi_check_digit():
+    assert rules.npi_is_valid("1234567893")  # CMS's worked example
+    assert not rules.npi_is_valid("1234567890")
+    assert not rules.npi_is_valid("12345")
+
+
+def test_password_follows_openemr_secure_password_rule():
+    assert rules.password_problem("Onboard#2026x", "testdoc") is None
+    assert rules.password_problem("short1A", "x")  # too short
+    assert rules.password_problem("alllowercase", "x")  # one class only
+    assert rules.password_problem("Testdoc#2026", "testdoc")  # contains the username
+
+
+def test_hours_are_checked_and_expanded_one_row_per_day_and_range():
+    assert rules.hours_problems(["mon"], [("10:00", "13:00"), ("12:00", "14:00")]) == ["Time ranges overlap."]
+    assert rules.hours_problems([], [("10:00", "13:00")]) == ["Pick at least one working day."]
+    assert rules.hours_problems(["mon"], [("13:00", "10:00")])
+    assert rules.hours_problems(["mon"], [("05:00", "10:00")])
+    monday = date(2030, 1, 7)
+    blocks = rules.expand_hours(["mon", "fri"], [("16:00", "19:00"), ("10:00", "13:00")], monday, 2)
+    assert len(blocks) == 8
+    assert blocks[0] == (monday, time(10), time(13)) and blocks[-1][0] == monday + timedelta(days=11)
+
+
+def test_extending_repeats_the_last_week_day_by_day():
+    monday = date(2030, 1, 7)
+    published = [(monday, time(10), time(13)), (monday + timedelta(days=2), time(16), time(19))]
+    more = rules.repeat_last_week(published, 2)
+    assert more == [
+        (monday + timedelta(days=7), time(10), time(13)), (monday + timedelta(days=9), time(16), time(19)),
+        (monday + timedelta(days=14), time(10), time(13)), (monday + timedelta(days=16), time(16), time(19)),
+    ]
+
+
+def test_role_code_falls_back_to_the_parent_specialty():
+    roles = {"207R00000X", "207X00000X"}
+    assert rules.role_code_for("207X00000X", roles) == "207X00000X"
+    assert rules.role_code_for("207RC0000X", roles) == "207R00000X"
+    assert rules.role_code_for("208600000X", roles) == rules.GENERIC_ROLE
+
+
+def test_admin_without_a_hospital_cannot_manage_doctors():
+    with pytest.raises(Forbidden):
+        onboarding.clinic_for(admin(None))
+    with pytest.raises(Forbidden):
+        onboarding.clinic_for(admin("no-such-hospital"))
+
+
+def test_only_admins_reach_the_doctor_endpoints():
+    client = TestClient(app)
+    for role in ("patient", "clinician"):
+        principal = admin()
+        app.dependency_overrides[authenticate] = lambda p=principal, r=role: CurrentPrincipal(
+            user_id=p.user_id, subject=p.subject, roles=frozenset({r}), clinic_id=CLINIC, auth_method="test")
+        assert client.get(f"{BASE}/admin/doctors").status_code == 403
+        assert client.post(f"{BASE}/admin/doctors", json=form().model_dump(mode="json")).status_code == 403
+    client.close()
+
+
+# --- live OpenEMR + Keycloak --------------------------------------------------------------
+
+def _live_or_skip():
+    if not provisioning.configured():
+        pytest.skip("OPENEMR_MYSQL_USER/PASSWORD are not set in backend/.env")
+    try:
+        admin_client.username_or_email_taken("careflow-probe", "probe@example.test")
+    except ServiceUnavailable:
+        pytest.skip("Keycloak admin API unreachable")
+
+
+@pytest.fixture
+def created():
+    """Usernames to remove from both systems after the test."""
+    _live_or_skip()
+    usernames: list[str] = []
+    yield usernames
+    for username in usernames:
+        for p in provisioning.providers(3):
+            if p.username == username:
+                provisioning.delete_provider(p.id)
+        base, headers = admin_client._admin()
+        import httpx
+        for user in httpx.get(f"{base}/users", params={"username": username, "exact": "true"}, headers=headers).json():
+            admin_client.delete_user(user["id"])
+    with SessionLocal() as db:
+        db.query(AdminAuditEvent).filter(AdminAuditEvent.actor == "admin:test.admin").delete()
+        db.commit()
+
+
+@pytest.mark.integration
+def test_a_new_doctor_can_log_in_is_routed_and_has_bookable_times(created):
+    new = form()
+    created.append(new.username)
+    with SessionLocal() as db:
+        doctor = onboarding.create(db, admin(), new)
+    assert doctor["department_id"] == "cardiology" and doctor["has_login"] is True
+    assert doctor["hours"] == [{"days": ["mon", "wed", "fri"], "times": [["10:00", "13:00"], ["16:00", "18:00"]]}]
+    hms = get_hms()
+    # The same OpenEMR password check a doctor's review/approve goes through.
+    assert hms.verify_credentials(new.username, PASSWORD).id == doctor["practitioner_id"]
+    live = next(p for p in hms.list_practitioners() if p.id == doctor["practitioner_id"])
+    assert live.department_id == "cardiology" and live.username == new.username
+    assert hms.available_slots("cardiology", doctor["practitioner_id"], limit=2)
+    with SessionLocal() as db:
+        event = db.query(AdminAuditEvent).filter(AdminAuditEvent.action == "doctor.created",
+                                                 AdminAuditEvent.payload["username"].astext == new.username).one()
+        assert event.clinic_id == CLINIC and PASSWORD not in str(event.payload)
+
+
+@pytest.mark.integration
+def test_duplicates_and_bad_details_are_refused_before_anything_is_written(created):
+    new = form()
+    created.append(new.username)
+    with SessionLocal() as db:
+        onboarding.create(db, admin(), new)
+    again = form(username=new.username, npi=new.npi, email=new.email)
+    found = onboarding.problems(onboarding.clinic_for(admin()), again)
+    assert "That username is already used in the hospital system." in found
+    assert "A practitioner with that NPI already exists." in found
+    bad = form(npi="1234567890", specialty_code="207X00000X")
+    with SessionLocal() as db, pytest.raises(Unprocessable):
+        onboarding.create(db, admin(), bad)
+    assert provisioning.clashes(bad.username, bad.npi) == []
+
+
+@pytest.mark.integration
+def test_a_failed_login_step_leaves_no_half_created_doctor(created, monkeypatch):
+    new = form()
+    created.append(new.username)
+
+    def fail(*_, **__):
+        raise ServiceUnavailable("simulated Keycloak failure")
+
+    monkeypatch.setattr(admin_client, "create_clinician", fail)
+    with SessionLocal() as db, pytest.raises(ServiceUnavailable):
+        onboarding.create(db, admin(), new)
+    assert provisioning.clashes(new.username, new.npi) == []
+
+
+@pytest.mark.integration
+def test_extend_hours_continues_the_pattern_and_stays_inside_the_hospital(created):
+    new = form(weeks=1)
+    created.append(new.username)
+    with SessionLocal() as db:
+        doctor = onboarding.create(db, admin(), new)
+        extended = onboarding.extend_hours(db, admin(), doctor["id"], 2)
+    assert date.fromisoformat(str(extended["hours_until"])) == date.fromisoformat(str(doctor["hours_until"])) + timedelta(days=14)
+    with SessionLocal() as db, pytest.raises(NotFound):
+        onboarding.extend_hours(db, admin(), 1, 1)  # OpenEMR's own admin account is not a doctor here
+
+
+# --- removal ------------------------------------------------------------------------------
+
+def _case_routed_to(practitioner_id: str, status: str):
+    from app.models import IntakeSession, PatientCase, RoutingRecommendation
+    with SessionLocal() as db:
+        session = IntakeSession(status=status, consent_status="GRANTED", channel="web")
+        db.add(session)
+        db.flush()
+        case = PatientCase(session_id=session.id, hospital_id=CLINIC)
+        db.add(case)
+        db.flush()
+        db.add(RoutingRecommendation(
+            case_id=case.id, department_id="cardiology", department_name="Cardiology", doctor_id=practitioner_id,
+            doctor_name="Test", appointment_type_id="consult", appointment_type_label="Consult", rationale="test",
+            matched_keywords=[], suggested_slot=None, slot_options=[],
+        ))
+        db.commit()
+        return session.id
+
+
+def _drop_session(session_id):
+    from app.models import IntakeSession
+    with SessionLocal() as db:
+        db.query(IntakeSession).filter(IntakeSession.id == session_id).delete()
+        db.commit()
+
+
+@pytest.mark.integration
+def test_a_never_used_doctor_is_erased_from_both_systems(created):
+    new = form()
+    created.append(new.username)
+    with SessionLocal() as db:
+        doctor = onboarding.create(db, admin(), new)
+        assert onboarding.removal_check(db, admin(), doctor["id"])["mode"] == "delete"
+        assert onboarding.remove(db, admin(), doctor["id"])["result"] == "deleted"
+    assert provisioning.clashes(new.username, new.npi) == []
+    assert not admin_client.username_or_email_taken(new.username, new.email)
+
+
+@pytest.mark.integration
+def test_a_doctor_with_history_is_deactivated_then_reactivated(created):
+    new = form()
+    created.append(new.username)
+    with SessionLocal() as db:
+        doctor = onboarding.create(db, admin(), new)
+    past = _case_routed_to(doctor["practitioner_id"], "COMPLETED")
+    try:
+        with SessionLocal() as db:
+            check = onboarding.removal_check(db, admin(), doctor["id"])
+            assert check["mode"] == "deactivate" and check["history"]["cases"] == 1
+            result = onboarding.remove(db, admin(), doctor["id"])
+        assert result["result"] == "deactivated" and result["doctor"]["active"] is False
+        hms = get_hms()
+        assert doctor["practitioner_id"] not in [p.id for p in hms.list_practitioners()]  # never routed again
+        assert hms.verify_credentials(new.username, PASSWORD) is None  # cannot sign off any more
+        with SessionLocal() as db:
+            back = onboarding.reactivate(db, admin(), doctor["id"])
+        assert back["active"] is True and back["hours"] == doctor["hours"]  # schedule restored
+        assert hms.verify_credentials(new.username, PASSWORD) is not None
+        assert doctor["practitioner_id"] in [p.id for p in hms.list_practitioners()]
+    finally:
+        _drop_session(past)
+
+
+@pytest.mark.integration
+def test_open_cases_block_removal(created):
+    new = form()
+    created.append(new.username)
+    with SessionLocal() as db:
+        doctor = onboarding.create(db, admin(), new)
+    open_case = _case_routed_to(doctor["practitioner_id"], "NEEDS_REVIEW")
+    try:
+        with SessionLocal() as db:
+            assert onboarding.removal_check(db, admin(), doctor["id"])["blocked_by_open_cases"] == 1
+            with pytest.raises(Conflict):
+                onboarding.remove(db, admin(), doctor["id"])
+        assert provisioning.provider(3, doctor["id"]).active
+    finally:
+        _drop_session(open_case)

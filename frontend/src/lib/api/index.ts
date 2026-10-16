@@ -1,6 +1,6 @@
 import { API_ROOT, http, readCookie, readSse } from "@/lib/api/client";
 import type {
-  AppointmentRequestResult, AssistantReply, AssistantTurn, Attachment, AttachmentSkipResponse, AuditEvent, CaseDetail,
+  AdminDoctor, AdminDoctors, DoctorPreview, DoctorRemoval, DoctorRemovalCheck, NewDoctorRequest, AppointmentRequestResult, AssistantReply, AssistantTurn, Attachment, AttachmentSkipResponse, AuditEvent, CaseDetail,
   CaseListItem, ConsultationNote, ConsultationNoteRequest, FinalizeRequest, HMSPractitioner, HMSStatus, HospitalConfig,
   HospitalSummary, IdentityFormRequest, IntakeConfig, LinkedPatientRecord, MessageResponse, PatientCase, PatientVisitItem,
   Review, ReviewRequest, Roster, SessionResponse, Slot, TurnEvent,
@@ -83,4 +83,14 @@ export const hmsApi = {
   slots: (departmentId: string, practitionerId?: string, limit = 5) =>
     http.get<Slot[]>(`/hms/slots?department_id=${departmentId}${practitionerId ? `&practitioner_id=${practitionerId}` : ""}&limit=${limit}`),
   requests: () => http.get<AppointmentRequestResult[]>("/hms/appointment-requests"),
+};
+
+export const adminDoctorsApi = {
+  list: () => http.get<AdminDoctors>("/admin/doctors"),
+  preview: (body: NewDoctorRequest) => http.post<DoctorPreview>("/admin/doctors/preview", body),
+  create: (body: NewDoctorRequest) => http.post<AdminDoctor>("/admin/doctors", body),
+  extendHours: (id: number, weeks: number) => http.post<AdminDoctor>(`/admin/doctors/${id}/extend-hours`, { weeks }),
+  removalCheck: (id: number) => http.get<DoctorRemovalCheck>(`/admin/doctors/${id}/removal`),
+  remove: (id: number) => http.del<DoctorRemoval>(`/admin/doctors/${id}`),
+  reactivate: (id: number) => http.post<AdminDoctor>(`/admin/doctors/${id}/reactivate`),
 };

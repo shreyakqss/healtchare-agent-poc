@@ -106,3 +106,34 @@ class NewHospitalRequest(BaseModel):
 
 class HospitalYamlRequest(BaseModel):
     yaml: str
+
+
+class NewDoctorRequest(BaseModel):
+    """Admin > Doctors > Add doctor. The hospital is never a field: it is the admin's own."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    title: str = Field(default="Dr.", max_length=30)
+    first_name: str = Field(min_length=1, max_length=100)
+    last_name: str = Field(min_length=1, max_length=100)
+    email: str = Field(pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$", max_length=254)
+    phone: str = Field(default="", max_length=30)
+    username: str = Field(min_length=3, max_length=32)
+    password: str = Field(min_length=1, max_length=128)
+    npi: str = Field(min_length=1, max_length=10)
+    department_id: str = Field(min_length=1, max_length=100)
+    specialty_code: str = Field(min_length=1, max_length=20)
+    licence: str = Field(default="", max_length=60)
+    days: list[str] = Field(default_factory=list)
+    ranges: list[tuple[str, str]] = Field(default_factory=list)
+    start_date: date
+    weeks: int = Field(ge=1, le=26)
+
+    @field_validator("username")
+    @classmethod
+    def username_lowercase(cls, value: str) -> str:
+        return value.lower()
+
+
+class ExtendHoursRequest(BaseModel):
+    weeks: int = Field(ge=1, le=26)

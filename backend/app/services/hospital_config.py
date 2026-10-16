@@ -66,6 +66,9 @@ def validate(config: Any) -> None:
         not isinstance(hospital_details["timezone"], str) or not hospital_details["timezone"].strip()
     ):
         raise InvalidConfig("hospital timezone must be a non-empty IANA name.")
+    facility_id = hospital_details.get("hms_facility_id")
+    if facility_id is not None and (isinstance(facility_id, bool) or not isinstance(facility_id, int) or facility_id < 1):
+        raise InvalidConfig("hospital hms_facility_id must be the hospital system's facility id (a positive number).")
     triage_config = config.get("triage_rules") or {}
     if not isinstance(triage_config, dict):
         raise InvalidConfig("triage_rules must be a mapping.")
