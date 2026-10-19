@@ -1,168 +1,176 @@
-# CareFlow progress report
+# CareFlow — Progress Report
 
-**Project:** CareFlow, AI-assisted patient intake and doctor routing (proof of concept)
-**Prepared by:** Prisha Gupta · **Period covered:** up to 2026-10-16
+**Project:** CareFlow — AI-assisted patient intake and doctor routing (proof of concept)  
+**Prepared by:** Prisha Gupta  
+**Reporting period:** Progress through 16 October 2026  
+**Overall status:** Core scheduling and doctor-administration work is implemented; changes still need to be committed. One product decision is needed before the next feature can begin.
 
----
+## 1. Executive summary
 
-## Summary
+CareFlow helps patients describe their problem, routes them to an appropriate department and doctor, and lets a doctor review the case. The latest work focused on making appointment scheduling safer and making doctor setup easier for hospital administrators.
 
-| | |
-|---|---|
-| **Completed** | Patients can no longer be double-booked with a doctor. Appointment times are live and show taken times greyed out. Patients see each doctor's consulting hours. The "My visits" refresh is fixed. Setup documentation is written. |
-| **Proposed next** | Admins add new doctors through a single form, which creates everything the doctor needs in the hospital system and the login system. |
-| **Decision needed** | How CareFlow writes the doctor details that OpenEMR's API cannot accept (section 3, "Decision needed"). Recommended: **Option A**. |
-| **Risks / issues** | None blocking. Doctor office hours run out on 2027-01-05 and must be extended (the next feature adds a button for this). |
+### What is done
 
-### Glossary
-- **CareFlow**: our app. Patients describe their problem to an AI assistant, CareFlow decides urgency and
-  the right department and doctor, and a doctor reviews the case.
-- **OpenEMR**: the hospital system (open-source medical records). It holds the patients, the doctors and their calendars.
-- **Keycloak**: the login system. It controls who can sign in and whether they are a patient, a doctor or an admin.
-- **Slot**: a 30-minute appointment time with a doctor.
+- **Prevented double booking within CareFlow:** a doctor and appointment time can be held by only one patient at a time.
+- **Improved appointment availability:** patients see up-to-date appointment options; unavailable times remain visible but are disabled.
+- **Made consulting hours visible:** patients can see the doctor's weekly hours.
+- **Added safeguards and audit records:** doctor setup is validated, hospital access is scoped to the admin's own hospital, and admin actions are recorded.
+- **Added an operator guide:** includes how to run the app, roles and logins, doctor setup, and common troubleshooting.
 
----
+### What is not done yet
 
-## 1. Completed: 
+- The manager needs to choose how CareFlow should select a doctor when multiple doctors are available.
+- Add in Admin → Doctors page: admins can add, view, extend the published hours of, deactivate, reactivate, or remove doctors.
 
-### 1.1 No double booking
-**The problem.** By design, CareFlow does not book appointments in OpenEMR. It sends the hospital's
-scheduling staff a *request*. As a result, CareFlow had no record of which times its own patients had already
-taken. Two patients could get the same doctor at the same time, and every new patient was offered the same first time.
+## 2. Status at a glance
 
-**What we built.** CareFlow now **reserves** ("holds") a time for each patient:
-- A doctor's time can be held by **only one patient**. The database enforces this, so it holds even when two
-  patients click at the same moment (tested with four simultaneous patients: exactly one succeeds).
-- A new patient automatically gets the **earliest free** time.
-- If a patient picks a time someone has just taken, they see: *"That time was just taken by another patient. Please pick another."*
-- When a case is **rejected or fails**, its time is released for others. A **completed** visit keeps its time.
-- Every reservation and release is recorded in the audit log.
-
-**Result.** Verified with test patients: three patients routed to the same cardiologist each received a different time.
-
-### 1.2 Live appointment times, with taken times greyed out
-**The problem.** A patient's list of times was fixed when their case was created. Times freed later never
-reappeared, and times taken later were still shown.
-
-**What we built.** The time list is rebuilt from the doctor's live calendar every time the patient opens it.
-- Times held by other patients stay visible but are **greyed out**, so patients understand the doctor is busy then.
-- A freed time reappears immediately.
-- Patients always have 8 times they can actually choose.
-
-### 1.3 Doctor's consulting hours shown to patients
-The appointment card now shows the doctor's weekly hours (for example *Mon – Fri, 10 AM – 1 PM and 4 PM – 7 PM*),
-read from the hospital calendar. The internal label "Urgent same-day slot" was removed from the patient's view.
-
-### 1.4 "My visits" refresh fixed
-The **Refresh** button did not update an open visit, so patients saw stale times and statuses. It now refreshes
-everything on the page and confirms with a message.
-
-### 1.5 Documentation
-`docs/OPERATOR_GUIDE.md` explains how to run the app, which service is on which port, how logins and roles
-work, how doctors and their hours are set up, and how to fix common problems.
-
-### Quality
-- **10 new automated tests** for slot reservation, plus 1 for the consulting-hours display. All pass.
-- Two older tests also fail on and off without this work. They are not caused by it and are tracked separately.
-
----
-
-## 2. Open items
-
-| Item | Owner | When |
+| Workstream | Status | Plain-English result |
 |---|---|---|
-| Commit the 2026-10-14 work (part is already committed on `feature/slot-hold-no-double-booking`) | Prisha | Next session |
-| Extend doctor office hours past 2027-01-05 | Prisha | Before Dec 2026 (or via the next feature's button) |
-| Correct the database port in `docs/MANUAL_E2E_TESTING.md` (says 5432, is 5435) | Prisha | Next session |
+| Appointment holds / double-booking prevention | Implemented and tested | Two patients cannot successfully hold the same doctor's time through CareFlow. |
+| Live appointment options | Implemented | The list refreshes from the doctor's current calendar when opened. Taken times are greyed out; released times can become available again. |
+| Doctor consulting hours | Implemented | Patients can see weekly consulting hours on the appointment card. |
+| Doctor administration | Implemented and tested against OpenEMR and Keycloak | Admins can manage doctors from one page, with validation and access controls. |
+| Git commits | Pending | The latest work still needs to be committed; some 14 October work is already on `feature/slot-hold-no-double-booking`. |
+| Doctor-assignment rule | Decision needed | Current behaviour chooses the first doctor listed, not necessarily the doctor who can see the patient soonest. |
+| Existing test failures | Follow-up | Two older tests fail intermittently or independently of this work; investigate separately. |
 
----
+## 3. Completed work
 
-## 3. Proposed next feature: add doctors from the admin page
+### 3.1 Appointment scheduling — 14 October 2026
 
-**Status:** awaiting approval · **Branch:** `feature/admin-doctor-onboarding`
+**Problem:** CareFlow sends appointment requests to hospital scheduling staff rather than booking directly in OpenEMR. Previously, CareFlow did not keep track of times already selected by its own patients. This could let two patients select the same doctor and time.
 
-### Why
-Adding a doctor today takes **three separate manual jobs in three different tools**: the hospital system, its
-calendar and the login system. Small mistakes are easy to make and hard to spot, for example a missing licence
-number, a wrong specialty code, a capital letter in the username, or a repeating calendar entry. Each one silently
-stops the doctor from receiving patients or from logging in. We hit several of these while setting up the six
-demo doctors.
+**What changed:**
 
-### What the admin will be able to do
-The CareFlow administrator, **and only the administrator**, opens **Admin → Doctors → Add doctor**, fills in
-one form and presses Save. CareFlow then creates, automatically:
-1. **The doctor in the hospital system**, with their professional details, so CareFlow can route patients to them.
-2. **Their weekly consulting hours** in the hospital calendar, which become the appointment times patients pick from.
-3. **Their login**, so they can sign in to CareFlow as a doctor straight away.
+- **One patient per doctor/time:** the database enforces a unique hold for each doctor and start time.
+- **Automatic default:** CareFlow offers the earliest available time by default.
+- **Clear conflict message:** if someone else takes a time first, the patient is asked to choose another.
+- **Automatic release:** a hold is released when a case is rejected or fails. A completed visit retains its time.
+- **Audit trail:** reservations and releases are recorded.
+- **Live availability:** the appointment list is refreshed from the doctor's current calendar when the patient opens it. Held times are shown as unavailable, and newly freed times can reappear.
+- **Eight selectable options:** patients are shown eight times they can actually select.
+- **Consulting hours:** the appointment card shows weekly hours. An internal “Urgent same-day slot” label was removed from the patient view.
+- **Refresh fix:** the “My visits” Refresh button now refreshes the entire page, including an open visit.
 
-### What the form collects
+**Verification:** 10 automated tests cover slot reservation and one covers the consulting-hours display. A test with four simultaneous patients confirmed that only one could reserve the same time.
 
-| Section | Details |
+**Important boundary:** this prevents duplicate holds inside CareFlow. CareFlow still sends a request to hospital scheduling staff; it does not itself complete the booking in OpenEMR.
+
+### 3.2 Doctor administration — 16 October 2026
+
+**Problem:** setting up a doctor previously required around 15 manual steps across OpenEMR, its calendar and Keycloak. Small inconsistencies could stop the doctor from receiving patients or signing in.
+
+**What changed:** a new **Doctors** page is available in the admin sidebar.
+
+| Admin action | What it does |
 |---|---|
-| Personal | Title, first name, last name, email, phone |
-| Login | Username and password (one password for both systems) |
-| Professional | NPI (US national provider ID), department, specialty, licence number (optional) |
-| Consulting hours | Working days, up to 3 time ranges per day, start date, number of weeks to publish |
+| View doctors | Shows doctors for the admin's hospital, including department, specialty, NPI, consulting hours, how far ahead hours are published, and login status. Less than two weeks of published hours is highlighted. |
+| Add doctor | Uses one form for personal details, login, NPI, department, specialty and weekly hours. An initial Review step validates the information before creation. |
+| Extend hours | Copies the doctor's last published week forward by 4, 8, 12 or 26 weeks. |
+| Remove doctor | Permanently deletes a doctor with no patient history. If patient history exists, the doctor is deactivated instead so records remain intact. |
+| Reactivate doctor | Re-enables a deactivated doctor, including their login and hours. |
 
-Before saving, the admin sees a **preview** of the hours exactly as patients will see them.
+**Safeguards added:**
 
-### Safeguards
-- **Everything is checked first** (duplicate usernames or licence numbers, invalid NPI, overlapping hours,
-  missing names). If anything is wrong, nothing is created.
-- **No half-created doctors.** If one step fails, the steps already done are undone, and the admin is told which step failed.
-- **Audited.** Each new doctor is recorded with who added them and when. Passwords are never stored in logs.
-- **Access.** Only the admin role can use it. The admin still cannot view patient records.
+- Admins can manage only the hospital associated with their login. If the login has no hospital assigned, access is blocked.
+- Before saving, the system checks for duplicate usernames, NPIs and email addresses; invalid NPIs; weak passwords; overlapping hours; and specialties that do not match the selected department.
+- If login creation fails, earlier OpenEMR changes are rolled back to avoid leaving a partially created doctor.
+- Removal is blocked while the doctor has open cases.
+- The admin is warned before removing the last doctor in a department.
+- Add, extend, delete, deactivate and reactivate actions are audited with the actor and time. Passwords are not stored in the audit log.
 
-### Also included
-- **Doctors list** on the admin page, showing all doctors from the hospital system with their department and hours.
-  Today the admin page doesn't show them.
-- **"Extend hours" button** to publish a doctor's same weekly hours for more weeks, so they never run out.
+**Issue found and addressed:** OpenEMR's API still accepts a deactivated doctor's password. CareFlow's own sign-off check now rejects inactive doctors as an additional safeguard.
 
-### Not included (possible follow-ups)
-- Editing or deactivating an existing doctor.
-- Leave and holidays.
-- Doctors working at more than one hospital.
+**Verification:** a doctor created through the form was able to log in, pass the OpenEMR password check used by review/approval, appear under the correct department and have bookable times.
 
-### Decision needed
-OpenEMR's official interface can create the doctor, but it **cannot** set their login password or specialty,
-and **cannot** add consulting hours. Three ways forward:
+**Automated tests:** 14 doctor-management tests pass. They cover validation, access control, creation, duplicates, rollback, extension, deletion, deactivation, reactivation and blocking removal when open cases exist.
 
-| Option | How | Pros | Cons |
+## 4. Proposed next feature — manager decision required
+
+### Assign the doctor who can see the patient soonest
+
+**Current behaviour:** CareFlow selects the first doctor listed in a department. That can repeatedly direct patients to an older-listed doctor even when another doctor has earlier availability.
+
+**Why this matters:**
+- Newly added doctors may receive few or no patients.
+- Patients may be offered later times with one doctor while another doctor has an earlier free time.
+
+**Recommended rule:**
+1. Consider all active doctors in the relevant department.
+2. Assign the patient to the doctor with the earliest free appointment time.
+3. If doctors have the same earliest time, choose the one with fewer open cases.
+4. Keep the existing appointment-selection and double-booking protections. Record the assignment reason for traceability.
+
+**Other options:** assign doctors in turn (round robin), or let patients choose their doctor.
+
+**Estimate:** about half a day after the rule is approved.  
+**Status:** not started; awaiting approval. Planned branch: `feature/doctor-assignment-earliest-available`.
+
+**Decision requested:** approve the recommended “earliest available” rule, or choose one of the alternatives.
+
+## 5. Open actions
+
+| Priority | Action | Owner | Target / note |
 |---|---|---|---|
-| **A (recommended)** | Use OpenEMR's interface where possible, and write the remaining details directly into OpenEMR's database, in one contained part of our code | Fully automatic. Fastest to deliver. | Depends on this OpenEMR version's internal structure, so an OpenEMR upgrade would need a re-check. |
-| **B** | Use OpenEMR's interface only | Simplest and safest technically | **Not fully automatic.** The admin must still set the password and hours by hand in OpenEMR. |
-| **C** | Build a small add-on inside OpenEMR that exposes the missing functions | Cleanest long-term | Most effort, and adds an OpenEMR add-on to maintain |
+| High | Decide the doctor-assignment rule | Prisha / manager | Before starting the next feature |
+| High | Commit the 14 and 16 October changes | Prisha | Next work session; part of 14 October work is already committed |
+| Medium | Re-add Dr. Arjun Mehta (orthopedics), if still required | Prisha | Next work session; he was deleted during testing because he had no patient history |
+| Medium | Extend the original six doctors' hours beyond 5 January 2027 | Prisha | Before December 2026 |
+| Medium | Restrict hospital-settings pages to the admin's own hospital | Prisha | Follow-up; currently any admin can edit any hospital's settings |
+| Low | Correct the database port in `docs/MANUAL_E2E_TESTING.md` | Prisha | Next work session; document says 5432, actual port is 5435 |
+| Low | Investigate two older failing tests | Prisha | Follow-up |
 
-**Recommendation: Option A for the proof of concept.** The direct-write code is isolated, so it can move to
-Option C if CareFlow goes beyond the POC.
+### Test failures to keep separate from the new work
 
-### How we will verify it
-- Adding a doctor through the form results in a doctor who can log in, has bookable times, and receives a
-  patient with a matching complaint.
-- Invalid or duplicate details are rejected, with nothing created.
-- A simulated failure halfway through leaves no partial doctor behind.
-- Non-admin users are blocked, and passwords never appear in logs.
+- `test_personal_record_never_calls_external_search` fails consistently and also fails without these changes.
+- `test_chat_completion_fires_prescreen` is intermittent: it sometimes fails and passes when re-run.
 
----
+These are not currently identified as blockers for the new scheduling and doctor-management work, but should be investigated separately.
 
-## Appendix: technical reference (for developers)
+## 6. Risks and boundaries
 
-**Slot reservation:** new table `slot_holds` (unique per doctor and start time, one per case), service
-`backend/app/services/slot_hold_service.py`, migration `4b8d2e6f1a57_slot_holds.py`. Wired into routing
-(`workflows/prescreen.py`), slot selection (`services/appointment_service.py`, row lock plus a 409 on conflict),
-case lifecycle (`services/lifecycle.py`, release on reject or fail), and `GET /hms/slots`.
+- **Git state:** the latest changes are not all committed yet.
+- **Hospital booking boundary:** CareFlow holds times internally and sends requests to hospital scheduling staff; it does not directly make the final OpenEMR appointment booking.
+- **Hospital-settings access:** the existing settings pages still need hospital-level access restrictions.
+- **OpenEMR integration maintenance:** the doctor-provisioning code writes directly to the OpenEMR database and must be rechecked after an OpenEMR upgrade.
+- **Doctor hours:** the original six doctors' published hours currently need extending beyond 5 January 2027.
 
-**Live list and greyed-out times:** `slot_hold_service.live_options` / `mark_taken`, a `taken` flag on
-`SlotResponse`, and the patient serializer in `api/v1/serializers.py`. Frontend:
-`features/intake/appointment-slot-picker.tsx`.
+No blocking issue was reported in the progress notes, but the items above still need follow-up.
 
-**Consulting hours:** `domain/scheduling.weekly_hours`, `HMSClient.office_hours` (OpenEMR "In Office"
-calendar blocks, next 14 days), and a `doctor_hours` field on the patient routing response.
+## 7. Possible later improvements
 
-**Refresh fix:** `frontend/src/features/intake/visits-panel.tsx`.
+These are ideas for later, not part of the completed work:
 
-**Tests:** `backend/tests/test_slot_holds.py` (10), `backend/tests/test_scheduling.py`.
+- Edit a doctor's details or change weekly hours, rather than only extending them.
+- Support doctor leave and holidays.
+- Support doctors who work at more than one hospital.
 
-**Next feature (planned):** `services/doctor_onboarding_service.py`, OpenEMR writes kept in
-`integrations/hms/openemr/`, Keycloak through the existing `careflow-admin` service client, and admin-only
-API routes with CSRF.
+## Appendix A — Technical reference
+
+This section is for developers; the earlier sections are intended for project and management review.
+
+### Appointment holds and availability
+- Database table: `slot_holds`; unique per doctor and start time, with one hold per case.
+- Migration: `4b8d2e6f1a57_slot_holds.py`.
+- Service: `backend/app/services/slot_hold_service.py`.
+- Integrated with `workflows/prescreen.py`, `services/appointment_service.py`, `services/lifecycle.py`, and `GET /hms/slots`.
+- Live options: `slot_hold_service.live_options` / `mark_taken`, `taken` flag on `SlotResponse`, and patient serializer in `api/v1/serializers.py`.
+- Frontend slot picker: `features/intake/appointment-slot-picker.tsx`.
+- Consulting hours: `domain/scheduling.weekly_hours`, `HMSClient.office_hours`, and `frontend/src/features/scheduling/doctor-hours.tsx`.
+
+### Doctor administration
+- API: `api/v1/admin_doctors.py` (admin-only, CSRF protected).
+- Service: `services/doctor_onboarding_service.py`.
+- Rules: `domain/provider.py`.
+- OpenEMR provisioning: `integrations/hms/openemr/provisioning.py`.
+- Keycloak admin client: `integrations/keycloak/admin_client.py`.
+- Inactive-doctor checks: `HMSClient.list_practitioners` and `HMSClient.verify_credentials`.
+- Audit table and migration: `admin_audit_events`, `6c1f3a9e2b48`.
+- Frontend: `app/admin/doctors/page.tsx`, `features/admin/doctors/doctors-console.tsx`, and `features/admin/doctors/add-doctor-dialog.tsx`.
+- Plan: `docs/PLAN_ADMIN_DOCTOR_ONBOARDING.md`.
+- Configuration references: `hospital.hms_facility_id`, `clinic_id` on admin logins, `OPENEMR_MYSQL_*` in `backend/.env`, and `bcrypt==4.3.0`.
+
+### Relevant tests and documentation
+- Tests: `backend/tests/test_slot_holds.py`, `backend/tests/test_scheduling.py`, `backend/tests/test_doctor_onboarding.py`.
+- Operator guide: `docs/OPERATOR_GUIDE.md`.
+- Manual end-to-end testing guide: `docs/MANUAL_E2E_TESTING.md`.
