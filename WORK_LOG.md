@@ -17,7 +17,7 @@ CareFlow helps patients describe their problem, routes them to an appropriate de
 - **Added safeguards and audit records:** doctor setup is validated, hospital access is scoped to the admin's own hospital, and admin actions are recorded.
 - **Added an operator guide:** includes how to run the app, roles and logins, doctor setup, and common troubleshooting.
 
-### What is not done yet
+### TODO
 
 -  needs to choose how CareFlow should select a doctor when multiple doctors are available.
 - Add in Admin → Doctors page: admins can add, view, extend the published hours of, deactivate, reactivate, or remove doctors.
@@ -36,7 +36,7 @@ CareFlow helps patients describe their problem, routes them to an appropriate de
 
 ## 3. Completed work
 
-### 3.1 Appointment scheduling — 14 October 2026
+### 3.1 Appointment scheduling 
 
 **Problem:** CareFlow sends appointment requests to hospital scheduling staff rather than booking directly in OpenEMR. Previously, CareFlow did not keep track of times already selected by its own patients. This could let two patients select the same doctor and time.
 
@@ -56,7 +56,7 @@ CareFlow helps patients describe their problem, routes them to an appropriate de
 
 **Important boundary:** this prevents duplicate holds inside CareFlow. CareFlow still sends a request to hospital scheduling staff; it does not itself complete the booking in OpenEMR.
 
-### 3.2 Doctor administration — 16 October 2026
+### 3.2 Doctor administration 
 
 **Problem:** setting up a doctor previously required around 15 manual steps across OpenEMR, its calendar and Keycloak. Small inconsistencies could stop the doctor from receiving patients or signing in.
 
@@ -85,7 +85,7 @@ CareFlow helps patients describe their problem, routes them to an appropriate de
 
 **Automated tests:** 14 doctor-management tests pass. They cover validation, access control, creation, duplicates, rollback, extension, deletion, deactivation, reactivation and blocking removal when open cases exist.
 
-## 4. Proposed next feature — manager decision required
+## 4. Proposed next feature
 
 ### Assign the doctor who can see the patient soonest
 
@@ -108,34 +108,7 @@ CareFlow helps patients describe their problem, routes them to an appropriate de
 
 **Decision requested:** approve the recommended “earliest available” rule, or choose one of the alternatives.
 
-## 5. Open actions
 
-| Priority | Action | Owner | Target / note |
-|---|---|---|---|
-| High | Decide the doctor-assignment rule | Prisha / manager | Before starting the next feature |
-| High | Commit the 14 and 16 October changes | Prisha | Next work session; part of 14 October work is already committed |
-| Medium | Re-add Dr. Arjun Mehta (orthopedics), if still required | Prisha | Next work session; he was deleted during testing because he had no patient history |
-| Medium | Extend the original six doctors' hours beyond 5 January 2027 | Prisha | Before December 2026 |
-| Medium | Restrict hospital-settings pages to the admin's own hospital | Prisha | Follow-up; currently any admin can edit any hospital's settings |
-| Low | Correct the database port in `docs/MANUAL_E2E_TESTING.md` | Prisha | Next work session; document says 5432, actual port is 5435 |
-| Low | Investigate two older failing tests | Prisha | Follow-up |
-
-### Test failures to keep separate from the new work
-
-- `test_personal_record_never_calls_external_search` fails consistently and also fails without these changes.
-- `test_chat_completion_fires_prescreen` is intermittent: it sometimes fails and passes when re-run.
-
-These are not currently identified as blockers for the new scheduling and doctor-management work, but should be investigated separately.
-
-## 6. Risks and boundaries
-
-- **Git state:** the latest changes are not all committed yet.
-- **Hospital booking boundary:** CareFlow holds times internally and sends requests to hospital scheduling staff; it does not directly make the final OpenEMR appointment booking.
-- **Hospital-settings access:** the existing settings pages still need hospital-level access restrictions.
-- **OpenEMR integration maintenance:** the doctor-provisioning code writes directly to the OpenEMR database and must be rechecked after an OpenEMR upgrade.
-- **Doctor hours:** the original six doctors' published hours currently need extending beyond 5 January 2027.
-
-No blocking issue was reported in the progress notes, but the items above still need follow-up.
 
 ## 7. Possible later improvements
 
