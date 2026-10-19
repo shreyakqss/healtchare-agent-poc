@@ -19,7 +19,7 @@ CareFlow helps patients describe their problem, routes them to an appropriate de
 
 ### What is not done yet
 
-- The manager needs to choose how CareFlow should select a doctor when multiple doctors are available.
+-  needs to choose how CareFlow should select a doctor when multiple doctors are available.
 - Add in Admin → Doctors page: admins can add, view, extend the published hours of, deactivate, reactivate, or remove doctors.
 
 ## 2. Status at a glance
