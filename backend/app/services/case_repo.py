@@ -253,7 +253,10 @@ def pending_attachment_kinds(db: Session, case_id: uuid.UUID) -> list[str]:
 
 def ready_for_prescreen(db: Session, case_id: uuid.UUID) -> bool:
     """The intake completeness gate: every required field present AND every required
-    attachment kind uploaded or skipped."""
+    attachment kind uploaded or skipped. A red-flag case skips the gate: the patient was told
+    to seek emergency care, and staff must see it now, gaps and all."""
+    if case_or_404(db, case_id).emergency_flagged_at is not None:
+        return True
     return not missing_fields(db, case_id) and not pending_attachment_kinds(db, case_id)
 
 

@@ -127,6 +127,8 @@ class SlotResponse(BaseModel):
     end: datetime
     # Another patient holds this time: shown greyed out in the patient's picker, not pickable.
     taken: bool = False
+    # Whose time this is: slots span every doctor in the department. None on older routings.
+    doctor_name: str | None = None
 
 
 class DoctorAssistantResponse(BaseModel):
@@ -162,6 +164,11 @@ class PatientRoutingResponse(BaseModel):
     suggested_slot: SlotResponse | None
     slot_options: list[SlotResponse]
     selected_slot_id: str | None
+    # The patient may pick which of the department's doctors to see; false for urgent or approved cases.
+    doctor_choice: bool = False
+    # The patient confirmed a doctor and time, so it is booked on the doctor's HMS calendar. Until
+    # then the earliest one is only suggested (and held).
+    slot_confirmed: bool = False
     # The doctor's weekly consulting hours from the HMS calendar; empty when it publishes none.
     doctor_hours: list[WeeklyHoursResponse] = []
 
@@ -265,6 +272,8 @@ class CaseListItem(BaseModel):
     hms_patient_id: str | None
     review_decision: str | None
     missing_count: int
+    # A red-flag rule matched: the patient was told to seek emergency care now.
+    emergency: bool = False
     appointment_start: datetime | None
     created_at: datetime
     updated_at: datetime | None
@@ -280,10 +289,19 @@ class PatientVisitItem(BaseModel):
     updated_at: datetime | None
 
 
+class EmergencyAdviceResponse(BaseModel):
+    """Shown to a patient whose answers matched a red-flag rule: call an ambulance now.
+    Never the priority or the rule - only that this is an emergency."""
+    ambulance_number: str
+    emergency_number: str
+    flagged_at: datetime
+
+
 class PatientCaseResponse(BaseModel):
     case_id: str
     status: str
     review_decision: str | None
+    emergency: EmergencyAdviceResponse | None = None
     routing: PatientRoutingResponse | None
     final_summary: dict[str, Any] | None
     consultation_mode: str | None
@@ -300,6 +318,7 @@ class CaseDetailResponse(BaseModel):
     hospital_id: str
     demographics: dict[str, Any]
     hms_patient_id: str | None
+    emergency_flagged_at: datetime | None = None
     transcript: list[TranscriptMessage]
     facts: list[FactResponse]
     allergies_medications: list[EntryResponse]

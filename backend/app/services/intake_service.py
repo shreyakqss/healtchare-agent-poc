@@ -31,10 +31,10 @@ from app.agents import AgentUnavailable, answer_guard, fact_extractor, patient_a
 from app.agents.question_planner import PlannerContext
 from app.agents.schemas import ExtractedFact, ExtractionResult, QuestionResponse
 from app.core.config import settings
-from app.core.tracing import case_trace
 from app.core.errors import Conflict, Forbidden
+from app.core.tracing import case_trace
 from app.db import utcnow
-from app.domain import intake_fields
+from app.domain import intake_fields, triage_engine
 from app.domain.demographics import age_from_birth_date
 from app.domain.lifecycle import TERMINAL, CaseStatus
 from app.integrations.hms import get_hms
@@ -52,7 +52,7 @@ from app.models import (
 from app.models.facts import SOURCE_HMS
 from app.schemas.requests import IdentityFormRequest
 from app.schemas.responses import MessageResponse, TranscriptMessage, TurnEvent
-from app.services import assistant_tools, audit, case_repo, hospital_config, lifecycle
+from app.services import assistant_tools, audit, case_repo, emergency_service, hospital_config, lifecycle, triage_rules
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +81,20 @@ EMERGENCY_GUIDANCE = (
     "I cannot safely assess an emergency in chat. If you may be experiencing a life-threatening emergency, "
     "contact local emergency services now."
 )
+def emergency_stop() -> str:
+    """Written by code, never by a model: what a patient whose answers matched a red-flag rule is
+    told, the moment it matches. No priority, rule or diagnosis is named."""
+    ambulance = hospital_config.ambulance_number()
+    emergency = hospital_config.emergency_number()
+    return (
+        f"**This may be a medical emergency. Call an ambulance now on {ambulance}** "
+        f"(or {emergency}).\n\n"
+        "- Do not wait for an appointment and do not drive yourself.\n"
+        "- If you can, have someone stay with you until help arrives.\n\n"
+        "I have stopped the questions and passed everything you told me to the care team."
+    )
+
+
 REFERENCE_UNAVAILABLE = (
     "I cannot answer that reliably because the supporting report or clinic information is not available right now."
 )
@@ -457,6 +471,25 @@ async def _answer_patient_question(
     return reply, f"assistant:{scope}"
 
 
+def _red_flag(db: Session, case: PatientCase, turn_index: int) -> list[str] | None:
+    """Run the clinic's rules over what the patient has said so far; a red-flag (emergency) rule
+    stops the interview. The rules decide, not the model, and only the flag is kept here -
+    pre-screening still records the priority and evidence as for any case."""
+    if case.emergency_flagged_at is not None:
+        return None
+    outcome = triage_engine.evaluate(
+        case_repo.facts(db, case.id), case_repo.clinical_entries(db, case.id),
+        triage_rules.active_rules(db, case.hospital_id),
+    )
+    if not outcome.emergency:
+        return None
+    emergency_service.flag(db, case, "system:intake", outcome.rule_codes)
+    audit.record(db, case.id, "system:intake", "intake.emergency_flagged",
+                 {"turn_index": turn_index, "rule_codes": outcome.rule_codes})
+    db.commit()
+    return outcome.rule_codes
+
+
 async def process_turn(db: Session, session: IntakeSession, case: PatientCase, content: str) -> AsyncIterator[TurnEvent]:
     """Every agent run of one turn under a single trace; the turn itself is `_process_turn`."""
     with case_trace("intake.turn", case.id):
@@ -492,6 +525,7 @@ async def _process_turn(db: Session, session: IntakeSession, case: PatientCase, 
         turn_index,
     )
 
+    emergency = _red_flag(db, case, turn_index)
     outstanding = case_repo.missing_clinical_fields(db, case.id)
     asked_so_far = sum(
         1 for m in case_repo.messages(db, session.id) if m.role == "assistant" and m.asks_field is not None
@@ -500,7 +534,9 @@ async def _process_turn(db: Session, session: IntakeSession, case: PatientCase, 
     planner_mode = "code"
     reply_streamed = False
 
-    if extraction is None:
+    if emergency is not None:
+        reply, complete, planner_mode = emergency_stop(), True, "emergency"
+    elif extraction is None:
         reply, complete, planner_mode = UNDERSTANDING_UNAVAILABLE, False, "fallback"
         yield TurnEvent(type="token", text=reply)
         reply_streamed = True
@@ -556,6 +592,9 @@ async def _process_turn(db: Session, session: IntakeSession, case: PatientCase, 
 
     if complete and not reply_streamed:
         yield TurnEvent(type="token", text=reply)
+    if emergency is not None:
+        # After the patient has the ambulance advice on screen, never before it.
+        await asyncio.to_thread(emergency_service.record_in_hms, db, case, "system:intake", emergency)
 
     db.add(IntakeMessage(session_id=session.id, role="assistant", content=reply, turn_index=turn_index + 1, asks_field=asks_field))
     audit.record(

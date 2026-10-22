@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Protocol
 
 from app.integrations.hms.schemas import (
@@ -49,6 +50,11 @@ class HMSClient(Protocol):
         """The practitioner's weekly consulting hours as the HMS publishes them, clinic-local.
         `[]` when it publishes none."""
         ...
+    def book_appointment(self, mrn: str, practitioner_id: str, start: datetime, end: datetime, note: str) -> str:
+        """Put the patient's confirmed appointment on the practitioner's calendar. Returns the
+        HMS's id for it, which `cancel_appointment` takes."""
+        ...
+    def cancel_appointment(self, reference: str) -> None: ...
     def request_appointment(self, request: AppointmentRequest) -> AppointmentRequestResult: ...
     def list_requests(self, limit: int = 100) -> list[AppointmentRequestResult]: ...
 

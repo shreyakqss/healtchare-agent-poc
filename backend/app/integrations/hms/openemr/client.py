@@ -68,8 +68,10 @@ logger = logging.getLogger(__name__)
 # a 3-request round-trip against OpenEMR, so the answer is cached briefly.
 STATUS_CACHE_SECONDS = 30.0
 # `_summary=count` and `bundle.total` are both unreliable on OpenEMR 8.3 (confirmed live:
-# `total` echoes `_count`), so status() fetches a real page and counts entries.
-_COUNT_PAGE_SIZE = 500
+# `total` echoes `_count`), so status() fetches real pages and counts entries. A page holds at
+# most 200 whatever `_count` asks for, and there is no `next` link, so counting walks `_offset`.
+_COUNT_PAGE_SIZE = 200
+_COUNT_MAX_PAGES = 100
 _MIME_EXTENSIONS = {"text/plain": "txt", "application/json": "json", "application/pdf": "pdf", "text/markdown": "md"}
 APPOINTMENT_REQUEST_TITLE = "CareFlow appointment request"
 # OpenEMR calendar: category 2 is a provider's "In Office" block; a status of "x"/"%" is a
@@ -219,6 +221,17 @@ class FhirHMS:
     def _search(self, resource_type: str, **params: Any) -> list[fhir.Resource]:
         return fhir.bundle_entries(self._request("GET", resource_type, params=params).json())
 
+    def _count(self, resource_type: str, **params: Any) -> int:
+        """Every matching resource, page by page (distinct ids, so a page that shifts while
+        it is read cannot double-count). Stops at `_COUNT_MAX_PAGES` pages."""
+        seen: set[str] = set()
+        for page in range(_COUNT_MAX_PAGES):
+            entries = self._search(resource_type, _count=_COUNT_PAGE_SIZE, _offset=page * _COUNT_PAGE_SIZE, **params)
+            seen.update(str(e.get("id")) for e in entries)
+            if len(entries) < _COUNT_PAGE_SIZE:
+                break
+        return len(seen)
+
     def _search_or_empty(self, resource_type: str, **params: Any) -> list[fhir.Resource]:
         """Best-effort search: a resource the install does not expose is an empty list."""
         try:
@@ -284,7 +297,7 @@ class FhirHMS:
 
     def _probe_status(self) -> HMSStatus:
         try:
-            patients = self._search("Patient", _count=_COUNT_PAGE_SIZE)
+            patients = self._count("Patient")
             practitioners = self.list_practitioners(limit=_COUNT_PAGE_SIZE, include_usernames=False)
             pending = self._search_or_empty("Appointment", status="proposed", _count=_COUNT_PAGE_SIZE)
         except Exception as exc:  # noqa: BLE001 - status must never raise
@@ -292,7 +305,7 @@ class FhirHMS:
             return HMSStatus(provider=self.provider, connected=False, patients=0, practitioners=0, pending_requests=0)
         return HMSStatus(
             provider=self.provider, connected=True,
-            patients=len(patients), practitioners=len(practitioners), pending_requests=len(pending),
+            patients=patients, practitioners=len(practitioners), pending_requests=len(pending),
         )
 
     def get_facility(self) -> HMSFacility | None:
@@ -522,6 +535,32 @@ class FhirHMS:
         today = datetime.now(tz).replace(hour=0, minute=0, second=0, microsecond=0)
         window = [(start, end) for start, end in hours if today <= start < today + timedelta(days=14)]
         return scheduling.weekly_hours(window)
+
+    # --- bookings (the patient's confirmed time, written to the calendar) ---------------
+
+    def book_appointment(self, mrn: str, practitioner_id: str, start: datetime, end: datetime, note: str) -> str:
+        """OpenEMR's appointment API needs a write scope this client is not registered for, so
+        the calendar row is written the way Admin > Doctors writes office hours (provisioning)."""
+        from app.integrations.hms.openemr import provisioning
+        from app.services import hospital_config
+
+        hospital = hospital_config.hospital()
+        tz = ZoneInfo(hospital.get("timezone") or "UTC")
+        user_id = provisioning.user_id_for(practitioner_id)
+        if user_id is None:
+            raise httpx.HTTPError("That doctor is not in the hospital system")
+        pid = self._pid(self._require_patient(mrn))
+        local_start, local_end = start.astimezone(tz), end.astimezone(tz)
+        event_id = provisioning.book_appointment(
+            user_id, pid, int(hospital.get("hms_facility_id") or 3), local_start.date(),
+            local_start.time().replace(tzinfo=None), local_end.time().replace(tzinfo=None), "Office Visit", note,
+        )
+        return str(event_id)
+
+    def cancel_appointment(self, reference: str) -> None:
+        from app.integrations.hms.openemr import provisioning
+
+        provisioning.cancel_appointment(int(reference))
 
     # --- write side (standard API; drafts only) --------------------------------------
 

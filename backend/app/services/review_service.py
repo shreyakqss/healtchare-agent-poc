@@ -11,7 +11,7 @@ from app.core.errors import Conflict
 from app.domain.lifecycle import CaseStatus
 from app.models import ClinicalReview, PatientCase
 from app.schemas.requests import ReviewRequest
-from app.services import audit, case_repo, lifecycle
+from app.services import appointment_service, audit, case_repo, lifecycle
 from app.services.clinician_identity import verify_clinician
 from app.services.hms import forward_audit_note
 
@@ -35,6 +35,8 @@ def record_review(db: Session, case: PatientCase, payload: ReviewRequest) -> Cli
     audit.record(db, case.id, actor, "review.recorded", summary)
     target = CaseStatus.REJECTED if payload.decision == "reject" else CaseStatus.APPROVED
     lifecycle.transition(db, session, target, actor, case.id)  # commits
+    if target == CaseStatus.REJECTED:
+        appointment_service.release_booking(db, case, actor)
     forward_audit_note(case, actor, "review.recorded", summary)
     db.refresh(review)
     return review

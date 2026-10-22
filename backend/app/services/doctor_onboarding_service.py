@@ -28,15 +28,14 @@ from app.domain import provider as rules
 from app.domain import scheduling
 from app.integrations.hms.openemr import fhir, provisioning
 from app.integrations.keycloak import admin_client
-from app.models import ConsultationNote, IntakeSession, PatientCase, RoutingRecommendation, SlotHold
+from app.models import ConsultationNote, RoutingRecommendation, SlotHold
 from app.schemas.requests import ChangeHoursRequest, NewDoctorRequest, UpdateDoctorRequest
 from app.security.oidc import CurrentPrincipal
-from app.services import audit, hospital_config
+from app.services import audit, doctor_load, hospital_config
 
 logger = logging.getLogger(__name__)
 
 ROLE_LIST, SPECIALTY_LIST = "us-core-provider-role", "us-core-provider-specialty"
-CLOSED_STATUSES = {"COMPLETED", "REJECTED", "FAILED"}
 
 
 @dataclass(frozen=True)
@@ -378,14 +377,7 @@ def _careflow_usage(db: Session, practitioner_id: str) -> dict[str, int]:
         case_id for (case_id,) in
         db.query(RoutingRecommendation.case_id).filter(RoutingRecommendation.doctor_id == practitioner_id).distinct()
     ]
-    open_cases = 0
-    for case_id in routed:
-        latest = (db.query(RoutingRecommendation.doctor_id).filter(RoutingRecommendation.case_id == case_id)
-                  .order_by(RoutingRecommendation.created_at.desc()).first())
-        status = (db.query(IntakeSession.status).join(PatientCase, PatientCase.session_id == IntakeSession.id)
-                  .filter(PatientCase.id == case_id).scalar())
-        if latest and latest[0] == practitioner_id and status not in CLOSED_STATUSES:
-            open_cases += 1
+    open_cases = doctor_load.open_case_counts(db, [practitioner_id]).get(practitioner_id, 0)
     notes = db.query(ConsultationNote.id).filter(ConsultationNote.doctor_id == practitioner_id).count()
     return {"cases": len(routed), "open_cases": open_cases, "notes": notes}
 

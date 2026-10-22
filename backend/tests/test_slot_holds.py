@@ -7,8 +7,8 @@ import pytest
 from app.core.errors import Conflict
 from app.db import SessionLocal
 from app.integrations.hms import get_hms
-from app.models import IntakeSession, PatientCase, RoutingRecommendation, SlotHold
-from app.services import appointment_service, lifecycle, slot_hold_service
+from app.models import AuditEvent, IntakeSession, PatientCase, RoutingRecommendation, SlotHold, TriageResult
+from app.services import appointment_service, doctor_load, lifecycle, slot_hold_service
 
 DOCTOR = f"test-doctor-{uuid.uuid4().hex[:8]}"
 BASE = datetime(2030, 1, 7, 10, 0, tzinfo=UTC)
@@ -33,7 +33,7 @@ def make_case():
             session = IntakeSession(status=status, consent_status="GRANTED", channel="web")
             db.add(session)
             db.flush()
-            case = PatientCase(session_id=session.id, hospital_id="qss-demo-clinic")
+            case = PatientCase(session_id=session.id, hospital_id="qss-demo-clinic", hms_patient_id="test-mrn")
             db.add(case)
             db.flush()
             db.add(RoutingRecommendation(
@@ -50,6 +50,24 @@ def make_case():
     with SessionLocal() as db:
         db.query(IntakeSession).filter(IntakeSession.id.in_(session_ids)).delete(synchronize_session=False)
         db.commit()
+
+
+@pytest.fixture(autouse=True)
+def bookings(monkeypatch):
+    """These tests are about holds, with made-up doctors OpenEMR has never heard of, so the
+    calendar write is recorded instead (test_instant_booking.py books for real)."""
+    from app.integrations.hms.openemr.client import FhirHMS
+
+    made: list[str] = []
+    cancelled: list[str] = []
+
+    def book(self, mrn, practitioner_id, start, end, note):
+        made.append(f"{practitioner_id}@{start.isoformat()}")
+        return made[-1]
+
+    monkeypatch.setattr(FhirHMS, "book_appointment", book)
+    monkeypatch.setattr(FhirHMS, "cancel_appointment", lambda self, ref: cancelled.append(ref))
+    return made, cancelled
 
 
 def held(case_id) -> datetime | None:
@@ -79,6 +97,18 @@ def test_picking_a_time_another_case_holds_is_a_conflict(make_case):
         with pytest.raises(Conflict):
             appointment_service.select_slot(db, db.get(PatientCase, second), OPTIONS[2]["id"])
         assert db.query(RoutingRecommendation).filter_by(case_id=second).one().selected_slot_id is None
+
+
+def test_confirming_books_and_changing_moves_the_booking(make_case, bookings):
+    made, cancelled = bookings
+    case_id = make_case()
+    with SessionLocal() as db:
+        appointment_service.select_slot(db, db.get(PatientCase, case_id), OPTIONS[0]["id"])
+        appointment_service.select_slot(db, db.get(PatientCase, case_id), OPTIONS[0]["id"])  # same time: no-op
+        appointment_service.select_slot(db, db.get(PatientCase, case_id), OPTIONS[1]["id"])
+    with SessionLocal() as db:
+        assert db.get(PatientCase, case_id).hms_appointment_id == made[-1]
+    assert len(made) == 2 and cancelled == [made[0]]
 
 
 def test_changing_a_pick_frees_the_old_time(make_case):
@@ -237,3 +267,92 @@ def test_a_time_taken_after_routing_drops_out_and_cannot_be_picked(make_case, do
         with pytest.raises(Conflict):
             appointment_service.select_slot(db, db.get(PatientCase, mine), target["id"])
     assert held(mine) == datetime.fromisoformat(free[0]["start"])
+
+
+# --- two doctors in one department --------------------------------------------------------
+
+OTHER = f"test-doctor-{uuid.uuid4().hex[:8]}"
+
+
+def named(minutes: int, practitioner: str, name: str) -> dict:
+    return {**slot(minutes, practitioner), "doctor_name": name}
+
+
+# DOCTOR is assigned (earliest, 10:00); OTHER is free at 10:00 too, and at 10:30.
+TWO = [named(0, DOCTOR, "Test Doctor"), named(0, OTHER, "Other Doctor"), named(30, OTHER, "Other Doctor"),
+       named(60, DOCTOR, "Test Doctor")]
+
+
+def triaged(case_id, priority: str) -> None:
+    with SessionLocal() as db:
+        db.add(TriageResult(case_id=case_id, priority=priority, rule_ids=[], rule_codes=[], warnings=[], evidence=[]))
+        db.commit()
+
+
+def test_picking_another_doctors_time_moves_the_case_to_that_doctor(make_case, monkeypatch):
+    monkeypatch.setattr(appointment_service, "_rostered", lambda department_id, pid: True)
+    case = make_case(options=TWO)
+    triaged(case, "low")
+    with SessionLocal() as db:
+        shown, choice = appointment_service.patient_options(db, db.get(PatientCase, case), routing_of(db, case))
+        assert choice and {s["practitioner_id"] for s in shown} == {DOCTOR, OTHER}
+        appointment_service.select_slot(db, db.get(PatientCase, case), TWO[2]["id"])
+    with SessionLocal() as db:
+        routing = routing_of(db, case)
+        assert (routing.doctor_id, routing.doctor_name) == (OTHER, "Other Doctor")
+        assert routing.rationale.endswith("Assigned to Other Doctor (the patient's choice).")
+        assert {s["practitioner_id"] for s in routing.slot_options} == {DOCTOR, OTHER}  # can switch back
+        changed = db.query(AuditEvent).filter_by(case_id=case, action="routing.doctor_changed").one()
+        assert changed.payload["from"] == DOCTOR and changed.payload["to"] == OTHER
+    with SessionLocal() as db:  # and back again
+        appointment_service.select_slot(db, db.get(PatientCase, case), TWO[3]["id"])
+    with SessionLocal() as db:
+        assert routing_of(db, case).doctor_id == DOCTOR
+    assert held(case) == BASE + timedelta(minutes=60)
+
+
+def test_an_urgent_patient_sees_one_time_each_and_cannot_pick_the_doctor(make_case, monkeypatch):
+    monkeypatch.setattr(appointment_service, "_rostered", lambda department_id, pid: True)
+    case = make_case(options=TWO)
+    triaged(case, "high")
+    with SessionLocal() as db:
+        shown, choice = appointment_service.patient_options(db, db.get(PatientCase, case), routing_of(db, case))
+        assert not choice
+        assert [s["id"] for s in shown] == [TWO[0]["id"], TWO[2]["id"], TWO[3]["id"]]  # one per time, own kept
+        with pytest.raises(Conflict):  # the same time with the other doctor is not offered
+            appointment_service.select_slot(db, db.get(PatientCase, case), TWO[1]["id"])
+    with SessionLocal() as db:  # an earliest-at-that-time pick may still land on the other doctor
+        appointment_service.select_slot(db, db.get(PatientCase, case), TWO[2]["id"])
+    with SessionLocal() as db:
+        assert routing_of(db, case).doctor_id == OTHER
+
+
+def test_once_approved_only_the_assigned_doctors_times_are_offered(make_case):
+    case = make_case(status="APPROVED", options=TWO)
+    triaged(case, "low")
+    with SessionLocal() as db:
+        shown, choice = appointment_service.patient_options(db, db.get(PatientCase, case), routing_of(db, case))
+        assert not choice and {s["practitioner_id"] for s in shown} == {DOCTOR}
+        with pytest.raises(Conflict):
+            appointment_service.select_slot(db, db.get(PatientCase, case), TWO[2]["id"])
+    with SessionLocal() as db:
+        assert routing_of(db, case).doctor_id == DOCTOR
+    assert held(case) is None
+
+
+def test_a_doctor_who_left_the_roster_cannot_be_picked(make_case, monkeypatch):
+    monkeypatch.setattr(appointment_service, "_rostered", lambda department_id, pid: pid == DOCTOR)
+    case = make_case(options=TWO)
+    with SessionLocal() as db:
+        with pytest.raises(Conflict, match="no longer taking appointments"):
+            appointment_service.select_slot(db, db.get(PatientCase, case), TWO[2]["id"])
+    with SessionLocal() as db:
+        assert routing_of(db, case).doctor_id == DOCTOR
+    assert held(case) is None
+
+
+def test_open_cases_count_only_unfinished_cases_routed_to_the_doctor(make_case):
+    make_case(), make_case(status="APPROVED"), make_case(status="COMPLETED"), make_case(status="REJECTED")
+    make_case(doctor=OTHER)
+    with SessionLocal() as db:
+        assert doctor_load.open_case_counts(db, [DOCTOR, OTHER]) == {DOCTOR: 2, OTHER: 1}

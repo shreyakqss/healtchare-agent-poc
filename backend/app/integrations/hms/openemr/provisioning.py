@@ -15,7 +15,9 @@ what OpenEMR's own Admin > Users and calendar screens write (taken from doctors 
   openemr_postcalendar_events
                      "In Office" (category 2) single-day blocks, each closed by an
                      "Out Of Office" (category 3) marker, as the calendar UI writes them.
-                     Availability, never a patient booking (CLAUDE.md exception).
+                     Availability for doctors; and a patient's booked appointment
+                     (category 5 "Office Visit", `book_appointment`) the moment the
+                     patient confirms a time - the documented booking exception.
   uuid_registry      every uuid OpenEMR would have registered
 
 Re-check this file after an OpenEMR upgrade.
@@ -37,6 +39,8 @@ from app.core.config import settings
 from app.core.errors import ServiceUnavailable
 
 IN_OFFICE, OUT_OF_OFFICE = 2, 3
+OFFICE_VISIT = 5  # the category OpenEMR's calendar gives a patient appointment
+PENDING_STATUS = "^"  # "Pending": booked online, not yet arrived
 PHYSICIANS_GROUP = "doc"
 # OpenEMR's serialized "no repeat" spec, byte for byte as its calendar writes it.
 NO_REPEAT = (
@@ -323,6 +327,50 @@ def replace_office_blocks(user_id: int, facility_id: int, from_day: date, blocks
         cur.execute(f"DELETE r FROM uuid_registry r JOIN openemr_postcalendar_events e ON e.uuid = r.uuid WHERE {_OWN_HOURS}", args)
         cur.execute(f"DELETE e FROM openemr_postcalendar_events e WHERE {_OWN_HOURS}", args)
         _insert_blocks(cur, user_id, facility_id, blocks)
+
+
+def user_id_for(practitioner_uuid: str) -> int | None:
+    """OpenEMR's numeric user id (the calendar's `pc_aid`) for a FHIR Practitioner id."""
+    with _transaction() as cur:
+        cur.execute("SELECT id FROM users WHERE uuid = %s", (uuid.UUID(practitioner_uuid).bytes,))
+        row = cur.fetchone()
+    return row["id"] if row else None
+
+
+def book_appointment(user_id: int, pid: int, facility_id: int, day: date, start: time, end: time,
+                     title: str, comment: str) -> int:
+    """A patient appointment on the doctor's calendar, written as OpenEMR's own calendar writes
+    one. The caller has checked the time is free; this refuses only an exact double booking."""
+    duration = (datetime.combine(day, end) - datetime.combine(day, start)).seconds
+    with _transaction() as cur:
+        cur.execute(
+            "SELECT pc_eid FROM openemr_postcalendar_events WHERE pc_aid = %s AND pc_eventDate = %s"
+            " AND pc_startTime = %s AND pc_pid <> '' AND pc_pid IS NOT NULL AND pc_apptstatus NOT IN ('x', '%%')",
+            (str(user_id), day, start),
+        )
+        if cur.fetchone():
+            raise ServiceUnavailable("That time was just booked in the hospital system.")
+        cur.execute(
+            "INSERT INTO openemr_postcalendar_events (pc_catid, pc_multiple, pc_aid, pc_pid, pc_title, pc_time,"
+            " pc_hometext, pc_informant, pc_eventDate, pc_endDate, pc_duration, pc_recurrtype, pc_recurrspec,"
+            " pc_startTime, pc_endTime, pc_alldayevent, pc_eventstatus, pc_sharing, pc_apptstatus, pc_facility,"
+            " pc_billing_location, pc_room, uuid)"
+            " VALUES (%s, 0, %s, %s, %s, NOW(), %s, %s, %s, %s, %s, 0, %s, %s, %s, 0, 1, 1, %s, %s, %s, '', %s)",
+            (OFFICE_VISIT, str(user_id), str(pid), title, comment, ADMIN_USER_ID, day, day, duration, NO_REPEAT,
+             start, end, PENDING_STATUS, facility_id, facility_id,
+             _register(cur, "openemr_postcalendar_events", "pc_eid")),
+        )
+        return cur.lastrowid
+
+
+def cancel_appointment(event_id: int) -> None:
+    """Remove a booking CareFlow made (the patient moved it or the case was closed)."""
+    with _transaction() as cur:
+        cur.execute(
+            "DELETE r FROM uuid_registry r JOIN openemr_postcalendar_events e ON e.uuid = r.uuid"
+            " WHERE e.pc_eid = %s AND e.pc_catid = %s", (event_id, OFFICE_VISIT),
+        )
+        cur.execute("DELETE FROM openemr_postcalendar_events WHERE pc_eid = %s AND pc_catid = %s", (event_id, OFFICE_VISIT))
 
 
 def delete_provider(user_id: int) -> None:

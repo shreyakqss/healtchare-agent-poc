@@ -36,6 +36,7 @@ from app.schemas.responses import (
     CaseListItem,
     ConsultationNoteResponse,
     DiscrepancyResponse,
+    EmergencyAdviceResponse,
     EntryResponse,
     FactResponse,
     PatientCaseResponse,
@@ -50,7 +51,7 @@ from app.schemas.responses import (
     TriageResponse,
     WeeklyHoursResponse,
 )
-from app.services import case_repo, hospital_config, slot_hold_service
+from app.services import appointment_service, case_repo, hospital_config, slot_hold_service
 
 logger = logging.getLogger(__name__)
 
@@ -131,18 +132,23 @@ def routing_out(r: RoutingRecommendation | None) -> RoutingResponse | None:
     )
 
 
-def patient_routing_out(db: Session, r: RoutingRecommendation | None) -> PatientRoutingResponse | None:
-    """Times are the live list (slot_hold_service.live_options), times other patients hold
-    included but flagged `taken` so the picker greys them out, and the selection is whichever
-    time the case actually holds - the default included - so the picker never highlights another."""
+def patient_routing_out(db: Session, case: PatientCase, r: RoutingRecommendation | None) -> PatientRoutingResponse | None:
+    """Times are the live list across the department's doctors (appointment_service.patient_options),
+    times other patients hold included but flagged `taken` so the picker greys them out, and the
+    selection is whichever time the case actually holds - the default included - so the picker
+    never highlights another. `doctor_choice` says whether the patient may pick the doctor; why
+    not (urgency, or an approved case) is not said, as the priority stays off the patient view."""
     if r is None:
         return None
+    slots, doctor_choice = appointment_service.patient_options(db, case, r)
     return PatientRoutingResponse(
         department_id=r.department_id, department_name=r.department_name, doctor_id=r.doctor_id, doctor_name=r.doctor_name,
         appointment_type_id=r.appointment_type_id, appointment_type_label=r.appointment_type_label,
         suggested_slot=SlotResponse(**r.suggested_slot) if r.suggested_slot else None,
-        slot_options=[SlotResponse(**s) for s in slot_hold_service.live_options(db, get_hms(), r, include_taken=True)],
+        slot_options=[SlotResponse(**s) for s in slots],
         selected_slot_id=slot_hold_service.current_slot_id(r),
+        doctor_choice=doctor_choice,
+        slot_confirmed=case.hms_appointment_id is not None,
         doctor_hours=[WeeklyHoursResponse(**h.model_dump()) for h in _doctor_hours(r.doctor_id)],
     )
 
@@ -217,6 +223,7 @@ def case_detail(db: Session, case: PatientCase) -> CaseDetailResponse:
         case_id=str(case.id), session_id=str(case.session_id), status=session.status,
         consent_status=session.consent_status, channel=session.channel, hospital_id=case.hospital_id,
         demographics=case_repo.demographics(db, case.id), hms_patient_id=case.hms_patient_id,
+        emergency_flagged_at=case.emergency_flagged_at,
         transcript=[TranscriptMessage(role=m.role, content=m.content, turn_index=m.turn_index) for m in case_repo.messages(db, session.id)],
         facts=[FactResponse(id=str(f.id), kind=f.kind, value=f.value, source=f.source, source_turn=f.source_turn, confidence=f.confidence)
                for f in case_repo.facts(db, case.id)],
@@ -248,14 +255,25 @@ def patient_case_detail(db: Session, case: PatientCase) -> PatientCaseResponse:
         case_id=str(case.id),
         status=session.status,
         review_decision=review.decision if review else None,
+        emergency=emergency_advice(case),
         # Shown as soon as it exists (not gated on approval) so the patient can pick a
         # slot from the advisory routing while a clinician still reviews the case.
         # Uses the trimmed patient projection - rationale/matched_keywords are rule evidence.
-        routing=patient_routing_out(db, case_repo.latest_routing(db, case.id)),
+        routing=patient_routing_out(db, case, case_repo.latest_routing(db, case.id)),
         final_summary=final_summary.sections if final_summary else None,
         consultation_mode=notes[-1].consultation_mode if notes else None,
         appointment_reference=tasks[0].hms_reference if tasks else None,
         created_at=case.created_at,
+    )
+
+
+def emergency_advice(case: PatientCase) -> EmergencyAdviceResponse | None:
+    if case.emergency_flagged_at is None:
+        return None
+    return EmergencyAdviceResponse(
+        ambulance_number=hospital_config.ambulance_number(),
+        emergency_number=hospital_config.emergency_number(),
+        flagged_at=case.emergency_flagged_at,
     )
 
 
@@ -298,14 +316,15 @@ def patient_case_list(db: Session, cases: list[PatientCase]) -> list[PatientVisi
         session = sessions[case.session_id]
         case_routing = routing.get(case.id)
         review = reviews.get(case.id)
-        approved = review is not None and review.decision in {"approve", "edit"}
+        # Shown as soon as the case is routed: the patient booked this doctor themselves, so
+        # nothing about it waits for the clinician's review.
         items.append(
             PatientVisitItem(
                 case_id=str(case.id),
                 status=session.status,
                 review_decision=review.decision if review else None,
-                department_name=case_routing.department_name if case_routing and approved else None,
-                doctor_name=case_routing.doctor_name if case_routing and approved else None,
+                department_name=case_routing.department_name if case_routing else None,
+                doctor_name=case_routing.doctor_name if case_routing else None,
                 created_at=case.created_at,
                 updated_at=updated.get(case.id),
             )
@@ -385,6 +404,7 @@ def case_list(db: Session, cases: list[PatientCase] | None = None) -> list[CaseL
             chief_complaint=reason, demographics=case_repo.demographics_from_facts(facts), hms_patient_id=case.hms_patient_id,
             review_decision=review.decision if review else None,
             missing_count=len(intake_fields.missing_fields(required_fields, facts, entries)),
+            emergency=case.emergency_flagged_at is not None,
             appointment_start=_appointment_start(case_routing, task),
             created_at=case.created_at, updated_at=updated.get(case.id),
         ))

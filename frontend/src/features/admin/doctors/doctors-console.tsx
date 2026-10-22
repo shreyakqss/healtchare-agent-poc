@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { adminDoctorsApi, ApiError } from "@/lib/api";
 import type { AdminDoctor, AdminDoctors, DoctorDetails, DoctorRemovalCheck } from "@/lib/api/types";
-import { Alert, Badge, Button, Card, CardHeader, Dialog, EmptyState, IconButton, Icons, Skeleton, Table, Td, Th, useToast } from "@/components/ui";
+import { Alert, Badge, Button, Card, CardHeader, Dialog, EmptyState, IconButton, Icons, Select, Skeleton, Table, Td, Th, useToast } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import { PageHeader } from "@/components/layout/page-header";
 import { clockLabel, daysLabel } from "@/features/scheduling/doctor-hours";
@@ -42,6 +42,9 @@ function HoursCell({ doctor, today }: { doctor: AdminDoctor; today: string }) {
   );
 }
 
+const ALL = "all";
+const NOT_ROUTED = "not-routed";
+
 export function DoctorsConsole({ initial }: { initial: AdminDoctors }) {
   const [doctors, setDoctors] = useState(initial.doctors);
   const [adding, setAdding] = useState(false);
@@ -52,9 +55,13 @@ export function DoctorsConsole({ initial }: { initial: AdminDoctors }) {
   const [removing, setRemoving] = useState<AdminDoctor | null>(null);
   const [removal, setRemoval] = useState<DoctorRemovalCheck | null>(null);
   const [reactivating, setReactivating] = useState<number | null>(null);
+  const [departmentFilter, setDepartmentFilter] = useState<string>(ALL);
   const toast = useToast();
   const { clinic, departments } = initial;
   const departmentName = (id: string | null) => departments.find((d) => d.department_id === id)?.department_name;
+  const inDepartment = (d: AdminDoctor, id: string) => (id === NOT_ROUTED ? !d.department_id : d.department_id === id);
+  const shown = departmentFilter === ALL ? doctors : doctors.filter((d) => inDepartment(d, departmentFilter));
+  const countLabel = (n: number) => `${n} doctor${n === 1 ? "" : "s"}`;
 
   const msg = (e: unknown) => (e instanceof ApiError ? e.message : "Something went wrong.");
 
@@ -109,7 +116,21 @@ export function DoctorsConsole({ initial }: { initial: AdminDoctors }) {
       />
 
       <Card>
-        <CardHeader title={clinic.name} description={`${doctors.length} doctor${doctors.length === 1 ? "" : "s"} · from the hospital system`} />
+        <CardHeader title={clinic.name}
+          description={`${departmentFilter === ALL ? countLabel(doctors.length) : `${countLabel(shown.length)} of ${doctors.length}`} · from the hospital system`}
+          action={doctors.length ? (
+            <Select aria-label="Filter by department" className="w-56" value={departmentFilter} onChange={(e) => setDepartmentFilter(e.target.value)}>
+              <option value={ALL}>All departments ({doctors.length})</option>
+              {departments.map((dep) => (
+                <option key={dep.department_id} value={dep.department_id}>
+                  {dep.department_name} ({doctors.filter((d) => inDepartment(d, dep.department_id)).length})
+                </option>
+              ))}
+              {doctors.some((d) => !d.department_id) ? (
+                <option value={NOT_ROUTED}>Not routed ({doctors.filter((d) => !d.department_id).length})</option>
+              ) : null}
+            </Select>
+          ) : null} />
         {doctors.length === 0 ? (
           <EmptyState icon={<Icons.stethoscope size={20} />} title="No doctors yet"
             description="Add the first doctor so patients can be routed and booked."
@@ -120,7 +141,12 @@ export function DoctorsConsole({ initial }: { initial: AdminDoctors }) {
               <tr><Th>Doctor</Th><Th>Department</Th><Th>NPI</Th><Th>Consulting hours</Th><Th>Login</Th><Th className="w-24"><span className="sr-only">Actions</span></Th></tr>
             </thead>
             <tbody>
-              {doctors.map((d) => (
+              {shown.length === 0 ? (
+                <tr><Td colSpan={6} className="py-8 text-center text-sm text-fg-muted">
+                  No doctors in {departmentName(departmentFilter) ?? "this department"} yet.
+                </Td></tr>
+              ) : null}
+              {shown.map((d) => (
                 <tr key={d.id} className={cn(!d.active && "[&_td:not(:last-child)>*]:opacity-60")}>
                   <Td>
                     <p className="font-medium">{d.name}</p>

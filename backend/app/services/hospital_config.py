@@ -22,7 +22,7 @@ from app.services.attachments import ATTACHMENT_KINDS
 
 ACTIVE_POINTER = "active.txt"
 PRIORITIES = {"high", "medium", "low"}
-RULE_CONDITIONS = {"any_symptom", "all_symptoms", "any_history", "min_duration_days", "allergy_conflict"}
+RULE_CONDITIONS = {"any_symptom", "all_symptoms", "any_history", "any_severity", "min_duration_days", "allergy_conflict"}
 
 
 def _dir() -> Path:
@@ -86,7 +86,11 @@ def validate(config: Any) -> None:
         condition = rule.get("condition") or {}
         if not isinstance(condition, dict) or set(condition) - RULE_CONDITIONS:
             raise InvalidConfig(f"Rule {rule['code']} has an invalid condition.")
-        for key in ("any_symptom", "all_symptoms", "any_history"):
+        if "emergency" in rule and not isinstance(rule["emergency"], bool):
+            raise InvalidConfig(f"Rule {rule['code']} has an invalid emergency value.")
+        if rule.get("emergency") and rule.get("priority") != "high":
+            raise InvalidConfig(f"Rule {rule['code']} is an emergency rule, so its priority must be high.")
+        for key in ("any_symptom", "all_symptoms", "any_history", "any_severity"):
             values = condition.get(key, [])
             if not isinstance(values, list) or not all(isinstance(value, str) and value for value in values):
                 raise InvalidConfig(f"Rule {rule['code']} has invalid {key} values.")
@@ -288,6 +292,17 @@ def clinic_vocabulary() -> list[str]:
     for keywords in (config.get("specialty_map") or {}).values():
         terms.update(keywords)
     return sorted(terms)
+
+
+def emergency_number() -> str:
+    """The number a red-flag patient is told to call; India's national emergency line by default."""
+    return str(hospital().get("emergency_number") or "112")
+
+
+def ambulance_number() -> str:
+    """The ambulance a red-flag patient is told to call; India's free ambulance line by default."""
+    return str(hospital().get("ambulance_number") or "108")
+
 
 def department_by_id(department_id: str | None) -> dict[str, Any] | None:
     return next((d for d in departments() if d["id"] == department_id), None)

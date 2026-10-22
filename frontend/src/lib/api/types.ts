@@ -114,6 +114,8 @@ export interface Slot {
   id: string; practitioner_id: string; department_id: string; start: string; end: string;
   /** Another patient holds this time: shown greyed out, not pickable. Patient view only. */
   taken?: boolean;
+  /** Whose time this is: the options span every doctor in the department. */
+  doctor_name?: string | null;
 }
 export interface Routing {
   department_id: string; department_name: string; doctor_id: string | null; doctor_name: string | null;
@@ -124,6 +126,11 @@ export interface PatientRouting {
   department_id: string; department_name: string; doctor_id: string | null; doctor_name: string | null;
   appointment_type_id: string; appointment_type_label: string;
   suggested_slot: Slot | null; slot_options: Slot[]; selected_slot_id: string | null;
+  /** The patient may pick which of the department's doctors to see. Off for urgent or approved
+   * cases: then slot_options are already only the times they may pick. */
+  doctor_choice?: boolean;
+  /** The patient confirmed a doctor and time; until then the earliest is only suggested. */
+  slot_confirmed?: boolean;
   /** The doctor's weekly consulting hours, clinic-local; empty when the hospital publishes none. */
   doctor_hours?: WeeklyHours[];
 }
@@ -154,6 +161,8 @@ export interface CaseListItem {
   chief_complaint: string | null; demographics: Record<string, string>; hms_patient_id: string | null;
   review_decision: ReviewDecision | null; missing_count: number; appointment_start: string | null;
   created_at: string; updated_at: string | null;
+  /** A red-flag rule matched: the patient was told to seek emergency care now. */
+  emergency?: boolean;
 }
 export interface ActiveIntake extends SessionResponse {
   identity_complete: boolean;
@@ -172,8 +181,11 @@ export interface PatientVisitItem {
 export interface AssistantTurn { role: "doctor" | "assistant"; content: string }
 export interface AssistantReply { reply: string }
 
+/** For a patient whose answers matched a red-flag rule: call an ambulance now. */
+export interface EmergencyAdvice { ambulance_number: string; emergency_number: string; flagged_at: string }
 export interface PatientCase {
   case_id: string; status: CaseStatus; review_decision: ReviewDecision | null;
+  emergency?: EmergencyAdvice | null;
   routing: PatientRouting | null; final_summary: Record<string, unknown> | null;
   consultation_mode: "in_person" | "virtual" | null;
   appointment_reference: string | null; created_at: string;
@@ -182,6 +194,7 @@ export interface PatientCase {
 export interface CaseDetail {
   case_id: string; session_id: string; status: CaseStatus; consent_status: string; channel: string; hospital_id: string;
   demographics: Record<string, string>; hms_patient_id: string | null; transcript: TranscriptMessage[];
+  emergency_flagged_at?: string | null;
   facts: Fact[]; allergies_medications: Entry[]; attachments: Attachment[]; missing_fields: string[];
   required_attachment_kinds: string[]; pending_attachment_kinds: string[];
   triage: Triage | null; routing: Routing | null; discrepancies: Discrepancy[]; prescreening_summary: Summary | null; review: Review | null;

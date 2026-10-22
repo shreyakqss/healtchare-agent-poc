@@ -8,7 +8,7 @@ import { Icons } from "@/components/ui/icons";
 import { formatDateTime, titleCase } from "@/lib/utils";
 
 const LIFECYCLE: CaseStatus[] = ["CREATED", "INGESTING", "ANALYZING", "NEEDS_REVIEW", "APPROVED", "COMPLETED"];
-const STEP_LABELS = ["Created", "Intake", "Pre-screening", "Review", "Approved", "Completed"];
+const STEP_LABELS = ["Created", "Intake", "Pre-screening", "Review", "Reviewed", "Completed"];
 
 export function CaseHeader({ detail, action }: { detail: CaseDetail; action?: ReactNode }) {
   const d = detail.demographics ?? {};
@@ -28,6 +28,9 @@ export function CaseHeader({ detail, action }: { detail: CaseDetail; action?: Re
                 <h2 className="text-lg font-semibold leading-6">{name}</h2>
                 <StatusBadge status={detail.status} />
                 <PriorityBadge priority={detail.triage?.priority ?? null} />
+                {detail.emergency_flagged_at ? (
+                  <Badge tone="danger"><Icons.alert size={12} /> Emergency advice given</Badge>
+                ) : null}
               </div>
               <p className="mt-0.5 flex flex-wrap items-center gap-2 text-sm text-fg-muted">
                 <span>{who || "Demographics not yet collected"}</span>

@@ -68,12 +68,14 @@ tokens must never be exposed to browser code or storage.
   and `PatientFact.value` keeps the patient's own words.
 - Patient answers receive only scope-selected context; external search receives only an identifier-free health topic.
   Restricted actions are code-gated, and generated answers are checked before delivery.
-- The HMS adapter receives appointment *requests* only; `CareTask.status` is always `draft`. Against
-OpenEMR that is a chart note for scheduling staff - never a calendar event, which would be a booking.
-  One documented exception: Admin > Doctors (`services/doctor_onboarding_service.py`) creates a practitioner and
-  publishes their "In Office" availability blocks through `integrations/hms/openemr/provisioning.py`, the only code
-  that writes OpenEMR's database directly. Availability, never a patient booking. Admins act only on their own
-  `clinic_id`'s doctors.
+- Booking is instant: when the patient confirms a time (`services/appointment_service.select_slot`) it goes
+  straight onto the doctor's OpenEMR calendar as an "Office Visit" (`HMSClient.book_appointment`), with no clinician
+  approval; changing the time moves it and a rejected case releases it. The clinician's review prepares the visit and
+  gates notes/finalize, never the booking. Post-visit follow-ups stay *requests*: `CareTask.status` is always `draft`.
+  `integrations/hms/openemr/provisioning.py` is the only code that writes OpenEMR's database directly - doctors and
+  their "In Office" hours (Admin > Doctors, own `clinic_id` only) and the patient's confirmed booking.
+- Red-flag triage rules (`emergency: true`) stop intake on the turn they match with a code-written "call an
+  ambulance" message, and the case is never offered a booking. There is no emergency department.
 - OpenEMR is the source of truth for patients, practitioners and documents. Patient self-service record search/linking
   is disabled until identity-proofing and proxy rules exist; the identity form creates the OpenEMR record. Departments, routing keywords
   and triage rules stay clinic policy in `data/hospitals/*.yaml`, and practitioners map to a department by

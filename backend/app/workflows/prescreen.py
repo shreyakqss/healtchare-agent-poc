@@ -16,11 +16,20 @@ from app.agents.summary_writer import SummaryInputs, write_prescreening
 from app.core.tracing import case_trace
 from app.db import db_session, utcnow
 from app.domain import routing as routing_rules
-from app.domain import scheduling, triage_engine
+from app.domain import triage_engine
 from app.domain.lifecycle import CaseStatus
 from app.integrations.hms import get_hms
 from app.models import ClinicalDiscrepancy, ClinicalSummary, RoutingRecommendation, TriageResult
-from app.services import audit, case_repo, hospital_config, lifecycle, slot_hold_service, triage_rules
+from app.services import (
+    audit,
+    case_repo,
+    doctor_load,
+    emergency_service,
+    hospital_config,
+    lifecycle,
+    slot_hold_service,
+    triage_rules,
+)
 from app.services.hms import effective_doctors_config
 from app.workflows.common import case_id_from, complete_step, completed_step, step
 
@@ -139,15 +148,24 @@ async def evaluate_urgency(step_input: StepInput) -> StepOutput:
         db.add(TriageResult(
             case_id=case_id, priority=outcome.priority, rule_ids=outcome.rule_ids,
             rule_codes=outcome.rule_codes, warnings=outcome.warnings, evidence=outcome.evidence,
+            emergency=outcome.emergency,
         ))
+        if outcome.emergency:
+            emergency_service.flag(db, case, "system:urgency_evaluator", outcome.rule_codes)
         audit.record(db, case_id, "system:urgency_evaluator", "triage.evaluated",
-                     {"priority": outcome.priority, "rule_codes": outcome.rule_codes, "warnings": len(outcome.warnings)})
+                     {"priority": outcome.priority, "rule_codes": outcome.rule_codes, "warnings": len(outcome.warnings),
+                      "emergency": outcome.emergency})
         result = {
             "priority": outcome.priority,
+            "emergency": outcome.emergency,
             "specialty_hint": outcome.specialty_hint,
             "rule_codes": outcome.rule_codes,
         }
         complete_step(db, step_input, "evaluate_urgency", result)
+        if outcome.emergency:
+            # Written during intake as a rule; here when the rule only matched now, or the
+            # intake-time write failed. Idempotent.
+            emergency_service.record_in_hms(db, case, "system:urgency_evaluator", outcome.rule_codes)
     return StepOutput(content=result)
 
 
@@ -164,20 +182,25 @@ async def navigate_care(step_input: StepInput) -> StepOutput:
         decision = routing_rules.route(
             case_repo.facts(db, case_id), config, urgency["priority"], urgency.get("specialty_hint"),
         )
-        doctor_id = decision.doctor["id"] if decision.doctor else None
-        slot_options = slot_hold_service.open_slots(db, get_hms(), decision.department["id"], doctor_id, 8, excluding_case=case_id)
-        if not slot_options and decision.doctor:
-            # This install's HMS has no Slot resource to offer (advisory-only per HMSClient's
-            # contract) - fall back to a synthetic business-hours window on the doctor's
-            # working days rather than leaving the patient with nothing to pick from.
-            held = len(slot_hold_service.held_starts(db, doctor_id, excluding_case=case_id))
-            slots = scheduling.fallback_slots(
-                decision.department["id"], decision.doctor["id"], decision.doctor.get("working_days") or [], utcnow(),
-                count=8 + held,
+        # Every doctor in the department is a candidate: the one with the earliest free time is
+        # assigned (fewest open cases on a tie), and the patient may later pick another's time.
+        open_cases = doctor_load.open_case_counts(db, [d["id"] for d in decision.doctors], excluding_case=case_id)
+        if urgency.get("emergency"):
+            # The patient was told to call an ambulance: no time is offered or held, and the
+            # department's least busy doctor is alerted (below).
+            slot_options, slot = [], None
+        else:
+            slot_options = slot_hold_service.department_slots(
+                db, get_hms(), decision.department["id"], decision.doctors, 8, case_id, open_cases, utcnow(),
             )
-            slot_options = slot_hold_service.free_of_holds(db, [s.model_dump(mode="json") for s in slots], case_id)[:8]
-        # The default is held too: it is what the doctor's calendar shows for this case.
-        slot = slot_hold_service.hold_first_free(db, case_id, slot_options, "system:care_navigator")
+            # The default is held too: it is what the doctor's calendar shows for this case.
+            slot = slot_hold_service.hold_first_free(db, case_id, slot_options, "system:care_navigator")
+        if slot is not None and slot.get("practitioner_id"):
+            decision.doctor = next(d for d in decision.doctors if d["id"] == slot["practitioner_id"])
+            decision.assigned_by = "earliest"
+        elif decision.doctors:
+            decision.doctor = routing_rules.least_loaded(decision.doctors, open_cases)
+            decision.assigned_by = "fewest_open"
         if slot is None:
             # Nothing holdable (no doctor, all taken, or doctor-less slots): a re-route must not
             # leave the case blocking its previous doctor's time.
@@ -196,7 +219,8 @@ async def navigate_care(step_input: StepInput) -> StepOutput:
         case.specialty_hint = decision.department["id"]
         audit.record(db, case_id, "system:care_navigator", "routing.recommended",
                      {"department_id": decision.department["id"], "doctor_id": decision.doctor["id"] if decision.doctor else None,
-                      "appointment_type": decision.appointment_type["id"], "basis": decision.basis, "hms_slot": slot["id"] if slot else None})
+                      "appointment_type": decision.appointment_type["id"], "basis": decision.basis,
+                      "assigned_by": decision.assigned_by, "hms_slot": slot["id"] if slot else None})
         result = {"department": decision.department["name"]}
         complete_step(db, step_input, "navigate_care", result)
     return StepOutput(content=result)

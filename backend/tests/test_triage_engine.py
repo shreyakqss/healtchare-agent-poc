@@ -27,6 +27,7 @@ class R:
     action: str = "do"
     specialty_hint: str | None = None
     id: str = "id"
+    emergency: bool = False
 
 
 RULES = [
@@ -91,3 +92,19 @@ def test_paraphrase_matches_through_the_clinic_term():
 def test_paraphrase_without_a_clinic_term_stays_routine():
     out = engine.evaluate([F("symptom", "a crushing weight on my ribs")], [], RULES)
     assert out.priority == "low"
+
+RED_FLAG = R("TR-EMERG-001", "high", {"any_symptom": ["chest pain"], "any_severity": ["severe", "sever", "immense"]}, emergency=True)
+
+
+def test_severe_chest_pain_is_a_red_flag():
+    """The live case: the severity came in the duration answer, not the symptom."""
+    facts = [F("reason_for_visit", "chest pain and nausea"), F("duration", "2 days its sever and im feeling immese pain")]
+    out = engine.evaluate(facts, [], [*RULES, RED_FLAG])
+    assert out.emergency and out.rule_codes == ["TR-EMERG-001"]
+    assert any(e["matched_on"] == "severity" for e in out.evidence)
+
+
+def test_chest_pain_without_severity_is_urgent_not_emergency():
+    out = engine.evaluate([F("symptom", "chest pain"), F("duration", "several days")], [], [*RULES, RED_FLAG])
+    assert out.priority == "high" and not out.emergency
+    assert out.rule_codes == ["TR-HIGH-001"]

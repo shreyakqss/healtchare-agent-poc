@@ -27,6 +27,7 @@ class TriageRule(Base):
     action: Mapped[str] = mapped_column(Text)
     explanation: Mapped[str] = mapped_column(Text)
     specialty_hint: Mapped[str | None] = mapped_column(String(128))
+    emergency: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     retired: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
 
 
@@ -41,6 +42,7 @@ class TriageResult(Base):
     rule_codes: Mapped[list[Any]] = mapped_column(JSONB, default=list)
     warnings: Mapped[list[Any]] = mapped_column(JSONB, default=list)
     evidence: Mapped[list[Any]] = mapped_column(JSONB, default=list)
+    emergency: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
 
 
 class RoutingRecommendation(Base):

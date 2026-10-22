@@ -4,6 +4,8 @@ hospital:
   timezone: Asia/Kolkata
   hms_facility_id: 3
   phone: '8769987654'
+  emergency_number: '112'
+  ambulance_number: '108'
   email: santonhospital@gmail.com
   website: null
   address:
@@ -113,6 +115,48 @@ specialty_map:
 triage_rules:
   version: 2026.08.1
   rules:
+  - code: TR-EMERG-001
+    priority: high
+    emergency: true
+    condition:
+      any_symptom:
+      - chest pain
+      - chest tightness
+      - shortness of breath
+      - breathlessness
+      any_severity:
+      - severe
+      - sever
+      - immense
+      - intense
+      - extreme
+      - crushing
+      - unbearable
+      - excruciating
+      - worst
+      - radiating
+      - sweating
+    action: Tell the patient to call an ambulance now; no appointment is offered.
+    explanation: The patient reported chest or breathing symptoms described as severe,
+      which the clinic treats as a red flag for emergency care.
+  - code: TR-EMERG-002
+    priority: high
+    emergency: true
+    condition:
+      any_symptom:
+      - loss of consciousness
+      - unconscious
+      - fainted
+      - fainting
+      - severe bleeding
+      - seizure
+      - slurred speech
+      - face drooping
+      - one side weakness
+      - suicidal
+    action: Tell the patient to call an ambulance now; no appointment is offered.
+    explanation: The patient reported a symptom the clinic always treats as a red flag
+      for emergency care.
   - code: TR-HIGH-001
     priority: high
     condition:

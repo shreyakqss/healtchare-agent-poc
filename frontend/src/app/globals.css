@@ -1,4 +1,6 @@
 @import "tailwindcss";
+/* Scan all of src explicitly: Tailwind skips gitignored paths, so an ignore rule must never drop styles. */
+@source "..";
 
 /* `dark:` follows the data-theme attribute (stamped by the theme-init script in
  * layout.tsx, which runs via next/script beforeInteractive), not the OS directly. */
@@ -31,6 +33,7 @@
   --color-brand-ring: #2a9d93;
 
   --color-danger: #b42318;
+  --color-danger-fg: #ffffff;
   --color-danger-soft: #fef3f2;
   --color-warning: #b54708;
   --color-warning-soft: #fffaeb;
@@ -87,6 +90,7 @@
   --color-brand-ring: #2fb3a6;
 
   --color-danger: #f97066;
+  --color-danger-fg: #1a0b0a;
   --color-danger-soft: #2c1513;
   --color-warning: #fdb022;
   --color-warning-soft: #2b1f0c;

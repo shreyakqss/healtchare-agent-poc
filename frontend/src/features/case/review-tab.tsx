@@ -37,7 +37,7 @@ export function ReviewTab({ detail, me, onChanged, hospital }: {
       <DiscrepancyFlags c={detail} />
 
       <Card>
-        <CardHeader title="Clinician review" description="The gate: consultation notes and the visit summary are only possible after approve or approve-with-edits." />
+        <CardHeader title="Clinician review" description="Read the case before the visit. Consultation notes and the visit summary unlock once it is reviewed. The appointment is already booked by the patient and does not wait for this." />
         <CardBody>
           {!review ? (
             <EmptyState icon={<Icons.shield size={20} />} title="Not reviewed yet" description={detail.status === "NEEDS_REVIEW" ? "Awaiting a clinician." : "Pre-screening must finish before a review can be recorded."} />

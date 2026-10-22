@@ -35,7 +35,10 @@ export function DoctorWorkspace({ initialCases, initialConfig, initialRoster, in
     );
   }
 
-  const unscheduled = cases.filter((c) => isMine(c, me) && !c.appointment_start);
+  // Red-flag cases are never booked (the patient was told to call an ambulance): always on top, oldest first.
+  const emergencies = cases.filter((c) => isMine(c, me) && c.emergency && c.status === "NEEDS_REVIEW")
+    .sort((a, b) => a.created_at.localeCompare(b.created_at));
+  const unscheduled = cases.filter((c) => isMine(c, me) && !c.appointment_start && !c.emergency);
 
   async function refreshList() {
     setRefreshing(true);
@@ -65,6 +68,29 @@ export function DoctorWorkspace({ initialCases, initialConfig, initialRoster, in
           Refresh
         </Button>
       </div>
+
+      {emergencies.length ? (
+        <div>
+          <h2 className="mb-2 flex items-center gap-1.5 text-base font-semibold text-danger">
+            <Icons.alert size={16} /> Emergency: patient told to call an ambulance ({emergencies.length})
+          </h2>
+          <ul className="divide-y divide-line rounded-lg border-2 border-danger bg-danger-soft">
+            {emergencies.map((c) => (
+              <li key={c.case_id}>
+                <Link href={`/cases/${c.case_id}`} className="flex items-center gap-3 px-3 py-2 hover:bg-surface">
+                  <Avatar name={c.demographics.name || "Unnamed patient"} />
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium">{c.demographics.name || "Unnamed patient"}</p>
+                    <p className="truncate text-xs text-fg-muted">{c.chief_complaint ?? "No chief complaint"}</p>
+                  </div>
+                  <span className="text-xs text-fg-muted">{new Date(c.created_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</span>
+                  <StatusBadge status={c.status} />
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
 
       {unscheduled.length ? (
         <div>

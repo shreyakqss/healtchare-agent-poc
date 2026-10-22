@@ -187,7 +187,7 @@ export function PatientPortal({
           <div className="mx-auto max-w-2xl space-y-5">
             <header>
               <h2 className="text-xl font-semibold tracking-tight">My visits</h2>
-              <p className="mt-1 text-sm text-fg-muted">Your approved plan and visit summary appear here once the care team has signed off.</p>
+              <p className="mt-1 text-sm text-fg-muted">Your appointments and visit summaries appear here.</p>
             </header>
             <VisitsPanel currentCaseId={state.caseId} initialVisits={initialVisits} />
           </div>

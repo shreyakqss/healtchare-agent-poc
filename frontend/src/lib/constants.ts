@@ -5,7 +5,7 @@ export const STATUS_LABEL: Record<CaseStatus, string> = {
   INGESTING: "Intake in progress",
   ANALYZING: "Pre-screening",
   NEEDS_REVIEW: "Awaiting review",
-  APPROVED: "Approved",
+  APPROVED: "Reviewed",
   COMPLETED: "Completed",
   REJECTED: "Rejected",
   FAILED: "Failed",

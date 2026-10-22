@@ -17,9 +17,10 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.errors import Conflict
+from app.domain import routing as routing_rules
 from app.domain import scheduling
 from app.models import RoutingRecommendation, SlotHold
-from app.services import audit
+from app.services import audit, doctor_load
 
 logger = logging.getLogger(__name__)
 
@@ -86,29 +87,65 @@ def open_slots(
     return _first_free(marked, limit, include_taken)
 
 
+def _named(slots: list[dict], name: str | None) -> list[dict]:
+    return [{**s, "doctor_name": s.get("doctor_name") or name} for s in slots]
+
+
+def department_slots(
+    db: Session, hms, department_id: str, doctors: list[dict], per_doctor: int,
+    excluding_case: uuid.UUID | None, open_cases: dict[str, int], now: datetime,
+) -> list[dict]:
+    """Routing time: every rostered doctor's free times in the department, each labelled with
+    the doctor's name, earliest first (fewer open cases first at the same time). When no doctor
+    publishes any hours, a synthetic business-hours window per doctor instead, so the patient
+    is never left with nothing to pick from."""
+    found: list[dict] = []
+    for doctor in doctors:
+        found += _named(open_slots(db, hms, department_id, doctor["id"], per_doctor, excluding_case), doctor["name"])
+    if not found:
+        for doctor in doctors:
+            held = len(held_starts(db, doctor["id"], excluding_case))
+            synthetic = scheduling.fallback_slots(
+                department_id, doctor["id"], doctor.get("working_days") or [], now, count=per_doctor + held,
+            )
+            free = free_of_holds(db, [s.model_dump(mode="json") for s in synthetic], excluding_case)[:per_doctor]
+            found += _named(free, doctor["name"])
+    return routing_rules.by_earliest(found, open_cases)
+
+
 def live_options(
     db: Session, hms, routing: RoutingRecommendation, count: int = 8, include_taken: bool = False
 ) -> list[dict]:
-    """What the patient can pick from *now*, not the snapshot taken at routing: the doctor's
-    current open times, so a freed time comes back and a newly taken one is excluded - or, with
-    `include_taken`, kept and flagged `taken`. The case's own current time always stays listed.
-    If the HMS cannot answer, the routing-time snapshot stands in."""
+    """What the patient can pick from *now*, not the snapshot taken at routing: the current open
+    times of every doctor offered at routing (the assigned one first), so a freed time comes back
+    and a newly taken one is excluded - or, with `include_taken`, kept and flagged `taken`. The
+    case's own current time always stays listed. A doctor the HMS cannot answer for keeps their
+    routing-time times. Earliest first, fewer open cases first at the same time."""
     stored = routing.slot_options or []
     if not routing.doctor_id:
         return [{**s, "taken": False} for s in stored] if include_taken else stored
-    try:
-        live = open_slots(db, hms, routing.department_id, routing.doctor_id, count,
-                          excluding_case=routing.case_id, include_taken=include_taken)
-    except httpx.HTTPError as exc:
-        logger.warning("live slots unavailable, using routing-time options (%s)", type(exc).__name__)
-        live = []
-    if not live:
-        live = _first_free(mark_taken(db, stored, routing.case_id), count, include_taken)
+    names = {routing.doctor_id: routing.doctor_name}
+    for slot in stored:
+        if slot.get("practitioner_id"):
+            names.setdefault(slot["practitioner_id"], slot.get("doctor_name"))
+    live: list[dict] = []
+    for pid, name in names.items():
+        try:
+            theirs = open_slots(db, hms, routing.department_id, pid, count,
+                                excluding_case=routing.case_id, include_taken=include_taken)
+        except httpx.HTTPError as exc:
+            logger.warning("live slots unavailable, using routing-time options (%s)", type(exc).__name__)
+            theirs = []
+        if not theirs:
+            mine = [s for s in stored if s.get("practitioner_id") == pid]
+            theirs = _first_free(mark_taken(db, mine, routing.case_id), count, include_taken)
+        live += _named(theirs, name)
     current = scheduling.chosen_slot(stored, routing.selected_slot_id, routing.suggested_slot)
     if current and all(s.get("id") != current.get("id") for s in live):
         current = {**_unflagged(current), "taken": False} if include_taken else _unflagged(current)
-        live = sorted([current, *live], key=_start)
-    return live
+        live.append(_named([current], names.get(current.get("practitioner_id")))[0])
+    open_cases = doctor_load.open_case_counts(db, list(names), excluding_case=routing.case_id)
+    return routing_rules.by_earliest(live, open_cases)
 
 
 def current_slot_id(routing: RoutingRecommendation) -> str | None:
