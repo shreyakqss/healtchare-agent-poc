@@ -131,8 +131,10 @@ export interface PatientRouting {
   doctor_choice?: boolean;
   /** The patient confirmed a doctor and time; until then the earliest is only suggested. */
   slot_confirmed?: boolean;
+  slot_passed?: boolean;
   /** The doctor's weekly consulting hours, clinic-local; empty when the hospital publishes none. */
   doctor_hours?: WeeklyHours[];
+  hours_by_doctor?: Record<string, WeeklyHours[]>;
 }
 /** Days (mon, tue, ...) sharing the same hours, e.g. times [["10:00", "13:00"], ["16:00", "19:00"]]. */
 export interface WeeklyHours { days: string[]; times: [string, string][] }

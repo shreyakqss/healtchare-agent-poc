@@ -141,15 +141,23 @@ def patient_routing_out(db: Session, case: PatientCase, r: RoutingRecommendation
     if r is None:
         return None
     slots, doctor_choice = appointment_service.patient_options(db, case, r)
+    passed = appointment_service.passed_booking(case, r) is not None
+    # A routing-time default that has gone by is never offered (slot_hold_service.live_options).
+    suggested = r.suggested_slot if r.suggested_slot and not slot_hold_service.has_passed(r.suggested_slot) else None
     return PatientRoutingResponse(
         department_id=r.department_id, department_name=r.department_name, doctor_id=r.doctor_id, doctor_name=r.doctor_name,
         appointment_type_id=r.appointment_type_id, appointment_type_label=r.appointment_type_label,
-        suggested_slot=SlotResponse(**r.suggested_slot) if r.suggested_slot else None,
+        suggested_slot=SlotResponse(**suggested) if suggested else None,
         slot_options=[SlotResponse(**s) for s in slots],
         selected_slot_id=slot_hold_service.current_slot_id(r),
         doctor_choice=doctor_choice,
         slot_confirmed=case.hms_appointment_id is not None,
+        slot_passed=passed,
         doctor_hours=[WeeklyHoursResponse(**h.model_dump()) for h in _doctor_hours(r.doctor_id)],
+        hours_by_doctor={
+            pid: [WeeklyHoursResponse(**h.model_dump()) for h in _doctor_hours(pid)]
+            for pid in dict.fromkeys(s["practitioner_id"] for s in slots if s.get("practitioner_id"))
+        },
     )
 
 

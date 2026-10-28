@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 
 from app.core.errors import Conflict, ServiceUnavailable, Unprocessable
 from app.domain import routing as routing_rules
+from app.domain import scheduling
 from app.integrations.hms import get_hms
 from app.models import PatientCase, RoutingRecommendation
 from app.services import audit, case_repo, hospital_config, slot_hold_service
@@ -38,6 +39,8 @@ def patient_options(
     picker can grey them out. A red-flag case is offered nothing: it is told to come now."""
     if case.emergency_flagged_at is not None:
         return [], False
+    if booked := passed_booking(case, routing):
+        return [{**booked, "taken": False}], False
     shown = every if every is not None else slot_hold_service.live_options(db, get_hms(), routing, include_taken=True)
     if case_repo.session_for(db, case).status in DOCTOR_FIXED_STATUSES:
         return [s for s in shown if s.get("practitioner_id") == routing.doctor_id], False
@@ -45,6 +48,15 @@ def patient_options(
     if not routing_rules.doctor_choice(triage.priority if triage else None):
         return routing_rules.one_per_time(shown, slot_hold_service.current_slot_id(routing)), False
     return shown, True
+
+
+def passed_booking(case: PatientCase, routing: RoutingRecommendation) -> dict | None:
+    """The booked time once it is in the past - the visit is over (or missed), so it can no
+    longer be changed; a new problem is a new visit."""
+    if not case.hms_appointment_id:
+        return None
+    booked = scheduling.chosen_slot(routing.slot_options or [], routing.selected_slot_id, routing.suggested_slot)
+    return booked if slot_hold_service.has_passed(booked) else None
 
 
 def _rostered(department_id: str, practitioner_id: str) -> bool:
@@ -66,6 +78,8 @@ def select_slot(db: Session, case: PatientCase, slot_id: str) -> None:
     # One pick per case at a time (two tabs): the second waits, then simply replaces the first,
     # instead of tripping the one-hold-per-case rule and being told another patient took it.
     routing = db.query(RoutingRecommendation).filter(RoutingRecommendation.id == routing.id).with_for_update().one()
+    if passed_booking(case, routing):
+        raise Conflict("This appointment time has already passed, so it cannot be changed. Please start a new visit.")
     # Checked against the live list (see slot_hold_service.live_options), not the routing-time
     # snapshot, so a time freed since routing can be picked and a taken one cannot.
     every = slot_hold_service.live_options(db, get_hms(), routing, include_taken=True)

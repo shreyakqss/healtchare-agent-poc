@@ -76,10 +76,11 @@ DEMOGRAPHIC_KEYS = {"name": "name", "age": "age", "gender": "sex"}
 
 
 def demographics_from_facts(fact_rows: list[PatientFact]) -> dict[str, str]:
+    """`fact_rows` oldest first; a later row supersedes an earlier one, as in `captured_fields`."""
     merged: dict[str, str] = {}
     for f in fact_rows:
         if f.kind in DEMOGRAPHIC_KEYS and f.value not in intake_fields.PLACEHOLDERS:
-            merged.setdefault(DEMOGRAPHIC_KEYS[f.kind], f.value.strip())
+            merged[DEMOGRAPHIC_KEYS[f.kind]] = f.value.strip()
     return merged
 
 

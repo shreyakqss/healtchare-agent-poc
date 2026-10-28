@@ -90,7 +90,10 @@ export function AppointmentSlotPicker({ caseId, routing, locked, onUpdated }: {
   }
 
   // Booked (or locked): the appointment, with a way to change it while that is still allowed.
-  if (locked || (confirmed && expanded !== "change")) {
+  // A booked time that has gone by is fixed too - that visit is over.
+  const passed = Boolean(routing.slot_passed) && confirmed;
+  const fixed = locked || passed;
+  if (fixed || (confirmed && expanded !== "change")) {
     const shown = current ?? routing.suggested_slot;
     return (
       <div className="space-y-3">
@@ -99,17 +102,19 @@ export function AppointmentSlotPicker({ caseId, routing, locked, onUpdated }: {
             <Avatar name={routing.doctor_name} />
             <div className="min-w-0">
               <p className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-success">
-                <Icons.checkCircle size={13} /> {locked ? "Your visit" : "Appointment booked"}
+                <Icons.checkCircle size={13} /> {passed ? "Past appointment" : locked ? "Your visit" : "Appointment booked"}
               </p>
               <p className="truncate text-sm font-semibold">{routing.doctor_name ?? "A clinician"} · {routing.department_name}</p>
               {shown ? <p className="text-sm text-fg-muted">{when(shown)}</p> : null}
             </div>
           </div>
-          {!locked ? <Button size="sm" variant="secondary" onClick={() => setExpanded("change")}>Change</Button> : null}
+          {!fixed ? <Button size="sm" variant="secondary" onClick={() => setExpanded("change")}>Change</Button> : null}
         </div>
         <p className="flex items-center gap-1.5 text-xs text-fg-subtle">
           <Icons.info size={13} className="shrink-0" />
-          {locked ? "This time is set for your visit." : "It's on your doctor's calendar. You can change it here if your plans change."}
+          {passed
+            ? "This appointment time has passed. For a new problem, start a new visit from the intake form."
+            : locked ? "This time is set for your visit." : "It's on your doctor's calendar. You can change it here if your plans change."}
         </p>
       </div>
     );
@@ -171,7 +176,7 @@ export function AppointmentSlotPicker({ caseId, routing, locked, onUpdated }: {
         {doctors.map((doctor) => (
           <DoctorCard key={doctor.id} doctor={doctor} pickedId={pickedId} currentId={current?.id ?? null}
             showAll={expanded === doctor.id} onToggle={() => setExpanded(expanded === doctor.id ? null : doctor.id)}
-            hours={doctor.id === routing.doctor_id ? routing.doctor_hours : undefined}
+            hours={routing.hours_by_doctor?.[doctor.id] ?? (doctor.id === routing.doctor_id ? routing.doctor_hours : undefined)}
             onPick={(slot) => setPickedId(slot.id)} disabled={saving} />
         ))}
       </section> : null}

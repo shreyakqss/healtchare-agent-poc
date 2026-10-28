@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 
 import httpx
 from sqlalchemy.exc import IntegrityError
@@ -29,6 +29,16 @@ TAKEN_MESSAGE = "That time was just taken by another patient. Please pick anothe
 
 def _start(slot: dict) -> datetime:
     return datetime.fromisoformat(str(slot["start"]))
+
+
+def has_passed(slot: dict | None, now: datetime | None = None) -> bool:
+    return slot is not None and _start(slot) <= (now or datetime.now(UTC))
+
+
+def upcoming(slots: list[dict], now: datetime | None = None) -> list[dict]:
+    """Only times still ahead: a stored routing-time list goes stale as days pass."""
+    now = now or datetime.now(UTC)
+    return [s for s in slots if not has_passed(s, now)]
 
 
 def held_starts(db: Session, practitioner_id: str, excluding_case: uuid.UUID | None = None) -> set[datetime]:
@@ -120,8 +130,9 @@ def live_options(
     times of every doctor offered at routing (the assigned one first), so a freed time comes back
     and a newly taken one is excluded - or, with `include_taken`, kept and flagged `taken`. The
     case's own current time always stays listed. A doctor the HMS cannot answer for keeps their
-    routing-time times. Earliest first, fewer open cases first at the same time."""
-    stored = routing.slot_options or []
+    routing-time times. Times already past are never offered, the case's own included. Earliest
+    first, fewer open cases first at the same time."""
+    stored = upcoming(routing.slot_options or [])
     if not routing.doctor_id:
         return [{**s, "taken": False} for s in stored] if include_taken else stored
     names = {routing.doctor_id: routing.doctor_name}
@@ -141,7 +152,7 @@ def live_options(
             theirs = _first_free(mark_taken(db, mine, routing.case_id), count, include_taken)
         live += _named(theirs, name)
     current = scheduling.chosen_slot(stored, routing.selected_slot_id, routing.suggested_slot)
-    if current and all(s.get("id") != current.get("id") for s in live):
+    if current and not has_passed(current) and all(s.get("id") != current.get("id") for s in live):
         current = {**_unflagged(current), "taken": False} if include_taken else _unflagged(current)
         live.append(_named([current], names.get(current.get("practitioner_id")))[0])
     open_cases = doctor_load.open_case_counts(db, list(names), excluding_case=routing.case_id)

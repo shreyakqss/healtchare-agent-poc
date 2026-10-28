@@ -35,11 +35,15 @@ export function PatientResults({ detail, onUpdated, onRefresh, refreshing }: {
   }
   if (!approved) {
     const booked = Boolean(detail.routing?.slot_confirmed);
+    const passed = booked && Boolean(detail.routing?.slot_passed);
     return (
       <Panel icon={booked ? <Icons.checkCircle size={18} /> : <Icons.clock size={18} />}
-        title={booked ? "Your appointment is booked" : "Choose your appointment"} tone={booked ? "good" : "pending"} action={refreshAction}>
+        title={passed ? "Your appointment time has passed" : booked ? "Your appointment is booked" : "Choose your appointment"}
+        tone={booked ? "good" : "pending"} action={refreshAction}>
         <p>
-          {booked
+          {passed
+            ? "This visit's appointment time is over. "
+            : booked
             ? "Your doctor will go through your answers before the visit. "
             : "Pick a doctor and time below. It's booked as soon as you confirm. "}
           Your visit is saved under &ldquo;My visits&rdquo;, so you can close this page and come back any time.
@@ -66,7 +70,8 @@ export function PatientResults({ detail, onUpdated, onRefresh, refreshing }: {
 
   return (
     <div className="space-y-4">
-      <Panel icon={<Icons.checkCircle size={18} />} title={completed ? "Your visit summary" : "Your appointment is booked"} tone="good">
+      <Panel icon={<Icons.checkCircle size={18} />} tone="good"
+        title={completed ? "Your visit summary" : routing?.slot_passed ? "Your appointment time has passed" : "Your appointment is booked"}>
         {routing ? (
           <AppointmentSlotPicker caseId={detail.case_id} routing={routing} locked={completed} onUpdated={onUpdated} />
         ) : (

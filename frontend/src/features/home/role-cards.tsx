@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Icons } from "@/components/ui/icons";
@@ -19,24 +19,31 @@ const ROLE_ICON = {
   admin: Icons.settings,
 } as const;
 
+const noSubscribe = () => () => {};
+
+function readLastRole(): string | null {
+  try {
+    return localStorage.getItem(LAST_ROLE_KEY);
+  } catch {
+    return null; /* private browsing or storage blocked - no highlight, still fully usable */
+  }
+}
+
+function loginHref(returnTo: string) {
+  return `/api/auth/login?return_to=${encodeURIComponent(returnTo)}`;
+}
+
 /** Per-browser convenience only - highlights whichever role was opened last time, so a
  * returning visitor doesn't have to re-read all three cards. Never auto-navigates: the
  * picker still shows every role you're allowed, so a shared machine can't silently sign
  * in as the wrong person. */
 export function RoleCards({ roles, signedIn }: { roles: RoleCard[]; signedIn: boolean }) {
   const router = useRouter();
-  const [lastRole, setLastRole] = useState<string | null>(null);
+  // null on the server and before hydration, so the first client render matches the HTML.
+  const lastRole = useSyncExternalStore(noSubscribe, readLastRole, () => null);
   const [registering, setRegistering] = useState(false);
   const [registerError, setRegisterError] = useState<string | null>(null);
   const [newAccount, setNewAccount] = useState<{ username: string; password: string } | null>(null);
-
-  useEffect(() => {
-    try {
-      setLastRole(localStorage.getItem(LAST_ROLE_KEY));
-    } catch {
-      /* private browsing or storage blocked - no highlight, still fully usable */
-    }
-  }, []);
 
   function remember(role: string) {
     try {
@@ -83,13 +90,15 @@ export function RoleCards({ roles, signedIn }: { roles: RoleCard[]; signedIn: bo
                   {isLast ? <span className="text-[11px] font-medium text-brand">Last used</span> : null}
                 </div>
                 <div className="mt-3 flex gap-2">
-                  <Link
-                    href={`/api/auth/login?return_to=${encodeURIComponent(r.href)}`}
+                  {/* A plain link, not <Link>: the login route redirects off-site to Keycloak,
+                      which a client-side RSC fetch cannot follow. */}
+                  <a
+                    href={loginHref(r.href)}
                     onClick={() => remember("patient")}
                     className="flex-1 rounded-md border border-line px-3 py-1.5 text-center text-xs font-medium hover:border-brand-ring"
                   >
                     Returning patient
-                  </Link>
+                  </a>
                   <button
                     type="button"
                     onClick={() => void startNewPatient()}
@@ -104,20 +113,25 @@ export function RoleCards({ roles, signedIn }: { roles: RoleCard[]; signedIn: bo
             );
           }
 
-          return (
-            <Link
-              key={r.href}
-              href={signedIn ? r.href : `/api/auth/login?return_to=${encodeURIComponent(r.href)}`}
-              onClick={() => remember(r.role)}
-              className={`group flex items-center gap-3 hover:border-brand-ring ${cardClass}`}
-            >
+          const linkClass = `group flex items-center gap-3 hover:border-brand-ring ${cardClass}`;
+          const content = (
+            <>
               <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-brand-soft text-brand">
                 <RoleIcon size={18} />
               </div>
               <span className="flex-1 text-sm font-semibold">{r.title}</span>
               {isLast ? <span className="text-[11px] font-medium text-brand">Last used</span> : null}
               <Icons.arrowRight size={16} className="shrink-0 text-fg-subtle transition-transform group-hover:translate-x-0.5" />
+            </>
+          );
+          return signedIn ? (
+            <Link key={r.href} href={r.href} onClick={() => remember(r.role)} className={linkClass}>
+              {content}
             </Link>
+          ) : (
+            <a key={r.href} href={loginHref(r.href)} onClick={() => remember(r.role)} className={linkClass}>
+              {content}
+            </a>
           );
         })}
       </div>

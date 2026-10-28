@@ -169,8 +169,12 @@ class PatientRoutingResponse(BaseModel):
     # The patient confirmed a doctor and time, so it is booked on the doctor's HMS calendar. Until
     # then the earliest one is only suggested (and held).
     slot_confirmed: bool = False
+    # The booked time is in the past: shown as the visit's time, no longer changeable.
+    slot_passed: bool = False
     # The doctor's weekly consulting hours from the HMS calendar; empty when it publishes none.
     doctor_hours: list[WeeklyHoursResponse] = []
+    # Weekly hours of every doctor whose times are offered, by practitioner id.
+    hours_by_doctor: dict[str, list[WeeklyHoursResponse]] = {}
 
 
 class SummaryResponse(BaseModel):
