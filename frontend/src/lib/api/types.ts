@@ -174,6 +174,29 @@ export interface ActiveIntake extends SessionResponse {
   skipped_attachment_kinds: string[];
 }
 
+export interface PastVisitItem {
+  case_id: string;
+  visit_at: string;
+  status: CaseStatus;
+  review_decision: string | null;
+  chief_complaint: string | null;
+  department_name: string | null;
+  doctor_id: string | null;
+  doctor_name: string | null;
+}
+
+/** One patient on the doctor's "Past patients" list, their visits newest first. */
+export interface PastPatientItem {
+  patient_key: string;
+  hms_patient_id: string | null;
+  name: string | null;
+  age: string | null;
+  sex: string | null;
+  last_visit_at: string;
+  visit_count: number;
+  visits: PastVisitItem[];
+}
+
 export interface PatientVisitItem {
   case_id: string; status: CaseStatus; review_decision: ReviewDecision | null;
   department_name: string | null; doctor_name: string | null;

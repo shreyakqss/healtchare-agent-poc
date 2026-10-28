@@ -279,8 +279,33 @@ class CaseListItem(BaseModel):
     # A red-flag rule matched: the patient was told to seek emergency care now.
     emergency: bool = False
     appointment_start: datetime | None
+    # The time is on the doctor's HMS calendar (the patient confirmed it), not just a default.
+    appointment_booked: bool = False
     created_at: datetime
     updated_at: datetime | None
+
+
+class PastVisitItem(BaseModel):
+    case_id: str
+    visit_at: datetime
+    status: str
+    review_decision: str | None
+    chief_complaint: str | None
+    department_name: str | None
+    doctor_id: str | None
+    doctor_name: str | None
+
+
+class PastPatientItem(BaseModel):
+    """One patient on the doctor's "Past patients" list (services/past_patients)."""
+    patient_key: str
+    hms_patient_id: str | None
+    name: str | None
+    age: str | None
+    sex: str | None
+    last_visit_at: datetime
+    visit_count: int
+    visits: list[PastVisitItem]
 
 
 class PatientVisitItem(BaseModel):

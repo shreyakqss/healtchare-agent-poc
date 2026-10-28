@@ -2,7 +2,7 @@ import { API_ROOT, http, readCookie, readSse } from "@/lib/api/client";
 import type {
   AdminDoctor, AdminDoctors, ChangeHoursRequest, DoctorDetails, UpdateDoctorRequest, DoctorPreview, HoursChangePreview, DoctorRemoval, DoctorRemovalCheck, NewDoctorRequest, AppointmentRequestResult, AssistantReply, AssistantTurn, Attachment, AttachmentSkipResponse, AuditEvent, CaseDetail,
   CaseListItem, ConsultationNote, ConsultationNoteRequest, FinalizeRequest, HMSPractitioner, HMSStatus, HospitalConfig,
-  HospitalSummary, IdentityFormRequest, IntakeConfig, LinkedPatientRecord, MessageResponse, PatientCase, PatientVisitItem,
+  HospitalSummary, IdentityFormRequest, IntakeConfig, LinkedPatientRecord, MessageResponse, PastPatientItem, PatientCase, PatientVisitItem,
   Review, ReviewRequest, Roster, SessionResponse, Slot, TurnEvent,
 } from "@/lib/api/types";
 
@@ -34,6 +34,7 @@ export const intakeApi = {
 
 export const casesApi = {
   list: () => http.get<CaseListItem[]>("/cases"),
+  pastPatients: () => http.get<PastPatientItem[]>("/cases/past-patients"),
   get: (caseId: string) => http.get<CaseDetail>(`/cases/${caseId}`),
   patientList: () => http.get<PatientVisitItem[]>("/cases/my-visits"),
   patientGet: (caseId: string) => http.get<PatientCase>(`/cases/${caseId}/patient-view`),

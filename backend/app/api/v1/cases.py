@@ -34,6 +34,7 @@ from app.schemas.responses import (
     CaseListItem,
     ConsultationNoteResponse,
     DoctorAssistantResponse,
+    PastPatientItem,
     PatientCaseResponse,
     PatientVisitItem,
 )
@@ -52,6 +53,7 @@ from app.services import (
     case_repo,
     consultation_service,
     doctor_assistant_service,
+    past_patients,
     prescreen_trigger,
     workflow_jobs,
 )
@@ -76,6 +78,20 @@ def list_cases(
     if page.next_cursor:
         response.headers["X-Next-Cursor"] = page.next_cursor
     return serializers.case_list(db, page.items)
+
+
+@router.get("/past-patients", response_model=list[PastPatientItem])
+def list_past_patients(
+    principal: ClinicianPrincipal,
+    q: str | None = Query(None, max_length=100),
+    doctor_id: str | None = Query(None, max_length=128),
+    days: int | None = Query(None, ge=1, le=3650),
+    db: Session = Depends(get_db),
+):
+    """Patients with a visit that is over, grouped per patient. Same clinic scope as the case
+    list; `doctor_id` narrows it to one doctor's visits ("mine")."""
+    page = cases_for_principal(db, principal, "clinician", limit=past_patients.MAX_CASES_SCANNED)
+    return past_patients.group(serializers.case_list(db, page.items), doctor_id=doctor_id, query=q, days=days)
 
 
 @router.get("/my-visits", response_model=list[PatientVisitItem])

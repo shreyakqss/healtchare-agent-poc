@@ -17,6 +17,7 @@ import type {
   IntakeConfig,
   LinkedPatientRecord,
   PatientCase,
+  PastPatientItem,
   PatientVisitItem,
   Roster,
 } from "@/lib/api/types";
@@ -51,6 +52,7 @@ export const serverApi = {
   },
   clinician: {
     cases: () => serverRequest<CaseListItem[]>("/cases"),
+    pastPatients: () => serverRequest<PastPatientItem[]>("/cases/past-patients"),
     case: (id: string) => serverRequest<CaseDetail>(`/cases/${encodeURIComponent(id)}`),
     audit: (id: string) => serverRequest<AuditEvent[]>(`/cases/${encodeURIComponent(id)}/audit`),
     config: () => serverRequest<HospitalConfig & { hospital_id: string }>("/hospital/config"),

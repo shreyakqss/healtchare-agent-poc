@@ -414,6 +414,7 @@ def case_list(db: Session, cases: list[PatientCase] | None = None) -> list[CaseL
             missing_count=len(intake_fields.missing_fields(required_fields, facts, entries)),
             emergency=case.emergency_flagged_at is not None,
             appointment_start=_appointment_start(case_routing, task),
+            appointment_booked=case.hms_appointment_id is not None,
             created_at=case.created_at, updated_at=updated.get(case.id),
         ))
     return items
