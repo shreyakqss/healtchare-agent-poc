@@ -232,7 +232,7 @@ export interface PatientCase {
   emergency?: EmergencyAdvice | null;
   routing: PatientRouting | null; final_summary: Record<string, unknown> | null;
   consultation_mode: "in_person" | "virtual" | null;
-  appointment_reference: string | null; created_at: string;
+  appointment_reference: string | null; has_letterhead?: boolean; created_at: string;
 }
 
 export interface CaseDetail {

@@ -53,6 +53,7 @@ from app.services import (
     case_repo,
     consultation_service,
     doctor_assistant_service,
+    letterhead,
     past_patients,
     prescreen_trigger,
     workflow_jobs,
@@ -116,6 +117,18 @@ def get_patient_case(case_id: uuid.UUID, principal: PatientPrincipal, db: Sessio
     rate_limits.enforce("attachment.upload", principal.user_id)
     case = case_for_principal(db, case_id, principal, allow_clinician=False)
     return serializers.patient_case_detail(db, case)
+
+
+@router.get("/{case_id}/letterhead")
+def get_case_letterhead(case_id: uuid.UUID, principal: PatientPrincipal, db: Session = Depends(get_db)):
+    """The letterhead of the clinic that owns this case, for the patient's visit summary.
+    Scoped to the case owner, unlike the staff-only /hospital letterhead route."""
+    case = case_for_principal(db, case_id, principal, allow_clinician=False)
+    try:
+        path = letterhead.path_for(case.hospital_id)
+    except FileNotFoundError:
+        raise NotFound("No letterhead uploaded for this clinic.") from None
+    return FileResponse(path, content_disposition_type="inline")
 
 
 @router.post("/{case_id}/appointment-slot", response_model=PatientCaseResponse)

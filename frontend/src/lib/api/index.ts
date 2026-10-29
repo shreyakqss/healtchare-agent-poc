@@ -48,6 +48,7 @@ export const casesApi = {
     return http.form<Attachment>(`/cases/${caseId}/attachments`, form);
   },
   fileUrl: (caseId: string, attachmentId: string) => `${API_ROOT}/cases/${caseId}/attachments/${attachmentId}/file`,
+  letterheadUrl: (caseId: string) => `${API_ROOT}/cases/${caseId}/letterhead`,
   skipAttachment: (caseId: string, kind: string, reason?: string) =>
     http.post<AttachmentSkipResponse>(`/cases/${caseId}/attachments/skip`, { kind, reason }),
   prescreen: (caseId: string) => http.post<CaseDetail>(`/cases/${caseId}/prescreen`),

@@ -51,7 +51,7 @@ from app.schemas.responses import (
     TriageResponse,
     WeeklyHoursResponse,
 )
-from app.services import appointment_service, case_repo, hospital_config, slot_hold_service
+from app.services import appointment_service, case_repo, hospital_config, letterhead, slot_hold_service
 
 logger = logging.getLogger(__name__)
 
@@ -271,6 +271,7 @@ def patient_case_detail(db: Session, case: PatientCase) -> PatientCaseResponse:
         final_summary=final_summary.sections if final_summary else None,
         consultation_mode=notes[-1].consultation_mode if notes else None,
         appointment_reference=tasks[0].hms_reference if tasks else None,
+        has_letterhead=letterhead.exists(case.hospital_id),
         created_at=case.created_at,
     )
 

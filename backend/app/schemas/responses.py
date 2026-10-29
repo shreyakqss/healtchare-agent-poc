@@ -355,6 +355,7 @@ class PatientCaseResponse(BaseModel):
     final_summary: dict[str, Any] | None
     consultation_mode: str | None
     appointment_reference: str | None
+    has_letterhead: bool = False
     created_at: datetime
 
 

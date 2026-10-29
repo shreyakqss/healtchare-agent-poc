@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import type { EmergencyAdvice, PatientCase } from "@/lib/api";
+import { casesApi, type EmergencyAdvice, type PatientCase } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Icons } from "@/components/ui/icons";
@@ -80,7 +80,11 @@ export function PatientResults({ detail, onUpdated, onRefresh, refreshing }: {
       </Panel>
 
       {completed ? (
-        <div className="space-y-4 rounded-lg border border-line bg-surface p-5 shadow-card">
+        <div className="space-y-4 overflow-hidden rounded-lg border border-line bg-surface p-5 shadow-card">
+          {detail.has_letterhead ? (
+            // eslint-disable-next-line @next/next/no-img-element -- the clinic's own uploaded letterhead, not a static import
+            <img src={casesApi.letterheadUrl(detail.case_id)} alt="Clinic letterhead" className="-mx-5 -mt-5 mb-1 block w-[calc(100%+2.5rem)] max-w-none border-b border-line bg-white object-contain" />
+          ) : null}
           {friendly ? <p className="text-[15px] leading-7">{friendly}</p> : null}
           <dl className="grid gap-4">
             {mode ? <Item label="Consultation" value={mode === "virtual" ? "Video consultation" : "In person"} /> : null}
