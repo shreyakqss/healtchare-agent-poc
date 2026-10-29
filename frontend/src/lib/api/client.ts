@@ -86,3 +86,7 @@ function sseData(frame: string): string {
     .map((line) => line.slice(5).trimStart())
     .join("\n");
 }
+
+/** The doctor workspace loads every clinic case in one call (the API allows up to 1000), so an
+ * older booking is never missing from the worklist or calendar. */
+export const WORKSPACE_CASES = 1000;

@@ -147,7 +147,7 @@ export function DoctorWorkspace({ initialCases, initialPast, initialConfig, init
           <CaseList cases={upcoming} empty="No upcoming appointments." when={(c) => DAY_TIME.format(new Date(c.appointment_start!))} />
         ) : null}
 
-        {tab === "past" ? <PastPatients patients={past} me={me} now={now} /> : null}
+        {tab === "past" ? <PastPatients patients={past} now={now} /> : null}
 
         {tab === "calendar" ? <DoctorCalendar cases={cases} me={me} /> : null}
       </div>

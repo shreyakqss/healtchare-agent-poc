@@ -1,7 +1,7 @@
 import "server-only";
 
 import { cookies } from "next/headers";
-import { parseError } from "@/lib/api/client";
+import { parseError, WORKSPACE_CASES } from "@/lib/api/client";
 import type {
   Attachment,
   AuditEvent,
@@ -10,6 +10,7 @@ import type {
   CaseListItem,
   Health,
   AdminDoctors,
+  AdminPatientItem,
   WeeklyHours,
   HMSStatus,
   HospitalConfig,
@@ -51,7 +52,7 @@ export const serverApi = {
     case: (id: string) => serverRequest<PatientCase>(`/cases/${encodeURIComponent(id)}/patient-view`),
   },
   clinician: {
-    cases: () => serverRequest<CaseListItem[]>("/cases"),
+    cases: () => serverRequest<CaseListItem[]>(`/cases?limit=${WORKSPACE_CASES}`),
     pastPatients: () => serverRequest<PastPatientItem[]>("/cases/past-patients"),
     case: (id: string) => serverRequest<CaseDetail>(`/cases/${encodeURIComponent(id)}`),
     audit: (id: string) => serverRequest<AuditEvent[]>(`/cases/${encodeURIComponent(id)}/audit`),
@@ -64,5 +65,6 @@ export const serverApi = {
     config: () => serverRequest<HospitalConfig & { hospital_id: string }>("/hospital/config"),
     hms: () => serverRequest<HMSStatus>("/hms/status"),
     doctors: () => serverRequest<AdminDoctors>("/admin/doctors"),
+    patients: () => serverRequest<AdminPatientItem[]>("/admin/patients"),
   },
 };

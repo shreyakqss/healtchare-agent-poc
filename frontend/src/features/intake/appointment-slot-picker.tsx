@@ -50,6 +50,8 @@ export function AppointmentSlotPicker({ caseId, routing, locked, onUpdated }: {
   const current = all.find((s) => s.id === routing.selected_slot_id) ?? null;
   const confirmed = Boolean(routing.slot_confirmed) && current !== null;
   const [pickedId, setPickedId] = useState<string | null>(null);
+  // Separate on purpose: "More times" on a doctor card must not close the Change view.
+  const [changing, setChanging] = useState(false);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -79,6 +81,8 @@ export function AppointmentSlotPicker({ caseId, routing, locked, onUpdated }: {
     try {
       const updated = await casesApi.selectSlot(caseId, slot.id);
       setPickedId(null);
+      setChanging(false);
+      setExpanded(null);
       onUpdated?.(updated);
       toast.push({ tone: "success", message: `Booked with ${slot.doctor_name ?? "your doctor"}, ${when(slot)}.` });
     } catch (err) {
@@ -93,7 +97,7 @@ export function AppointmentSlotPicker({ caseId, routing, locked, onUpdated }: {
   // A booked time that has gone by is fixed too - that visit is over.
   const passed = Boolean(routing.slot_passed) && confirmed;
   const fixed = locked || passed;
-  if (fixed || (confirmed && expanded !== "change")) {
+  if (fixed || (confirmed && !changing)) {
     const shown = current ?? routing.suggested_slot;
     return (
       <div className="space-y-3">
@@ -108,7 +112,7 @@ export function AppointmentSlotPicker({ caseId, routing, locked, onUpdated }: {
               {shown ? <p className="text-sm text-fg-muted">{when(shown)}</p> : null}
             </div>
           </div>
-          {!fixed ? <Button size="sm" variant="secondary" onClick={() => setExpanded("change")}>Change</Button> : null}
+          {!fixed ? <Button size="sm" variant="secondary" onClick={() => setChanging(true)}>Change</Button> : null}
         </div>
         <p className="flex items-center gap-1.5 text-xs text-fg-subtle">
           <Icons.info size={13} className="shrink-0" />
@@ -127,7 +131,7 @@ export function AppointmentSlotPicker({ caseId, routing, locked, onUpdated }: {
       {confirmed ? (
         <div className="flex items-center justify-between gap-3 text-sm">
           <p className="text-fg-muted">Pick a new doctor or time, then confirm.</p>
-          <Button size="sm" variant="ghost" onClick={() => { setExpanded(null); setPickedId(null); }}>Keep current</Button>
+          <Button size="sm" variant="ghost" onClick={() => { setChanging(false); setExpanded(null); setPickedId(null); }}>Keep current</Button>
         </div>
       ) : null}
 

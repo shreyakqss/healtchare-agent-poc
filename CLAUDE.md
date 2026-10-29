@@ -60,6 +60,9 @@ tokens must never be exposed to browser code or storage.
   priority, rule evidence, notes, internal summaries, audit, and task internals.
 - Every application route is deny-by-default: patient routes require persisted `CaseOwner`, clinician routes require
   the case clinic, and admin alone never grants clinical access. Unsafe cookie-authenticated requests require CSRF.
+  Admin > Patients (`services/patient_directory`) is an administrative directory only - name, MRN, department,
+  doctor, appointment, status; no clinical field, and it never opens a case. A doctor's "Past patients"
+  (`/cases/past-patients`) is that doctor's own patients only, resolved server-side.
 - Reviewer edits go to `ClinicalReview.edits`; `PatientFact` rows are never rewritten. HMS imports are
   `source=hms`; patient statements are `source=patient`.
 - Uploaded document text may ground patient answers but never becomes a fact or reaches `triage_engine.evaluate()`.

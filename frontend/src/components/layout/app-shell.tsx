@@ -19,6 +19,7 @@ const PRIMARY: NavItem[] = [
 const SECONDARY: NavItem[] = [
   { href: "/admin", label: "Configuration", icon: "settings" },
   { href: "/admin/doctors", label: "Doctors", icon: "stethoscope" },
+  { href: "/admin/patients", label: "Patients", icon: "user" },
 ];
 
 export function AppShell({ children, title, subtitle, actions, wide, user }: {

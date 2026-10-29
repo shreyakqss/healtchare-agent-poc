@@ -285,6 +285,16 @@ def emergency_advice(case: PatientCase) -> EmergencyAdviceResponse | None:
     )
 
 
+HIDDEN_STATUSES = {"REJECTED"}
+
+
+def listed[T: (CaseListItem, PatientVisitItem)](items: list[T]) -> list[T]:
+    """What the lists (worklist, calendar, past patients, admin directory, My visits) show:
+    rejected cases are closed and kept only for the record and audit, never listed. The case
+    itself stays readable by its id."""
+    return [i for i in items if i.status not in HIDDEN_STATUSES]
+
+
 def patient_case_list(db: Session, cases: list[PatientCase]) -> list[PatientVisitItem]:
     if not cases:
         return []

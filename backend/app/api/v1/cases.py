@@ -70,28 +70,31 @@ PRESCREENABLE = {CaseStatus.INGESTING, CaseStatus.ANALYZING, CaseStatus.FAILED}
 def list_cases(
     principal: ClinicianPrincipal,
     response: Response,
-    limit: int = Query(50, ge=1, le=100),
+    # Up to 1000 so the doctor workspace (worklist + calendar) sees the whole clinic in one call.
+    limit: int = Query(50, ge=1, le=1000),
     cursor: str | None = Query(None, max_length=256),
     db: Session = Depends(get_db),
 ):
     page = cases_for_principal(db, principal, "clinician", limit=limit, cursor=cursor)
     if page.next_cursor:
         response.headers["X-Next-Cursor"] = page.next_cursor
-    return serializers.case_list(db, page.items)
+    return serializers.listed(serializers.case_list(db, page.items))
 
 
 @router.get("/past-patients", response_model=list[PastPatientItem])
 def list_past_patients(
     principal: ClinicianPrincipal,
     q: str | None = Query(None, max_length=100),
-    doctor_id: str | None = Query(None, max_length=128),
     days: int | None = Query(None, ge=1, le=3650),
     db: Session = Depends(get_db),
 ):
-    """Patients with a visit that is over, grouped per patient. Same clinic scope as the case
-    list; `doctor_id` narrows it to one doctor's visits ("mine")."""
+    """The signed-in doctor's own past patients only, grouped per patient - never the whole
+    clinic's. A clinician not linked to a rostered practitioner gets an empty list."""
+    me = past_patients.practitioner_id_for(principal.hms_username)
+    if me is None:
+        return []
     page = cases_for_principal(db, principal, "clinician", limit=past_patients.MAX_CASES_SCANNED)
-    return past_patients.group(serializers.case_list(db, page.items), doctor_id=doctor_id, query=q, days=days)
+    return past_patients.group(serializers.listed(serializers.case_list(db, page.items)), doctor_id=me, query=q, days=days)
 
 
 @router.get("/my-visits", response_model=list[PatientVisitItem])
@@ -105,7 +108,7 @@ def list_patient_visits(
     page = cases_for_principal(db, principal, "patient", limit=limit, cursor=cursor)
     if page.next_cursor:
         response.headers["X-Next-Cursor"] = page.next_cursor
-    return serializers.patient_case_list(db, page.items)
+    return serializers.listed(serializers.patient_case_list(db, page.items))
 
 
 @router.get("/{case_id}/patient-view", response_model=PatientCaseResponse)

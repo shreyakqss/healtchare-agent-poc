@@ -1,4 +1,4 @@
-"""The doctor's "Past patients" view: every patient with a visit that is over, one row per patient
+"""The doctor's "Past patients" view: the doctor's own patients with a visit that is over, one row per patient
 (by hospital record, MRN), newest visit first, with that patient's visits under it.
 
 A visit is over when the case was completed or rejected, or its booked time has passed (a
@@ -11,10 +11,20 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 from app.schemas.responses import CaseListItem, PastPatientItem, PastVisitItem
+from app.services.hms import effective_roster
 
 CLOSED = {"COMPLETED", "REJECTED"}
 # Enough history for a clinic POC; the newest cases are scanned first.
 MAX_CASES_SCANNED = 1000
+
+
+def practitioner_id_for(hms_username: str | None) -> str | None:
+    """The roster practitioner a clinician's HMS username belongs to (as /hospital/my-hours)."""
+    if not hms_username:
+        return None
+    _, doctors = effective_roster()
+    me = next((d for d in doctors if (d.get("username") or "").casefold() == hms_username.casefold()), None)
+    return me["id"] if me else None
 
 
 def is_past(item: CaseListItem, now: datetime) -> bool:

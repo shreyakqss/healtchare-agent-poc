@@ -1,9 +1,6 @@
 # CareFlow — Progress Report
 
-**Project:** CareFlow — AI-assisted patient intake and doctor routing (proof of concept)  
-**Prepared by:** Prisha Gupta  
-**Reporting period:** Progress through 16 October 2026  
-**Overall status:** Core scheduling and doctor-administration work is implemented; changes still need to be committed. One product decision is needed before the next feature can begin.
+**Overall status:** Instant booking, emergency handling, the doctor worklist with past patients and the admin patient directory are implemented.
 
 ## 1. Executive summary
 
@@ -16,11 +13,23 @@ CareFlow helps patients describe their problem, routes them to an appropriate de
 - **Made consulting hours visible:** patients can see the doctor's weekly hours.
 - **Added safeguards and audit records:** doctor setup is validated, hospital access is scoped to the admin's own hospital, and admin actions are recorded.
 - **Added an operator guide:** includes how to run the app, roles and logins, doctor setup, and common troubleshooting.
+- **Earliest-available doctor:** a patient is assigned to the department doctor who can see them soonest, and may pick any doctor in the department.
+- **Instant booking:** when the patient confirms a time, it is booked straight onto the doctor's OpenEMR calendar. The doctor no longer approves bookings.
+- **Emergency handling:** red-flag symptoms stop the chat and show a full-screen "Call an ambulance (108 / 112)" message. No appointment is offered, and a note is written to the patient's chart.
+- **Doctor workspace:** Today, Needs action, Upcoming, Past patients and Calendar tabs. Past patients is searchable and shows only that doctor's patients.
+- **Admin → Patients:** a clinic-wide patient directory with administrative details only.
+- **Doctor AI assistant:** now sees the patient's age, gender, history and own words, while their identity stays hidden.
+- **Fixes:**
+  - past appointment times are no longer offered;
+  - every doctor's consulting hours are shown to the patient;
+  - "More times" works when changing a booking;
+  - older bookings appear on the doctor's calendar;
+  - the login link no longer errors;
+  - new-patient credentials can be copied.
 
 ### TODO
+- Decide whether to keep the emergency chart note in OpenEMR. Nobody is contacted in an emergency; the note only records what happened.
 
--  needs to choose how CareFlow should select a doctor when multiple doctors are available.
-- Add in Admin → Doctors page: admins can add, view, extend the published hours of, deactivate, reactivate, or remove doctors.
 
 ## 2. Status at a glance
 
@@ -30,9 +39,14 @@ CareFlow helps patients describe their problem, routes them to an appropriate de
 | Live appointment options | Implemented | The list refreshes from the doctor's current calendar when opened. Taken times are greyed out; released times can become available again. |
 | Doctor consulting hours | Implemented | Patients can see weekly consulting hours on the appointment card. |
 | Doctor administration | Implemented and tested against OpenEMR and Keycloak | Admins can manage doctors from one page, with validation and access controls. |
-| Git commits | Pending | The latest work still needs to be committed; some 14 October work is already on `feature/slot-hold-no-double-booking`. |
-| Doctor-assignment rule | Decision needed | Current behaviour chooses the first doctor listed, not necessarily the doctor who can see the patient soonest. |
-| Existing test failures | Follow-up | Two older tests fail intermittently or independently of this work; investigate separately. |
+| Doctor-assignment rule | Implemented | The doctor with the earliest free time is assigned, and the patient may choose another doctor in the department. |
+| Instant booking | Implemented and tested against OpenEMR | A confirmed time goes straight onto the doctor's OpenEMR calendar. Changing it moves the booking, and rejecting the case frees it. |
+| Emergency (red-flag) handling | Implemented | The patient is told to call an ambulance and no booking is offered. A chart note is written; no doctor or staff member is contacted. |
+| Doctor workspace and past patients | Implemented | List-first tabs; the calendar is still available as one of them. |
+| Admin → Patients directory | Implemented | Administrative details only; it never opens a case. |
+| Doctor AI assistant context | Implemented | Fuller clinical context, with no patient identity. |
+| Git commits | Pending | Work up to the instant-booking and emergency commit (`7113c7e`) is committed; later work is not. |
+| Existing test failures | Follow-up | Two prescreen tests are timing-flaky (they pass when run alone), and one external-search test fails. The new emergency test hits the same timing issue. |
 
 ## 3. Completed work
 
@@ -85,9 +99,77 @@ CareFlow helps patients describe their problem, routes them to an appropriate de
 
 **Automated tests:** 14 doctor-management tests pass. They cover validation, access control, creation, duplicates, rollback, extension, deletion, deactivation, reactivation and blocking removal when open cases exist.
 
-## 4. Proposed next feature
+### 3.3 Earliest-available doctor and choosing a doctor
 
-### Assign the doctor who can see the patient soonest
+**Problem:** CareFlow always picked the first doctor listed in a department, so newer doctors got few patients.
+
+**What changed:**
+- The patient is assigned to the department doctor with the **earliest free time**. When two doctors are free at the same time, the one with fewer open cases is chosen.
+- On the booking screen, the patient sees **every doctor in the department**, each with their next free time, open times and **consulting hours**. Picking another doctor's time moves the case to that doctor.
+- For urgent cases there is no doctor choice: the patient sees a simple list of the earliest times.
+- After the doctor has reviewed the case, only that doctor's times are offered.
+
+### 3.4 Instant booking (no doctor approval)
+
+**Problem:** confirming a time only sent a request to staff, and the doctor had to approve it. Most health apps book instantly.
+
+**What changed:**
+- **Booked on confirm:** when the patient confirms, the appointment is written to the doctor's OpenEMR calendar as an "Office Visit". The patient sees "Your appointment is booked".
+- **Changing and rejecting:** changing the time moves the booking. Rejecting the case frees the time.
+- **What the review does now:** the doctor's review prepares the visit and unlocks consultation notes and finalize. It no longer holds up the booking. "Approve" wording was renamed to "Reviewed".
+- **Past times:** past times are never offered. A booking whose time has passed is fixed: it shows "Your appointment time has passed" and can't be changed.
+
+**Verification:** a live test against OpenEMR books, moves and cancels an appointment. The 32 slot, scheduling and routing tests pass.
+
+### 3.5 Emergency handling
+
+**Problem:** a patient describing severe chest pain was shown ordinary appointment options.
+
+**What changed:**
+- **Red-flag rules:** two rules in the clinic settings (`TR-EMERG-001`, `TR-EMERG-002`) catch two groups of symptoms:
+  - severe chest pain or breathlessness;
+  - fainting, severe bleeding, seizure, stroke signs, or suicidal thoughts.
+- **In the chat:** intake stops on that message and shows **"This may be a medical emergency. Call an ambulance now on 108 (or 112)."**
+- **On the results page:** a red **EMERGENCY** screen with a call button. No booking is ever offered, and the server refuses one.
+- **No one is contacted:** CareFlow does not notify any doctor or staff member (decided 28 October). A plain-text "EMERGENCY" note is written to the patient's OpenEMR chart for the record, labelled "not reviewed by a clinician". The case appears in a passive list on the doctor's worklist.
+- **Emergency department removed:** there is no emergency department in CareFlow.
+
+### 3.6 Doctor workspace: list first, with Past patients
+
+**Problem:** doctors had to open the calendar to find any patient.
+
+**What changed:**
+- The workspace opens on tabs: **Today**, **Needs action** (emergencies, waiting for review, not yet booked), **Upcoming**, **Past patients** and **Calendar**.
+- **Past patients:**
+  - one row per patient, with last visit date, number of visits and last complaint;
+  - search by name, MRN, complaint or doctor, and filter by date range;
+  - click a patient to see all their visits.
+- **Only the doctor's own patients** are shown in Past patients. The server enforces this, so another doctor's patients are never sent.
+- **Calendar fix:** the calendar and worklist now load all clinic cases (up to 1,000). Older bookings, such as Amit Verma's, were missing because only the 50 newest cases were loaded.
+
+### 3.7 Admin → Patients directory
+
+**What changed:**
+- A new **Patients** page in the admin sidebar, covering the admin's own clinic only.
+- **One row per patient:** name, age, sex, MRN, department, doctor, appointment, number of visits and status. Search by name, MRN or doctor, and filter by department.
+- **Administrative only:** no complaint, symptoms, history, priority, notes or AI text, and rows never open the case. This keeps the rule that admins have no clinical access, and a test checks it.
+
+### 3.8 Doctor AI assistant: better context
+
+**What changed:** the assistant now receives the patient's age and gender, an emergency flag, the complaint, symptoms, duration and history, allergies and medications, priority and routing, the booked time, record mismatches, the pre-screening brief, the review, all consultation notes, and the intake chat in the patient's own words. Identity is protected: the identity form is never sent, and the patient's name is masked as "[patient]".
+
+### 3.9 Smaller fixes
+
+- **Sign-in link:** the "Returning patient" link no longer errors in the browser.
+- **Copy buttons:** new-patient username and password can be copied with one click.
+- **Age shown:** the patient's most recent age or name statement is now the one displayed.
+- **"More times" when changing a booking:** it now expands the doctor's times instead of closing the picker.
+- **Keycloak:** a reminder that it must be started separately after Docker restarts (`docker compose --profile auth up -d keycloak`).
+- **`.creds`:** rewritten and verified. It covers all 13 doctors and all patient logins, with completed appointments listed separately.
+
+## 4. Decided since the last report
+
+### Assign the doctor who can see the patient soonest (approved and implemented; see 3.3)
 
 **Current behaviour:** CareFlow selects the first doctor listed in a department. That can repeatedly direct patients to an older-listed doctor even when another doctor has earlier availability.
 
@@ -103,10 +185,13 @@ CareFlow helps patients describe their problem, routes them to an appropriate de
 
 **Other options:** assign doctors in turn (round robin), or let patients choose their doctor.
 
-**Estimate:** about half a day after the rule is approved.  
-**Status:** not started; awaiting approval. Planned branch: `feature/doctor-assignment-earliest-available`.
+**Status:** done. The recommended "earliest available" rule was approved, and the patient can also choose their doctor. It was built on `feature/admin-doctor-onboarding`.
 
-**Decision requested:** approve the recommended “earliest available” rule, or choose one of the alternatives.
+### Other decisions made
+
+- **Booking:** instant, with no clinician approval (see 3.4).
+- **Emergencies:** show the call-ambulance screen only, with no doctor or staff contact and no emergency department (see 3.5).
+- **Past patients:** a doctor sees only their own past patients. The whole clinic's patients are visible only to the admin, as a directory without clinical detail (see 3.6 and 3.7).
 
 
 
@@ -114,7 +199,8 @@ CareFlow helps patients describe their problem, routes them to an appropriate de
 
 These are ideas for later, not part of the completed work:
 
-- Edit a doctor's details or change weekly hours, rather than only extending them.
+- Load the doctor calendar by date range (needed once a clinic passes about 1,000 cases).
+- Remind doctors about today's booked patients who haven't been reviewed yet.
 - Support doctor leave and holidays.
 - Support doctors who work at more than one hospital.
 
@@ -142,6 +228,31 @@ This section is for developers; the earlier sections are intended for project an
 - Frontend: `app/admin/doctors/page.tsx`, `features/admin/doctors/doctors-console.tsx`, and `features/admin/doctors/add-doctor-dialog.tsx`.
 - Plan: `docs/PLAN_ADMIN_DOCTOR_ONBOARDING.md`.
 - Configuration references: `hospital.hms_facility_id`, `clinic_id` on admin logins, `OPENEMR_MYSQL_*` in `backend/.env`, and `bcrypt==4.3.0`.
+
+### Since 16 October
+- **Instant booking:**
+  - `services/appointment_service.py` (`select_slot`, `passed_booking`, `release_booking`);
+  - `HMSClient.book_appointment` / `cancel_appointment`;
+  - `integrations/hms/openemr/provisioning.book_appointment`;
+  - `PatientCase.hms_appointment_id` (migration `9a1c5e3f7b20`).
+- **Emergencies:**
+  - `domain/triage_engine.py` (`emergency` rules, `any_severity`);
+  - `services/emergency_service.py`;
+  - `PatientCase.emergency_flagged_at` (migration `8e4b1d7c3a90`);
+  - `hospital_config.ambulance_number()` / `emergency_number()`;
+  - `features/intake/patient-results.tsx` (`EmergencyNotice`).
+- **Past times:** `slot_hold_service.has_passed` / `upcoming`, and `slot_passed` on the patient routing response.
+- **Doctor hours per card:** `hours_by_doctor` on the patient routing response.
+- **Doctor workspace:**
+  - `features/doctor/doctor-workspace.tsx` and `features/doctor/past-patients.tsx`;
+  - `GET /cases/past-patients` and `services/past_patients.py`;
+  - `appointment_booked` on the case list;
+  - `GET /cases` now allows `limit` up to 1000 (`WORKSPACE_CASES`).
+- **Admin directory:**
+  - `GET /admin/patients` (`api/v1/admin_patients.py`) and `services/patient_directory.py`;
+  - `app/admin/patients/page.tsx` and `features/admin/patients/patients-directory.tsx`.
+- **AI assistant context:** `services/doctor_assistant_service._case_context` / `_intake_transcript`.
+- **New tests:** `test_instant_booking.py` (live OpenEMR), `test_emergency.py`, `test_past_patients.py` and `test_patient_directory.py`.
 
 ### Relevant tests and documentation
 - Tests: `backend/tests/test_slot_holds.py`, `backend/tests/test_scheduling.py`, `backend/tests/test_doctor_onboarding.py`.

@@ -3,10 +3,7 @@
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import type { PastPatientItem } from "@/lib/api";
-import { Avatar, EmptyState, Icons, Input, Segmented, Select, StatusBadge } from "@/components/ui";
-import type { Me } from "@/features/doctor/use-doctor";
-
-type Scope = "mine" | "clinic";
+import { Avatar, EmptyState, Icons, Input, Select, StatusBadge } from "@/components/ui";
 const RANGES = [
   { value: "30", label: "Last 30 days" },
   { value: "90", label: "Last 90 days" },
@@ -18,10 +15,10 @@ type Range = (typeof RANGES)[number]["value"];
 const DATE = new Intl.DateTimeFormat(undefined, { day: "numeric", month: "short", year: "numeric" });
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-/** Patients with a visit that is over (services/past_patients), one row per patient, newest
- * first. The list is loaded once with the page; search, scope and date range filter it here. */
-export function PastPatients({ patients, me, now }: { patients: PastPatientItem[]; me: Me; now: string }) {
-  const [scope, setScope] = useState<Scope>("mine");
+/** The doctor's own patients with a visit that is over (services/past_patients - the server
+ * sends only this doctor's), one row per patient, newest first. Loaded once with the page;
+ * search and date range filter it here. The whole clinic's patients are an admin view. */
+export function PastPatients({ patients, now }: { patients: PastPatientItem[]; now: string }) {
   const [range, setRange] = useState<Range>("90");
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState<string | null>(null);
@@ -31,8 +28,7 @@ export function PastPatients({ patients, me, now }: { patients: PastPatientItem[
     const since = range === "all" ? null : new Date(now).getTime() - Number(range) * DAY_MS;
     const out: PastPatientItem[] = [];
     for (const p of patients) {
-      const visits = scope === "mine" ? p.visits.filter((v) => v.doctor_id === me.id) : p.visits;
-      if (!visits.length) continue;
+      const visits = p.visits;
       if (since !== null && new Date(visits[0].visit_at).getTime() < since) continue;
       if (needle) {
         const text = [p.name, p.hms_patient_id, ...visits.flatMap((v) => [v.chief_complaint, v.doctor_name])]
@@ -42,7 +38,7 @@ export function PastPatients({ patients, me, now }: { patients: PastPatientItem[
       out.push({ ...p, visits, visit_count: visits.length, last_visit_at: visits[0].visit_at });
     }
     return out;
-  }, [patients, scope, range, query, me.id, now]);
+  }, [patients, range, query, now]);
 
   return (
     <div className="space-y-3">
@@ -54,10 +50,6 @@ export function PastPatients({ patients, me, now }: { patients: PastPatientItem[
             placeholder="Search name, MRN, complaint or doctor" aria-label="Search past patients"
           />
         </div>
-        <Segmented<Scope>
-          label="Whose patients" value={scope} onChange={setScope}
-          options={[{ value: "mine", label: "My patients" }, { value: "clinic", label: "Whole clinic" }]}
-        />
         <Select value={range} onChange={(e) => setRange(e.target.value as Range)} aria-label="Last visit within" className="sm:w-40">
           {RANGES.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
         </Select>
@@ -113,7 +105,7 @@ export function PastPatients({ patients, me, now }: { patients: PastPatientItem[
           <EmptyState
             icon={<Icons.user size={20} />}
             title={patients.length ? "No past patients match" : "No past patients yet"}
-            description={patients.length ? "Try another search, “Whole clinic”, or a longer date range." : "Patients appear here once their visit is over."}
+            description={patients.length ? "Try another search or a longer date range." : "Your patients appear here once their visit is over."}
           />
         </div>
       )}

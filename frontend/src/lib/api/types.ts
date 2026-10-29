@@ -197,6 +197,25 @@ export interface PastPatientItem {
   visits: PastVisitItem[];
 }
 
+/** Admin > Patients: administrative facts only - no clinical field, never opens a case. */
+export interface AdminPatientVisit {
+  status: CaseStatus;
+  department_name: string | null;
+  doctor_name: string | null;
+  appointment_start: string | null;
+  appointment_booked: boolean;
+  created_at: string;
+}
+
+export interface AdminPatientItem {
+  hms_patient_id: string;
+  name: string | null;
+  age: string | null;
+  sex: string | null;
+  visit_count: number;
+  visits: AdminPatientVisit[];
+}
+
 export interface PatientVisitItem {
   case_id: string; status: CaseStatus; review_decision: ReviewDecision | null;
   department_name: string | null; doctor_name: string | null;

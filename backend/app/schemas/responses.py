@@ -308,6 +308,26 @@ class PastPatientItem(BaseModel):
     visits: list[PastVisitItem]
 
 
+class AdminPatientVisit(BaseModel):
+    """Administrative facts of one visit - deliberately no clinical field."""
+    status: str
+    department_name: str | None
+    doctor_name: str | None
+    appointment_start: datetime | None
+    appointment_booked: bool
+    created_at: datetime
+
+
+class AdminPatientItem(BaseModel):
+    """One row of Admin > Patients (services/patient_directory)."""
+    hms_patient_id: str
+    name: str | None
+    age: str | None
+    sex: str | None
+    visit_count: int
+    visits: list[AdminPatientVisit]
+
+
 class PatientVisitItem(BaseModel):
     case_id: str
     status: str

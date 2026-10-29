@@ -29,6 +29,35 @@ function readLastRole(): string | null {
   }
 }
 
+/** A value the user must keep, selectable as text and copyable in one click. */
+function CopyRow({ label, value }: { label: string; value: string }) {
+  const [copied, setCopied] = useState(false);
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* clipboard blocked (e.g. non-secure origin) - the value is still selectable */
+    }
+  }
+
+  return (
+    <div className="flex items-center gap-2">
+      <dt className="w-20 shrink-0 text-fg-muted">{label}</dt>
+      <dd className="min-w-0 flex-1 select-all break-all rounded-md border border-line bg-surface px-2 py-1 font-mono">{value}</dd>
+      <button
+        type="button" onClick={() => void copy()} aria-label={copied ? `${label} copied` : `Copy ${label.toLowerCase()}`}
+        title={copied ? "Copied" : "Copy"}
+        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-line bg-surface text-fg-muted hover:border-brand-ring hover:text-brand"
+      >
+        {copied ? <Icons.check size={15} className="text-success" /> : <Icons.copy size={15} />}
+      </button>
+    </div>
+  );
+}
+
 function loginHref(returnTo: string) {
   return `/api/auth/login?return_to=${encodeURIComponent(returnTo)}`;
 }
@@ -140,11 +169,10 @@ export function RoleCards({ roles, signedIn }: { roles: RoleCard[]; signedIn: bo
         <div role="alertdialog" className="rounded-lg border border-brand-ring bg-brand-soft p-4 text-sm">
           <p className="font-semibold">Your account is ready</p>
           <p className="mt-1 text-fg-muted">Save these to sign in next time - you will not see this again:</p>
-          <p className="mt-2 font-mono text-sm">
-            Username: {newAccount.username}
-            <br />
-            Password: {newAccount.password}
-          </p>
+          <dl className="mt-2 space-y-1.5 text-sm">
+            <CopyRow label="Username" value={newAccount.username} />
+            <CopyRow label="Password" value={newAccount.password} />
+          </dl>
           <button
             type="button"
             onClick={() => router.push("/patient")}
