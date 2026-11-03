@@ -10,10 +10,13 @@ import { Icons } from "@/components/ui/icons";
 import { cn } from "@/lib/utils";
 import { MARKDOWN_COMPONENTS } from "@/features/intake/message-list";
 
-/** A clinical discussion for whoever is reading this case - literature lookups included, no
- * content filtering, and it never writes anything back to the record itself. */
-export function AssistantTab({ caseId, doctorContext }: { caseId: string; doctorContext: string }) {
-  const [turns, setTurns] = useState<AssistantTurn[]>([]);
+/** A clinical discussion for whoever is reading this case - it reads the uploaded reports and the
+ * AI differential, looks up literature, and never writes anything back to the record itself. */
+export function AssistantTab({ caseId, doctorContext, initialMessages }: {
+  caseId: string; doctorContext: string; initialMessages: AssistantTurn[];
+}) {
+  // The chat is kept on the case server-side, so it is here again after a reload.
+  const [turns, setTurns] = useState<AssistantTurn[]>(initialMessages);
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -29,7 +32,7 @@ export function AssistantTab({ caseId, doctorContext }: { caseId: string; doctor
     setBusy(true);
     setError(null);
     try {
-      const { reply } = await casesApi.assistantChat(caseId, message, doctorContext, turns);
+      const { reply } = await casesApi.assistantChat(caseId, message, doctorContext);
       setTurns([...next, { role: "assistant", content: reply }]);
     } catch (e) {
       setError(e instanceof ApiError ? e.message : "Could not reach the assistant.");
@@ -49,12 +52,12 @@ export function AssistantTab({ caseId, doctorContext }: { caseId: string; doctor
     <Card>
       <CardHeader
         title="Clinical assistant"
-        description="Discussion only - literature lookups via PubMed included. Nothing here writes to the record; open for you, at any point in the visit."
+        description="Ask about the uploaded reports, the AI diagnosis, or the literature (PubMed). Saved on this case; nothing here writes to the record."
       />
       <CardBody className="space-y-4">
         <div className="max-h-[55vh] min-h-[16rem] space-y-4 overflow-y-auto rounded-md border border-line bg-sunken/40 p-4">
           {!turns.length ? (
-            <EmptyState icon={<Icons.sparkles size={20} />} title="Ask about this visit" description="Differentials, dosing, interactions, or a literature question." />
+            <EmptyState icon={<Icons.sparkles size={20} />} title="Ask about this visit" description="e.g. Interpret the uploaded lab report, does the ECG support the top diagnosis, dosing or interactions." />
           ) : (
             turns.map((t, i) => (
               <div key={i} className={cn("flex gap-3", t.role === "doctor" && "flex-row-reverse")}>
@@ -83,7 +86,7 @@ export function AssistantTab({ caseId, doctorContext }: { caseId: string; doctor
             rows={1}
             value={text}
             disabled={busy}
-            placeholder="Ask about diagnosis, treatment, interactions, or literature…"
+            placeholder="Ask about the reports, diagnosis, treatment, or literature…"
             onChange={(e) => {
               setText(e.target.value);
               e.target.style.height = "auto";

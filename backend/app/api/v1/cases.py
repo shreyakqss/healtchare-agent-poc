@@ -21,6 +21,7 @@ from app.core.errors import Conflict, Forbidden, NotFound, ServiceUnavailable
 from app.domain.lifecycle import CaseStatus
 from app.models import MedicalAttachment
 from app.schemas.requests import (
+    AIDiagnosisDecisionRequest,
     AppointmentSlotRequest,
     AttachmentSkipRequest,
     ConsultationNoteRequest,
@@ -37,6 +38,7 @@ from app.schemas.responses import (
     PastPatientItem,
     PatientCaseResponse,
     PatientVisitItem,
+    SummaryResponse,
 )
 from app.security import (
     CurrentPrincipal,
@@ -47,6 +49,7 @@ from app.security import (
     require_roles,
 )
 from app.services import (
+    ai_diagnosis_service,
     appointment_service,
     attachment_service,
     attachments,
@@ -272,9 +275,38 @@ async def doctor_assistant_chat(
     case = case_for_principal(db, case_id, principal, allow_patient=False)
     try:
         reply = await doctor_assistant_service.chat(
-            db, case.id, payload.doctor_context, payload.message,
-            [t.model_dump() for t in payload.transcript],
+            db, case.id, _clinician_actor(principal), payload.doctor_context, payload.message,
         )
     except AgentUnavailable as exc:
         raise ServiceUnavailable("The assistant is unavailable right now.") from exc
     return DoctorAssistantResponse(reply=reply)
+
+
+def _clinician_actor(principal: CurrentPrincipal) -> str:
+    return f"clinician:{principal.hms_username or principal.user_id}"
+
+
+@router.post("/{case_id}/ai-diagnosis", response_model=SummaryResponse)
+async def regenerate_ai_diagnosis(case_id: uuid.UUID, principal: ClinicianPrincipal, db: Session = Depends(get_db)):
+    """Draft a fresh AI differential from everything on the case now (new notes, reports).
+    Decision support only: it never changes priority, routing or anything the patient sees."""
+    rate_limits.enforce("doctor.ai_diagnosis", principal.user_id)
+    case = case_for_principal(db, case_id, principal, allow_patient=False)
+    try:
+        summary = await ai_diagnosis_service.generate(db, case.id, _clinician_actor(principal))
+    except AgentUnavailable as exc:
+        raise ServiceUnavailable("The AI diagnosis is unavailable right now.") from exc
+    return serializers.summary_out(summary)
+
+
+@router.post("/{case_id}/ai-diagnosis/decisions", response_model=SummaryResponse)
+def decide_ai_diagnosis(
+    case_id: uuid.UUID, payload: AIDiagnosisDecisionRequest, principal: ClinicianPrincipal, db: Session = Depends(get_db),
+):
+    """The doctor accepts, rewords or dismisses one suggestion. Audited; only accepted or
+    edited ones are offered for the consultation form."""
+    case = case_for_principal(db, case_id, principal, allow_patient=False)
+    summary = ai_diagnosis_service.decide(
+        db, case.id, payload.index, payload.decision, payload.text, _clinician_actor(principal),
+    )
+    return serializers.summary_out(summary)

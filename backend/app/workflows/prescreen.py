@@ -1,4 +1,4 @@
-"""Pre-screening: records -> urgency (rules) -> routing -> summary -> NEEDS_REVIEW."""
+"""Pre-screening: records -> urgency (rules) -> routing -> summary -> AI differential -> NEEDS_REVIEW."""
 
 from __future__ import annotations
 
@@ -21,6 +21,7 @@ from app.domain.lifecycle import CaseStatus
 from app.integrations.hms import get_hms
 from app.models import ClinicalDiscrepancy, ClinicalSummary, RoutingRecommendation, TriageResult
 from app.services import (
+    ai_diagnosis_service,
     audit,
     case_repo,
     doctor_load,
@@ -292,6 +293,25 @@ async def write_summary(step_input: StepInput) -> StepOutput:
     return StepOutput(content=result)
 
 
+async def draft_ai_diagnosis(step_input: StepInput) -> StepOutput:
+    """The doctor's AI differential, ready when they open the case. Advisory and clinician-facing
+    only: it runs after urgency and routing are already decided, and a model failure leaves the
+    case without one (the doctor can generate it from the case page) rather than failing it."""
+    case_id = case_id_from(step_input)
+    with db_session() as db:
+        if cached := completed_step(db, step_input, "draft_ai_diagnosis"):
+            return StepOutput(content=cached)
+        try:
+            summary = await ai_diagnosis_service.generate(db, case_id, "system:diagnosis_writer")
+            result = {"generated_by": "llm", "differentials": len(summary.sections.get("differentials", []))}
+        except AgentUnavailable as exc:
+            logger.warning("Diagnosis writer unavailable (%s)", type(exc).__name__)
+            audit.record(db, case_id, "system:diagnosis_writer", "ai_diagnosis.unavailable", {"error_type": type(exc).__name__})
+            result = {"generated_by": "none"}
+        complete_step(db, step_input, "draft_ai_diagnosis", result)
+    return StepOutput(content=result)
+
+
 async def mark_needs_review(step_input: StepInput) -> StepOutput:
     case_id = case_id_from(step_input)
     with db_session() as db:
@@ -314,6 +334,7 @@ prescreen_workflow = Workflow(
         step("evaluate_urgency", evaluate_urgency),
         step("navigate_care", navigate_care),
         step("write_summary", write_summary),
+        step("draft_ai_diagnosis", draft_ai_diagnosis),
         step("mark_needs_review", mark_needs_review),
     ],
     telemetry=False,

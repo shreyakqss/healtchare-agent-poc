@@ -139,7 +139,7 @@ export interface PatientRouting {
 /** Days (mon, tue, ...) sharing the same hours, e.g. times [["10:00", "13:00"], ["16:00", "19:00"]]. */
 export interface WeeklyHours { days: string[]; times: [string, string][] }
 export interface Summary {
-  id: string; kind: "prescreening" | "final_visit"; sections: Record<string, unknown>;
+  id: string; kind: "prescreening" | "final_visit" | "ai_diagnosis"; sections: Record<string, unknown>;
   evidence: unknown[]; missing_information: string[]; generated_by: "llm" | "fallback"; created_at: string;
 }
 export interface Review { id: string; decision: ReviewDecision; reviewer_id: string; reviewer_role: string; edits: Record<string, string>; comment: string | null; created_at: string }
@@ -223,6 +223,18 @@ export interface PatientVisitItem {
 }
 
 export interface AssistantTurn { role: "doctor" | "assistant"; content: string }
+export interface AssistantMessage extends AssistantTurn { author_id: string; created_at: string }
+
+/** One suggestion of the AI differential (agents/schemas.py AIDiagnosis). */
+export interface DiagnosisSuggestion {
+  condition: string; likelihood: "high" | "medium" | "low";
+  supporting: string[]; against: string[]; tests: string[]; management: string[];
+}
+export interface DiagnosisDecision { decision: "accept" | "edit" | "dismiss"; text?: string; by: string; at: string }
+export interface AIDiagnosisSections {
+  differentials: DiagnosisSuggestion[]; red_flags: string[]; missing_information: string[]; reasoning: string;
+  decisions: Record<string, DiagnosisDecision>;
+}
 export interface AssistantReply { reply: string }
 
 /** For a patient whose answers matched a red-flag rule: call an ambulance now. */
@@ -242,6 +254,7 @@ export interface CaseDetail {
   facts: Fact[]; allergies_medications: Entry[]; attachments: Attachment[]; missing_fields: string[];
   required_attachment_kinds: string[]; pending_attachment_kinds: string[];
   triage: Triage | null; routing: Routing | null; discrepancies: Discrepancy[]; prescreening_summary: Summary | null; review: Review | null;
+  ai_diagnosis?: Summary | null; assistant_messages?: AssistantMessage[];
   consultation_notes: ConsultationNote[]; final_summary: Summary | null; care_tasks: CareTask[]; created_at: string;
 }
 

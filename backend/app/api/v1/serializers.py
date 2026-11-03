@@ -29,6 +29,7 @@ from app.models import (
 )
 from app.schemas.responses import (
     ActiveIntakeResponse,
+    AssistantMessageResponse,
     AttachmentResponse,
     AuditEventResponse,
     CareTaskResponse,
@@ -51,7 +52,14 @@ from app.schemas.responses import (
     TriageResponse,
     WeeklyHoursResponse,
 )
-from app.services import appointment_service, case_repo, hospital_config, letterhead, slot_hold_service
+from app.services import (
+    appointment_service,
+    case_repo,
+    doctor_assistant_service,
+    hospital_config,
+    letterhead,
+    slot_hold_service,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -245,6 +253,9 @@ def case_detail(db: Session, case: PatientCase) -> CaseDetailResponse:
         routing=routing_out(case_repo.latest_routing(db, case.id)),
         discrepancies=[discrepancy_out(d) for d in case_repo.discrepancies(db, case.id)],
         prescreening_summary=summary_out(case_repo.summary(db, case.id, "prescreening")),
+        ai_diagnosis=summary_out(case_repo.summary(db, case.id, "ai_diagnosis")),
+        assistant_messages=[AssistantMessageResponse(role=m.role, content=m.content, author_id=m.author_id, created_at=m.created_at)
+                            for m in doctor_assistant_service.history(db, case.id)],
         review=review_out(case_repo.latest_review(db, case.id)),
         consultation_notes=[note_out(n) for n in case_repo.notes(db, case.id)],
         final_summary=summary_out(case_repo.summary(db, case.id, "final_visit")),

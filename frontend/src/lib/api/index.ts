@@ -1,9 +1,9 @@
 import { API_ROOT, http, readCookie, readSse, WORKSPACE_CASES } from "@/lib/api/client";
 import type {
-  AdminDoctor, AdminDoctors, ChangeHoursRequest, DoctorDetails, UpdateDoctorRequest, DoctorPreview, HoursChangePreview, DoctorRemoval, DoctorRemovalCheck, NewDoctorRequest, AppointmentRequestResult, AssistantReply, AssistantTurn, Attachment, AttachmentSkipResponse, AuditEvent, CaseDetail,
+  AdminDoctor, AdminDoctors, ChangeHoursRequest, DoctorDetails, UpdateDoctorRequest, DoctorPreview, HoursChangePreview, DoctorRemoval, DoctorRemovalCheck, NewDoctorRequest, AppointmentRequestResult, AssistantReply, Attachment, AttachmentSkipResponse, AuditEvent, CaseDetail,
   CaseListItem, ConsultationNote, ConsultationNoteRequest, FinalizeRequest, HMSPractitioner, HMSStatus, HospitalConfig,
   HospitalSummary, IdentityFormRequest, IntakeConfig, LinkedPatientRecord, MessageResponse, PastPatientItem, PatientCase, PatientVisitItem,
-  Review, ReviewRequest, Roster, SessionResponse, Slot, TurnEvent,
+  Review, ReviewRequest, Roster, SessionResponse, Slot, Summary, TurnEvent,
 } from "@/lib/api/types";
 
 export { ApiError } from "@/lib/api/client";
@@ -55,8 +55,11 @@ export const casesApi = {
   review: (caseId: string, body: ReviewRequest) => http.post<Review>(`/cases/${caseId}/review`, body),
   addNote: (caseId: string, body: ConsultationNoteRequest) => http.post<ConsultationNote>(`/cases/${caseId}/consultation-notes`, body),
   finalize: (caseId: string, body: FinalizeRequest) => http.post<CaseDetail>(`/cases/${caseId}/finalize`, body),
-  assistantChat: (caseId: string, message: string, doctorContext: string, transcript: AssistantTurn[]) =>
-    http.post<AssistantReply>(`/cases/${caseId}/assistant`, { message, doctor_context: doctorContext, transcript }),
+  assistantChat: (caseId: string, message: string, doctorContext: string) =>
+    http.post<AssistantReply>(`/cases/${caseId}/assistant`, { message, doctor_context: doctorContext }),
+  regenerateDiagnosis: (caseId: string) => http.post<Summary>(`/cases/${caseId}/ai-diagnosis`),
+  decideDiagnosis: (caseId: string, index: number, decision: "accept" | "edit" | "dismiss", text?: string) =>
+    http.post<Summary>(`/cases/${caseId}/ai-diagnosis/decisions`, { index, decision, text }),
 };
 
 export const hospitalApi = {

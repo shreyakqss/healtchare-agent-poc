@@ -82,3 +82,17 @@ class ConsultationNote(Base):
     # The doctor's own final-draft report to the patient, in their own words. When set, this
     # stands in for the model-drafted patient_friendly_summary at finalize time.
     patient_report: Mapped[str | None] = mapped_column(Text)
+
+
+class DoctorAssistantMessage(Base):
+    """One turn of the doctor assistant chat on a case, kept so the discussion survives a reload
+    and is visible to the next clinician on the case. Clinician-facing only."""
+
+    __tablename__ = "doctor_assistant_messages"
+
+    case_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("patient_cases.id", ondelete="CASCADE"), index=True
+    )
+    role: Mapped[str] = mapped_column(String(16))  # doctor | assistant
+    author_id: Mapped[str] = mapped_column(String(128))  # the signed-in clinician who asked
+    content: Mapped[str] = mapped_column(Text)

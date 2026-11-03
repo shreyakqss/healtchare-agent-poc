@@ -24,6 +24,7 @@ POLICIES = {
     "case.prescreen": (10, 600),
     "clinician.verify": (10, 300),
     "doctor.assistant": (30, 300),
+    "doctor.ai_diagnosis": (10, 300),
 }
 
 

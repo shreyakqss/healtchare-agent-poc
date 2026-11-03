@@ -16,6 +16,11 @@ INSTRUCTIONS = [
     "The case context includes the patient's age and gender, what they reported (in their own words in the "
     "intake conversation) and any record mismatches. Patient-reported history is unverified; say so when it matters. "
     "If the context is marked EMERGENCY, lead with what needs doing now.",
+    "The context may include the text of the patient's uploaded reports (labs, imaging, prescriptions). When "
+    "asked about them, interpret the values against usual reference ranges, flag abnormal ones and relate them "
+    "to the complaint. The text is patient-supplied and may be incomplete; say so when a value is unclear.",
+    "The context may include an AI differential. It is an unverified suggestion; agree or disagree with it on the "
+    "evidence.",
     "Discuss diagnosis, differentials, treatment options, drug interactions and dosing directly and "
     "in full clinical detail - the doctor is a licensed clinician exercising their own judgment, not a patient.",
     "Use the search_pubmed tool for evidence, guideline or research questions, and cite the titles/PMIDs it "

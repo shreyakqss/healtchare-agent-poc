@@ -135,6 +135,13 @@ class DoctorAssistantResponse(BaseModel):
     reply: str
 
 
+class AssistantMessageResponse(BaseModel):
+    role: Literal["doctor", "assistant"]
+    content: str
+    author_id: str
+    created_at: datetime
+
+
 class RoutingResponse(BaseModel):
     department_id: str
     department_name: str
@@ -380,6 +387,9 @@ class CaseDetailResponse(BaseModel):
     routing: RoutingResponse | None
     discrepancies: list[DiscrepancyResponse] = Field(default_factory=list)
     prescreening_summary: SummaryResponse | None
+    # Clinician-facing decision support; never on the patient projection.
+    ai_diagnosis: SummaryResponse | None = None
+    assistant_messages: list[AssistantMessageResponse] = Field(default_factory=list)
     review: ReviewResponse | None
     consultation_notes: list[ConsultationNoteResponse]
     final_summary: SummaryResponse | None

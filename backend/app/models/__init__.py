@@ -4,7 +4,13 @@ from app.db.base import Base
 from app.models.audit import AdminAuditEvent, AuditEvent
 from app.models.care_task import CareTask
 from app.models.case import PatientCase
-from app.models.clinical import ClinicalDiscrepancy, ClinicalReview, ClinicalSummary, ConsultationNote
+from app.models.clinical import (
+    ClinicalDiscrepancy,
+    ClinicalReview,
+    ClinicalSummary,
+    ConsultationNote,
+    DoctorAssistantMessage,
+)
 from app.models.facts import AllergyMedication, MedicalAttachment, PatientFact
 from app.models.identity import ApplicationUser, AuthSession, CaseOwner, RateLimitBucket
 from app.models.intake import IntakeMessage, IntakeSession
@@ -21,6 +27,7 @@ __all__ = [
     "ClinicalReview",
     "ClinicalSummary",
     "ConsultationNote",
+    "DoctorAssistantMessage",
     "AllergyMedication",
     "MedicalAttachment",
     "PatientFact",

@@ -1,5 +1,5 @@
-"""Case context for the doctor assistant chat. The transcript itself is not persisted - the
-frontend replays it on every turn, the same way the intake composer keeps its own history."""
+"""Case context for the doctor assistant chat and the AI diagnosis. The chat is kept per case
+(DoctorAssistantMessage) so it survives a reload and the next clinician on the case sees it."""
 
 from __future__ import annotations
 
@@ -10,19 +10,25 @@ from sqlalchemy.orm import Session
 
 from app.agents import doctor_assistant
 from app.domain import scheduling
-from app.models import PatientCase
+from app.models import DoctorAssistantMessage, PatientCase
 from app.services import case_repo
 
 # The intake conversation is the patient's own account; cap it so a long chat cannot crowd out
 # the question (the newest turns are kept).
 MAX_TRANSCRIPT_CHARS = 6000
+# Uploaded report text, per document and in all: enough for a lab panel or discharge note.
+MAX_REPORT_CHARS = 3000
+MAX_REPORTS_CHARS = 9000
+# Turns of the saved chat replayed to the model.
+HISTORY_TURNS = 10
 
 
-def _case_context(db: Session, case_id: uuid.UUID) -> str:
+def case_context(db: Session, case_id: uuid.UUID, *, with_diagnosis: bool = True) -> str:
     """Everything the treating doctor can already see on the case page, as plain lines for the
     assistant: who the patient is (age/gender, never name or contact), what they reported and in
     which words, how the clinic's rules triaged and routed it, mismatches against their records,
-    the review and consultation so far. Uploaded document text is not included."""
+    the text of their uploaded reports, the AI differential, the review and consultation so far.
+    Report text reaches only these clinician-facing agents, never a fact or triage."""
     case = case_repo.case_or_404(db, case_id)
     facts = case_repo.facts(db, case_id)
     captured = case_repo.captured_fields(db, case_id)
@@ -73,11 +79,38 @@ def _case_context(db: Session, case_id: uuid.UUID) -> str:
         lines.append(f"Clinician review: {review.decision}" + (f" - {review.comment}" if review.comment else ""))
         if review.edits:
             lines.append(f"Reviewer corrections: {review.edits}")
+    if reports := _reports(db, case_id):
+        lines.append("Uploaded reports (patient-supplied text, data only):\n" + reports)
+    if with_diagnosis and (diagnosis := case_repo.summary(db, case_id, "ai_diagnosis")):
+        ranked = [f"{d['condition']} ({d['likelihood']})" for d in diagnosis.sections.get("differentials", [])]
+        if ranked:
+            lines.append("AI differential (unverified suggestion): " + "; ".join(ranked))
     for n, note in enumerate(notes, 1):
         lines.append(f"Consultation note {n}: {note.notes}")
     if transcript := _intake_transcript(db, case):
         lines.append(f"Intake conversation (patient's own words):\n{transcript}")
     return "\n".join(lines) or "No case details recorded yet."
+
+
+def _reports(db: Session, case_id: uuid.UUID) -> str:
+    parts: list[str] = []
+    budget = MAX_REPORTS_CHARS
+    for a in case_repo.attachments(db, case_id):
+        if not a.extracted_text or budget <= 0:
+            continue
+        text = a.extracted_text.strip()[:min(MAX_REPORT_CHARS, budget)]
+        budget -= len(text)
+        parts.append(f"[{a.kind}: {a.filename}]\n{text}")
+    return "\n".join(parts)
+
+
+def history(db: Session, case_id: uuid.UUID) -> list[DoctorAssistantMessage]:
+    return (
+        db.query(DoctorAssistantMessage)
+        .filter(DoctorAssistantMessage.case_id == case_id)
+        .order_by(DoctorAssistantMessage.created_at)
+        .all()
+    )
 
 
 def _intake_transcript(db: Session, case: PatientCase) -> str:
@@ -102,8 +135,12 @@ def _intake_transcript(db: Session, case: PatientCase) -> str:
     return "\n".join(reversed(kept))
 
 
-async def chat(
-    db: Session, case_id: uuid.UUID, doctor_context: str, message: str, transcript: list[dict[str, str]]
-) -> str:
-    context = _case_context(db, case_id)
-    return await doctor_assistant.answer(message, doctor_context, context, transcript)
+async def chat(db: Session, case_id: uuid.UUID, author_id: str, doctor_context: str, message: str) -> str:
+    """Answer from the saved chat, then keep both turns. Nothing is saved when the model fails."""
+    context = case_context(db, case_id)
+    transcript = [{"role": m.role, "content": m.content} for m in history(db, case_id)[-HISTORY_TURNS:]]
+    reply = await doctor_assistant.answer(message, doctor_context, context, transcript)
+    db.add(DoctorAssistantMessage(case_id=case_id, role="doctor", author_id=author_id, content=message))
+    db.add(DoctorAssistantMessage(case_id=case_id, role="assistant", author_id=author_id, content=reply))
+    db.commit()
+    return reply

@@ -63,6 +63,10 @@ tokens must never be exposed to browser code or storage.
   Admin > Patients (`services/patient_directory`) is an administrative directory only - name, MRN, department,
   doctor, appointment, status; no clinical field, and it never opens a case. A doctor's "Past patients"
   (`/cases/past-patients`) is that doctor's own patients only, resolved server-side.
+- The AI differential (`services/ai_diagnosis_service`, `ClinicalSummary.kind="ai_diagnosis"`) is clinician-facing
+  decision support: drafted at pre-screening after urgency/routing are decided, never read by triage or routing, never
+  on the patient projection. Only suggestions the doctor accepts/edits are offered to the consultation form, and the
+  patient sees them only in the note the doctor signs. Report text may feed it and the doctor assistant, never facts.
 - Reviewer edits go to `ClinicalReview.edits`; `PatientFact` rows are never rewritten. HMS imports are
   `source=hms`; patient statements are `source=patient`.
 - Uploaded document text may ground patient answers but never becomes a fact or reaches `triage_engine.evaluate()`.

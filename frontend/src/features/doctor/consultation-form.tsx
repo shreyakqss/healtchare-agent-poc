@@ -5,6 +5,7 @@ import { ApiError, casesApi, hospitalApi, type CaseDetail, type HospitalIdentity
 import { Alert, Button, Card, CardBody, CardHeader, Field, Icons, Textarea, useToast } from "@/components/ui";
 import { CredentialFields, useClinicianCredentials } from "@/features/doctor/credential-fields";
 import type { Me } from "@/features/doctor/use-doctor";
+import { acceptedDiagnoses } from "@/features/case/diagnosis-tab";
 
 /** Record the consultation, then release the visit summary. Both actions are attributed to
  * a verified HMS login, so each carries the clinician's credentials. */
@@ -21,6 +22,17 @@ export function ConsultationForm({ c, me, onDone, hospital }: {
   const [busy, setBusy] = useState<"note" | "finalize" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const toast = useToast();
+  const accepted = acceptedDiagnoses(c.ai_diagnosis);
+
+  /** Copies only what the doctor accepted on the AI Diagnosis tab into their own draft, where
+   * they edit it like anything else they type; nothing reaches the patient until they sign. */
+  function addAcceptedDiagnoses() {
+    const line = `Diagnosis: ${accepted.conditions.join("; ")}`;
+    setPrescription((rx) => (rx.trim() ? `${line}\n\n${rx}` : `${line}\n`));
+    const missing = accepted.tests.filter((t) => !testsOrdered.includes(t));
+    if (missing.length) setTestsOrdered((t) => [t.trim(), ...missing.map((m) => `- ${m}`)].filter(Boolean).join("\n"));
+    toast.push({ tone: "success", message: "Accepted AI diagnosis added - review before saving" });
+  }
 
   async function saveNote() {
     setBusy("note");
@@ -90,6 +102,14 @@ export function ConsultationForm({ c, me, onDone, hospital }: {
     <Card className="border-brand-ring/40">
       <CardHeader title="Record the consultation" description="Your own words, section by section - left is what you write, right is the document the patient will see." />
       <CardBody className="space-y-4">
+        {accepted.conditions.length ? (
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-line bg-sunken/60 px-3.5 py-3 text-sm">
+            <p className="min-w-0"><span className="font-medium">Accepted AI diagnosis:</span> {accepted.conditions.join("; ")}</p>
+            <Button size="sm" variant="secondary" icon={<Icons.sparkles size={14} />} onClick={addAcceptedDiagnoses}>
+              Add to prescription
+            </Button>
+          </div>
+        ) : null}
         <div className="grid gap-6 lg:grid-cols-2">
           <div className="space-y-4">
             <Field label="Consultation notes" required htmlFor="c-notes" hint="Findings, assessment and plan">

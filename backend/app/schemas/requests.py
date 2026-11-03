@@ -87,7 +87,14 @@ class DoctorAssistantTurn(BaseModel):
 class DoctorAssistantRequest(BaseModel):
     message: str = Field(min_length=1, max_length=4000)
     doctor_context: str = Field(min_length=1, max_length=300)
+    # Ignored: the chat is now kept server-side per case. Accepted so older clients still work.
     transcript: list[DoctorAssistantTurn] = Field(default_factory=list, max_length=20)
+
+
+class AIDiagnosisDecisionRequest(BaseModel):
+    index: int = Field(ge=0, le=20)
+    decision: Literal["accept", "edit", "dismiss"]
+    text: str | None = Field(default=None, max_length=300)
 
 
 class FinalizeRequest(BaseModel):

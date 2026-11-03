@@ -97,6 +97,31 @@ class MedicationCandidatesResult(BaseModel):
     )
 
 
+class DiagnosisSuggestion(BaseModel):
+    condition: str = Field(description="The condition's clinical name.")
+    likelihood: Literal["high", "medium", "low"]
+    supporting: list[str] = Field(default_factory=list, description="Findings in the case that point to it.")
+    against: list[str] = Field(default_factory=list, description="Findings in the case that argue against it.")
+    tests: list[str] = Field(default_factory=list, description="Investigations that would confirm or exclude it.")
+    management: list[str] = Field(default_factory=list, description="Treatment approaches to consider if confirmed.")
+
+
+class AIDiagnosis(BaseModel):
+    """Decision support for the treating doctor. Never shown to the patient unless the doctor
+    writes it into the consultation themselves."""
+
+    differentials: list[DiagnosisSuggestion] = Field(
+        default_factory=list, description="Most likely first, at most five."
+    )
+    red_flags: list[str] = Field(
+        default_factory=list, description="Serious conditions that must be excluded, with the reason."
+    )
+    missing_information: list[str] = Field(
+        default_factory=list, description="Questions or findings that would change the differential."
+    )
+    reasoning: str = Field(description="Two to four sentences on how the differential was reached.")
+
+
 class VisitSummary(BaseModel):
     visit_reason: str
     consultation_overview: str
