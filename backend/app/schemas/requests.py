@@ -70,6 +70,9 @@ class ConsultationNoteRequest(BaseModel):
     follow_up_instructions: str | None = None
     tests_ordered: str | None = None
     referral_notes: str | None = None
+    diagnosis: str | None = None
+    # Report sections still exactly as the AI wrote them when the doctor signed - audit only.
+    ai_drafted_sections: list[str] = Field(default_factory=list, max_length=10)
     # The doctor's own final-draft report to the patient. Optional: when blank, the model
     # drafts the patient-facing summary from these notes at finalize time, same as before.
     patient_report: str | None = None
@@ -89,6 +92,21 @@ class DoctorAssistantRequest(BaseModel):
     doctor_context: str = Field(min_length=1, max_length=300)
     # Ignored: the chat is now kept server-side per case. Accepted so older clients still work.
     transcript: list[DoctorAssistantTurn] = Field(default_factory=list, max_length=20)
+
+
+class ReportAssistantRequest(BaseModel):
+    instruction: str = Field(min_length=1, max_length=2000)
+    sections: dict[str, str] = Field(default_factory=dict)
+
+
+class AIDiagnosisAddRequest(BaseModel):
+    condition: str = Field(min_length=1, max_length=300)
+    likelihood: Literal["high", "medium", "low"] = "medium"
+    supporting: list[str] = Field(default_factory=list, max_length=10)
+
+
+class AIDiagnosisExtractRequest(BaseModel):
+    reply: str = Field(min_length=1, max_length=20000)
 
 
 class AIDiagnosisDecisionRequest(BaseModel):

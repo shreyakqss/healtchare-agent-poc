@@ -12,11 +12,10 @@ import { TranscriptTab } from "@/features/case/transcript-tab";
 import { RecordsTab } from "@/features/case/records-tab";
 import { ReviewTab } from "@/features/case/review-tab";
 import { AuditTab } from "@/features/case/audit-tab";
-import { AssistantTab } from "@/features/case/assistant-tab";
 import { DiagnosisTab } from "@/features/case/diagnosis-tab";
 import type { Me } from "@/features/doctor/use-doctor";
 
-type TabId = "overview" | "diagnosis" | "records" | "review" | "conversation" | "audit" | "assistant";
+type TabId = "overview" | "diagnosis" | "records" | "review" | "conversation" | "audit";
 
 export function CaseView({ initialCase, initialAudit, doctorContext, me, hospital }: {
   initialCase: CaseDetail; initialAudit: AuditEvent[]; doctorContext: string; me: Me | null; hospital: HospitalIdentity | null;
@@ -46,8 +45,7 @@ export function CaseView({ initialCase, initialAudit, doctorContext, me, hospita
     { id: "records", label: "Facts & records" },
     { id: "review", label: "Review & visit" },
     { id: "conversation", label: "Conversations", count: detail.transcript.length },
-    { id: "assistant", label: "AI Assistant" },
-    { id: "audit", label: "Audit trail", count: audit.length },
+    { id: "audit", label: "Audit trail" },
   ];
 
   return (
@@ -73,12 +71,11 @@ export function CaseView({ initialCase, initialAudit, doctorContext, me, hospita
         key={tab}
       >
         {tab === "overview" && <OverviewTab detail={detail} />}
-        {tab === "diagnosis" && <DiagnosisTab detail={detail} onChanged={(s) => setDetail({ ...detail, ai_diagnosis: s })} />}
+        {tab === "diagnosis" && <DiagnosisTab detail={detail} doctorContext={doctorContext} onChanged={(s) => setDetail({ ...detail, ai_diagnosis: s })} />}
         {tab === "records" && <RecordsTab detail={detail} />}
         {tab === "review" && <ReviewTab detail={detail} me={me} onChanged={refresh} hospital={hospital} />}
         {tab === "conversation" && <TranscriptTab detail={detail} />}
         {tab === "audit" && <AuditTab events={audit} />}
-        {tab === "assistant" && <AssistantTab caseId={detail.case_id} doctorContext={doctorContext} initialMessages={detail.assistant_messages ?? []} />}
       </div>
     </div>
   );

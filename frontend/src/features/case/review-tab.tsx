@@ -7,7 +7,6 @@ import { Icons } from "@/components/ui/icons";
 import { formatDateTime, titleCase } from "@/lib/utils";
 import { ConsultationForm } from "@/features/doctor/consultation-form";
 import { DiscrepancyFlags } from "@/features/doctor/discrepancy-flags";
-import { ReviewForm } from "@/features/doctor/review-form";
 import type { Me } from "@/features/doctor/use-doctor";
 
 function str(v: unknown): string | null {
@@ -32,15 +31,15 @@ export function ReviewTab({ detail, me, onChanged, hospital }: {
 
   return (
     <div className="space-y-5">
-      {me && detail.status === "NEEDS_REVIEW" ? <ReviewForm c={detail} me={me} onDone={onChanged} hospital={hospital} /> : null}
-      {me && detail.status === "APPROVED" ? <ConsultationForm c={detail} me={me} onDone={onChanged} hospital={hospital} /> : null}
+      {/* Signing the report is the review (consultation_service.record_note). */}
+      {me && (detail.status === "NEEDS_REVIEW" || detail.status === "APPROVED" || detail.status === "COMPLETED") ? <ConsultationForm c={detail} me={me} onDone={onChanged} hospital={hospital} /> : null}
       <DiscrepancyFlags c={detail} />
 
       <Card>
-        <CardHeader title="Clinician review" description="Read the case before the visit. Consultation notes and the visit summary unlock once it is reviewed. The appointment is already booked by the patient and does not wait for this." />
+        <CardHeader title="Clinician review" description="Recorded when you sign the consultation report above (or decline the case). The appointment is already booked by the patient and does not wait for this." />
         <CardBody>
           {!review ? (
-            <EmptyState icon={<Icons.shield size={20} />} title="Not reviewed yet" description={detail.status === "NEEDS_REVIEW" ? "Awaiting a clinician." : "Pre-screening must finish before a review can be recorded."} />
+            <EmptyState icon={<Icons.shield size={20} />} title="Not reviewed yet" description={detail.status === "NEEDS_REVIEW" ? "Sign the consultation report above to review this case." : "Pre-screening must finish before a review can be recorded."} />
           ) : (
             <div className="space-y-4">
               <div className="flex flex-wrap items-center gap-2">

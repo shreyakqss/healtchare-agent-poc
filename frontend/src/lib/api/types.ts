@@ -94,7 +94,12 @@ export interface ConsultationNoteRequest {
   doctor_username: string; doctor_password: string; consultation_mode: "in_person" | "virtual";
   notes: string; prescription?: string; follow_up_instructions?: string;
   tests_ordered?: string; referral_notes?: string; patient_report?: string;
+  diagnosis?: string; ai_drafted_sections?: string[];
 }
+/** The consultation report template (backend report_service.SECTIONS). */
+export type ReportSection = "history" | "examination" | "diagnosis" | "investigations" | "prescription" | "advice" | "referral";
+export interface ReportEdit { section: ReportSection; text: string; reason: string }
+export interface ReportEditProposal { reply: string; edits: ReportEdit[] }
 export interface FinalizeRequest { finalizer_username: string; finalizer_password: string }
 
 export interface Fact { id: string; kind: string; value: string; source: "patient" | "hms"; source_turn: number; confidence: number }
@@ -139,15 +144,15 @@ export interface PatientRouting {
 /** Days (mon, tue, ...) sharing the same hours, e.g. times [["10:00", "13:00"], ["16:00", "19:00"]]. */
 export interface WeeklyHours { days: string[]; times: [string, string][] }
 export interface Summary {
-  id: string; kind: "prescreening" | "final_visit" | "ai_diagnosis"; sections: Record<string, unknown>;
-  evidence: unknown[]; missing_information: string[]; generated_by: "llm" | "fallback"; created_at: string;
+  id: string; kind: "prescreening" | "final_visit" | "ai_diagnosis" | "report_draft"; sections: Record<string, unknown>;
+  evidence: unknown[]; missing_information: string[]; generated_by: "llm" | "fallback" | "doctor"; created_at: string;
 }
 export interface Review { id: string; decision: ReviewDecision; reviewer_id: string; reviewer_role: string; edits: Record<string, string>; comment: string | null; created_at: string }
 export interface ConsultationNote {
   id: string; doctor_id: string; doctor_name: string | null; consultation_mode: "in_person" | "virtual";
   notes: string; prescription: string | null; follow_up_instructions: string | null;
   tests_ordered: string | null; referral_notes: string | null;
-  patient_report: string | null; created_at: string;
+  patient_report: string | null; diagnosis?: string | null; created_at: string;
 }
 export interface CareTask { id: string; task_type: string; status: string; priority: Priority; payload: Record<string, unknown>; hms_reference: string | null; notes: string | null; created_at: string }
 export interface Discrepancy {
@@ -229,7 +234,11 @@ export interface AssistantMessage extends AssistantTurn { author_id: string; cre
 export interface DiagnosisSuggestion {
   condition: string; likelihood: "high" | "medium" | "low";
   supporting: string[]; against: string[]; tests: string[]; management: string[];
+  /** Added by the doctor from the assistant chat, not ranked by the model. */
+  added_by?: "doctor";
 }
+/** A diagnosis an assistant reply puts forward, for the doctor to add. */
+export interface ProposedDiagnosis { condition: string; likelihood: DiagnosisSuggestion["likelihood"]; supporting: string[] }
 export interface DiagnosisDecision { decision: "accept" | "edit" | "dismiss"; text?: string; by: string; at: string }
 export interface AIDiagnosisSections {
   differentials: DiagnosisSuggestion[]; red_flags: string[]; missing_information: string[]; reasoning: string;
@@ -254,7 +263,7 @@ export interface CaseDetail {
   facts: Fact[]; allergies_medications: Entry[]; attachments: Attachment[]; missing_fields: string[];
   required_attachment_kinds: string[]; pending_attachment_kinds: string[];
   triage: Triage | null; routing: Routing | null; discrepancies: Discrepancy[]; prescreening_summary: Summary | null; review: Review | null;
-  ai_diagnosis?: Summary | null; assistant_messages?: AssistantMessage[];
+  ai_diagnosis?: Summary | null; report_draft?: Summary | null; assistant_messages?: AssistantMessage[];
   consultation_notes: ConsultationNote[]; final_summary: Summary | null; care_tasks: CareTask[]; created_at: string;
 }
 

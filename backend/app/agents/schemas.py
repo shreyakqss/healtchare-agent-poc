@@ -122,6 +122,47 @@ class AIDiagnosis(BaseModel):
     reasoning: str = Field(description="Two to four sentences on how the differential was reached.")
 
 
+class ProposedDiagnosis(BaseModel):
+    condition: str = Field(description="A medical condition the text proposes for this patient, by its clinical name.")
+    likelihood: Literal["high", "medium", "low"] = Field(description="How strongly the text favours it.")
+    supporting: list[str] = Field(default_factory=list, description="The text's own reasons for it, short.")
+
+
+class ProposedDiagnoses(BaseModel):
+    conditions: list[ProposedDiagnosis] = Field(
+        default_factory=list,
+        description="Empty when the text proposes no diagnosis (advice, dosing, test lists, questions).",
+    )
+
+
+ReportSection = Literal["history", "examination", "diagnosis", "investigations", "prescription", "advice", "referral"]
+
+
+class ReportDraft(BaseModel):
+    """The consultation report template (ABDM OP consultation shape). No examination: only the
+    doctor examined the patient."""
+
+    history: str = Field(description="Presenting complaint and relevant history, clinical prose.")
+    diagnosis: str = Field(description="Provisional diagnosis, one per line, from the accepted diagnoses only.")
+    investigations: str = Field(description="Investigations advised, one per line.")
+    prescription: str = Field(
+        description="One medicine per line: form, name, strength, dose, frequency, route, duration, instructions."
+    )
+    advice: str = Field(description="Advice and follow-up for the patient, plain language, one point per line.")
+    referral: str = Field(description="Notes for other doctors; empty when there is nothing to hand over.")
+
+
+class ReportEdit(BaseModel):
+    section: ReportSection
+    text: str = Field(description="The complete new text of the section, not a fragment.")
+    reason: str = Field(description="One short line on what changed.")
+
+
+class ReportEditProposal(BaseModel):
+    reply: str = Field(description="One or two sentences to the doctor about the proposed change.")
+    edits: list[ReportEdit] = Field(default_factory=list)
+
+
 class VisitSummary(BaseModel):
     visit_reason: str
     consultation_overview: str

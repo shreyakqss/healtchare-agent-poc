@@ -3,7 +3,7 @@ import type {
   AdminDoctor, AdminDoctors, ChangeHoursRequest, DoctorDetails, UpdateDoctorRequest, DoctorPreview, HoursChangePreview, DoctorRemoval, DoctorRemovalCheck, NewDoctorRequest, AppointmentRequestResult, AssistantReply, Attachment, AttachmentSkipResponse, AuditEvent, CaseDetail,
   CaseListItem, ConsultationNote, ConsultationNoteRequest, FinalizeRequest, HMSPractitioner, HMSStatus, HospitalConfig,
   HospitalSummary, IdentityFormRequest, IntakeConfig, LinkedPatientRecord, MessageResponse, PastPatientItem, PatientCase, PatientVisitItem,
-  Review, ReviewRequest, Roster, SessionResponse, Slot, Summary, TurnEvent,
+  ProposedDiagnosis, ReportEditProposal, ReportSection, Review, ReviewRequest, Roster, SessionResponse, Slot, Summary, TurnEvent,
 } from "@/lib/api/types";
 
 export { ApiError } from "@/lib/api/client";
@@ -58,6 +58,13 @@ export const casesApi = {
   assistantChat: (caseId: string, message: string, doctorContext: string) =>
     http.post<AssistantReply>(`/cases/${caseId}/assistant`, { message, doctor_context: doctorContext }),
   regenerateDiagnosis: (caseId: string) => http.post<Summary>(`/cases/${caseId}/ai-diagnosis`),
+  draftReport: (caseId: string) => http.post<Record<ReportSection, string>>(`/cases/${caseId}/report/draft`),
+  reportAssistant: (caseId: string, instruction: string, sections: Record<ReportSection, string>) =>
+    http.post<ReportEditProposal>(`/cases/${caseId}/report/assistant`, { instruction, sections }),
+  proposedDiagnoses: (caseId: string, reply: string) =>
+    http.post<ProposedDiagnosis[]>(`/cases/${caseId}/ai-diagnosis/proposed`, { reply }),
+  addDiagnosis: (caseId: string, d: ProposedDiagnosis) =>
+    http.post<Summary>(`/cases/${caseId}/ai-diagnosis/differentials`, d),
   decideDiagnosis: (caseId: string, index: number, decision: "accept" | "edit" | "dismiss", text?: string) =>
     http.post<Summary>(`/cases/${caseId}/ai-diagnosis/decisions`, { index, decision, text }),
 };

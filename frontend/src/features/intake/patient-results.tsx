@@ -62,6 +62,7 @@ export function PatientResults({ detail, onUpdated, onRefresh, refreshing }: {
   const completed = detail.status === "COMPLETED";
   const sections = detail.final_summary ?? {};
   const friendly = asString(sections.patient_friendly_summary);
+  const diagnosis = asString(sections.diagnosis);
   const prescription = asString(sections.prescription);
   const testsOrdered = asString(sections.tests_ordered);
   const followUps = asStringList(sections.follow_up_instructions);
@@ -88,6 +89,7 @@ export function PatientResults({ detail, onUpdated, onRefresh, refreshing }: {
           {friendly ? <p className="text-[15px] leading-7">{friendly}</p> : null}
           <dl className="grid gap-4">
             {mode ? <Item label="Consultation" value={mode === "virtual" ? "Video consultation" : "In person"} /> : null}
+            {diagnosis ? <Item label="Diagnosis" value={<span className="whitespace-pre-wrap">{diagnosis}</span>} /> : null}
             {prescription ? <Item label="Prescription" value={<span className="whitespace-pre-wrap">{prescription}</span>} /> : null}
             {testsOrdered ? <Item label="Tests / investigations" value={<span className="whitespace-pre-wrap">{testsOrdered}</span>} /> : null}
             {followUps.length ? (

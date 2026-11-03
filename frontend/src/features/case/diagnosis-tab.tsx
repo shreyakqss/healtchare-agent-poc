@@ -4,6 +4,7 @@ import { useState } from "react";
 import { ApiError, casesApi, type AIDiagnosisSections, type CaseDetail, type DiagnosisSuggestion, type Summary } from "@/lib/api";
 import { Alert, Badge, Button, Card, CardBody, CardHeader, EmptyState, Icons, Input, useToast, type Tone } from "@/components/ui";
 import { cn } from "@/lib/utils";
+import { AssistantPanel } from "@/features/case/assistant-tab";
 
 const LIKELIHOOD_TONE: Record<DiagnosisSuggestion["likelihood"], Tone> = { high: "danger", medium: "warning", low: "neutral" };
 
@@ -26,12 +27,15 @@ export function acceptedDiagnoses(summary: Summary | null | undefined): { condit
 /** Decision support in the style of Isabel DDx / Glass Health: a ranked differential drafted at
  * pre-screening, which the doctor accepts, rewords or dismisses item by item. Never shown to the
  * patient; only what the doctor accepts can be copied into the consultation they sign. */
-export function DiagnosisTab({ detail, onChanged }: { detail: CaseDetail; onChanged: (summary: Summary) => void }) {
+export function DiagnosisTab({ detail, doctorContext, onChanged }: {
+  detail: CaseDetail; doctorContext: string; onChanged: (summary: Summary) => void;
+}) {
   const summary = detail.ai_diagnosis ?? null;
   const sections = summary?.sections as AIDiagnosisSections | undefined;
   const [busy, setBusy] = useState<string | null>(null);
   const [editing, setEditing] = useState<{ index: number; text: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [question, setQuestion] = useState("");
   const toast = useToast();
 
   async function run(key: string, call: () => Promise<Summary>) {
@@ -60,6 +64,7 @@ export function DiagnosisTab({ detail, onChanged }: { detail: CaseDetail; onChan
   );
 
   return (
+    <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
     <Card>
       <CardHeader
         title="AI diagnosis"
@@ -95,7 +100,9 @@ export function DiagnosisTab({ detail, onChanged }: { detail: CaseDetail; onChan
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="text-xs font-semibold text-fg-subtle">{i + 1}.</span>
                       <h3 className={cn("text-[15px] font-semibold", dismissed && "line-through")}>{decision?.text ?? d.condition}</h3>
-                      <Badge tone={LIKELIHOOD_TONE[d.likelihood]}>{d.likelihood} likelihood</Badge>
+                      {d.added_by === "doctor"
+                        ? <Badge tone="brand">Added by doctor</Badge>
+                        : <Badge tone={LIKELIHOOD_TONE[d.likelihood]}>{d.likelihood} likelihood</Badge>}
                       {accepted ? <Badge tone="success" dot>{decision?.decision === "edit" ? "Accepted (edited)" : "Accepted"}</Badge> : null}
                       {dismissed ? <Badge>Dismissed</Badge> : null}
                     </div>
@@ -130,6 +137,10 @@ export function DiagnosisTab({ detail, onChanged }: { detail: CaseDetail; onChan
                           onClick={() => setEditing({ index: i, text: decision?.text ?? d.condition })}>
                           Edit
                         </Button>
+                        <Button size="sm" variant="ghost" icon={<Icons.sparkles size={14} />}
+                          onClick={() => setQuestion(`Regarding ${decision?.text ?? d.condition}: `)}>
+                          Ask about this
+                        </Button>
                         <Button size="sm" variant="ghost" icon={<Icons.x size={14} />}
                           loading={busy === `dismiss-${i}`} disabled={dismissed}
                           onClick={() => run(`dismiss-${i}`, () => casesApi.decideDiagnosis(detail.case_id, i, "dismiss"))}>
@@ -156,6 +167,10 @@ export function DiagnosisTab({ detail, onChanged }: { detail: CaseDetail; onChan
         )}
       </CardBody>
     </Card>
+    <AssistantPanel caseId={detail.case_id} doctorContext={doctorContext} initialMessages={detail.assistant_messages ?? []}
+      text={question} onTextChange={setQuestion}
+      onDiagnosisAdded={(s) => { onChanged(s); toast.push({ tone: "success", message: "Added to the diagnosis" }); }} className="lg:sticky lg:top-4" />
+    </div>
   );
 }
 

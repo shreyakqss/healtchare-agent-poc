@@ -21,12 +21,15 @@ from app.core.errors import Conflict, Forbidden, NotFound, ServiceUnavailable
 from app.domain.lifecycle import CaseStatus
 from app.models import MedicalAttachment
 from app.schemas.requests import (
+    AIDiagnosisAddRequest,
     AIDiagnosisDecisionRequest,
+    AIDiagnosisExtractRequest,
     AppointmentSlotRequest,
     AttachmentSkipRequest,
     ConsultationNoteRequest,
     DoctorAssistantRequest,
     FinalizeRequest,
+    ReportAssistantRequest,
 )
 from app.schemas.responses import (
     AttachmentResponse,
@@ -59,6 +62,7 @@ from app.services import (
     letterhead,
     past_patients,
     prescreen_trigger,
+    report_service,
     workflow_jobs,
 )
 from app.services.clinician_identity import verify_clinician_async
@@ -297,6 +301,57 @@ async def regenerate_ai_diagnosis(case_id: uuid.UUID, principal: ClinicianPrinci
     except AgentUnavailable as exc:
         raise ServiceUnavailable("The AI diagnosis is unavailable right now.") from exc
     return serializers.summary_out(summary)
+
+
+@router.post("/{case_id}/report/draft")
+async def draft_report(case_id: uuid.UUID, principal: ClinicianPrincipal, db: Session = Depends(get_db)) -> dict[str, str]:
+    """An AI first draft of the consultation report template, returned to the doctor's form.
+    Nothing is saved until the doctor signs the consultation."""
+    rate_limits.enforce("doctor.ai_diagnosis", principal.user_id)
+    case = case_for_principal(db, case_id, principal, allow_patient=False)
+    try:
+        return await report_service.draft(db, case.id, _clinician_actor(principal))
+    except AgentUnavailable as exc:
+        raise ServiceUnavailable("The report draft is unavailable right now.") from exc
+
+
+@router.post("/{case_id}/report/assistant")
+async def report_assistant(
+    case_id: uuid.UUID, payload: ReportAssistantRequest, principal: ClinicianPrincipal, db: Session = Depends(get_db),
+) -> dict:
+    """Proposed edits to the report the doctor is writing; the doctor applies or discards each."""
+    rate_limits.enforce("doctor.assistant", principal.user_id)
+    case = case_for_principal(db, case_id, principal, allow_patient=False)
+    try:
+        return await report_service.propose_edit(db, case.id, payload.sections, payload.instruction, _clinician_actor(principal))
+    except AgentUnavailable as exc:
+        raise ServiceUnavailable("The report assistant is unavailable right now.") from exc
+
+
+@router.post("/{case_id}/ai-diagnosis/differentials", response_model=SummaryResponse)
+def add_ai_diagnosis(
+    case_id: uuid.UUID, payload: AIDiagnosisAddRequest, principal: ClinicianPrincipal, db: Session = Depends(get_db),
+):
+    """The doctor adds a diagnosis they picked from an assistant reply to the differential."""
+    case = case_for_principal(db, case_id, principal, allow_patient=False)
+    summary = ai_diagnosis_service.add(
+        db, case.id, payload.condition, payload.likelihood, payload.supporting, _clinician_actor(principal),
+    )
+    return serializers.summary_out(summary)
+
+
+@router.post("/{case_id}/ai-diagnosis/proposed")
+async def proposed_diagnoses(
+    case_id: uuid.UUID, payload: AIDiagnosisExtractRequest, principal: ClinicianPrincipal, db: Session = Depends(get_db),
+) -> list[dict]:
+    """The diagnoses an assistant reply puts forward, so the doctor picks real conditions rather
+    than copying advice into the differential. Nothing is saved here."""
+    rate_limits.enforce("doctor.assistant", principal.user_id)
+    case_for_principal(db, case_id, principal, allow_patient=False)
+    try:
+        return await ai_diagnosis_service.proposed_in(payload.reply)
+    except AgentUnavailable as exc:
+        raise ServiceUnavailable("Could not read diagnoses from that reply right now.") from exc
 
 
 @router.post("/{case_id}/ai-diagnosis/decisions", response_model=SummaryResponse)

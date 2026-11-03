@@ -76,6 +76,8 @@ class ConsultationNote(Base):
     prescription: Mapped[str | None] = mapped_column(Text)
     follow_up_instructions: Mapped[str | None] = mapped_column(Text)
     tests_ordered: Mapped[str | None] = mapped_column(Text)
+    # Provisional diagnosis, its own section of the report so it reaches the visit summary.
+    diagnosis: Mapped[str | None] = mapped_column(Text)
     # For other clinicians on referral, never surfaced on the patient-facing summary or the
     # patient endpoint's safe projection (see finalize.py: not written into ClinicalSummary.sections).
     referral_notes: Mapped[str | None] = mapped_column(Text)

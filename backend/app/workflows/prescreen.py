@@ -1,4 +1,4 @@
-"""Pre-screening: records -> urgency (rules) -> routing -> summary -> AI differential -> NEEDS_REVIEW."""
+"""Pre-screening: records -> urgency (rules) -> routing -> summary -> AI differential -> report draft -> NEEDS_REVIEW."""
 
 from __future__ import annotations
 
@@ -28,6 +28,7 @@ from app.services import (
     emergency_service,
     hospital_config,
     lifecycle,
+    report_service,
     slot_hold_service,
     triage_rules,
 )
@@ -312,6 +313,25 @@ async def draft_ai_diagnosis(step_input: StepInput) -> StepOutput:
     return StepOutput(content=result)
 
 
+async def draft_report(step_input: StepInput) -> StepOutput:
+    """A first draft of the consultation report, so the doctor's form opens filled in. Advisory
+    like the AI differential: a model failure leaves the form empty (the doctor can draft it from
+    the case page) rather than failing the case."""
+    case_id = case_id_from(step_input)
+    with db_session() as db:
+        if cached := completed_step(db, step_input, "draft_report"):
+            return StepOutput(content=cached)
+        try:
+            await report_service.write_draft(db, case_id, "system:report_writer")
+            result = {"generated_by": "llm"}
+        except AgentUnavailable as exc:
+            logger.warning("Report writer unavailable (%s)", type(exc).__name__)
+            audit.record(db, case_id, "system:report_writer", "report.ai_draft_unavailable", {"error_type": type(exc).__name__})
+            result = {"generated_by": "none"}
+        complete_step(db, step_input, "draft_report", result)
+    return StepOutput(content=result)
+
+
 async def mark_needs_review(step_input: StepInput) -> StepOutput:
     case_id = case_id_from(step_input)
     with db_session() as db:
@@ -335,6 +355,7 @@ prescreen_workflow = Workflow(
         step("navigate_care", navigate_care),
         step("write_summary", write_summary),
         step("draft_ai_diagnosis", draft_ai_diagnosis),
+        step("draft_report", draft_report),
         step("mark_needs_review", mark_needs_review),
     ],
     telemetry=False,

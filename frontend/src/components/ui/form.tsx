@@ -24,7 +24,7 @@ export const Select = forwardRef<HTMLSelectElement, SelectHTMLAttributes<HTMLSel
 });
 
 export function Field({ label, hint, error, required, htmlFor, children, className }: {
-  label: string; hint?: ReactNode; error?: string | null; required?: boolean; htmlFor?: string; children: ReactNode; className?: string;
+  label: ReactNode; hint?: ReactNode; error?: string | null; required?: boolean; htmlFor?: string; children: ReactNode; className?: string;
 }) {
   const messageId = `${useId()}-message`;
   const message = error || hint;

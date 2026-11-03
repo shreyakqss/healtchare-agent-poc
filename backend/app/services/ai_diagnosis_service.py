@@ -57,3 +57,42 @@ def decide(
                  {"condition": condition, **({"text": entry["text"]} if decision == "edit" else {})})
     db.commit()
     return summary
+
+
+async def proposed_in(reply: str) -> list[dict]:
+    """The diagnoses one assistant reply puts forward, for the doctor to pick from. Raises
+    AgentUnavailable when the model is down."""
+    return [c.model_dump() for c in (await diagnosis_writer.extract(reply)).conditions]
+
+
+def add(
+    db: Session, case_id: uuid.UUID, condition: str, likelihood: str, supporting: list[str], actor: str,
+) -> ClinicalSummary:
+    """A diagnosis the doctor picked from the assistant chat. Added as already accepted - the doctor
+    chose it - and marked `added_by: doctor` so it is never mistaken for the model's own ranking."""
+    condition = condition.strip()
+    if not condition:
+        raise Unprocessable("A diagnosis needs its name.")
+    summary = case_repo.summary(db, case_id, KIND)
+    listed = {d["condition"].strip().lower() for d in (summary.sections if summary else {}).get("differentials", [])}
+    if condition.lower() in listed:
+        raise Unprocessable(f"{condition} is already in the differential.")
+    if summary is None:
+        summary = ClinicalSummary(
+            case_id=case_id, kind=KIND, generated_by="doctor",
+            sections={"differentials": [], "red_flags": [], "missing_information": [], "reasoning": "", "decisions": {}},
+        )
+        db.add(summary)
+    differentials = list(summary.sections.get("differentials", []))
+    differentials.append({
+        "condition": condition, "likelihood": likelihood, "added_by": "doctor",
+        "supporting": [p.strip() for p in supporting if p.strip()], "against": [], "tests": [], "management": [],
+    })
+    entry = {"decision": "accept", "by": actor, "at": utcnow().isoformat()}
+    summary.sections = {
+        **summary.sections, "differentials": differentials,
+        "decisions": {**summary.sections.get("decisions", {}), str(len(differentials) - 1): entry},
+    }
+    audit.record(db, case_id, actor, "ai_diagnosis.added_from_assistant", {"condition": condition})
+    db.commit()
+    return summary

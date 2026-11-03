@@ -209,7 +209,7 @@ def note_out(n: ConsultationNote) -> ConsultationNoteResponse:
         id=str(n.id), doctor_id=n.doctor_id, doctor_name=display_name,
         consultation_mode=n.consultation_mode, notes=n.notes, prescription=n.prescription,
         follow_up_instructions=n.follow_up_instructions, tests_ordered=n.tests_ordered, referral_notes=n.referral_notes,
-        patient_report=n.patient_report, created_at=n.created_at,
+        patient_report=n.patient_report, diagnosis=n.diagnosis, created_at=n.created_at,
     )
 
 
@@ -254,6 +254,7 @@ def case_detail(db: Session, case: PatientCase) -> CaseDetailResponse:
         discrepancies=[discrepancy_out(d) for d in case_repo.discrepancies(db, case.id)],
         prescreening_summary=summary_out(case_repo.summary(db, case.id, "prescreening")),
         ai_diagnosis=summary_out(case_repo.summary(db, case.id, "ai_diagnosis")),
+        report_draft=summary_out(case_repo.summary(db, case.id, "report_draft")),
         assistant_messages=[AssistantMessageResponse(role=m.role, content=m.content, author_id=m.author_id, created_at=m.created_at)
                             for m in doctor_assistant_service.history(db, case.id)],
         review=review_out(case_repo.latest_review(db, case.id)),

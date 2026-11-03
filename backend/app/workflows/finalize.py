@@ -70,6 +70,7 @@ async def write_summary(step_input: StepInput) -> StepOutput:
             generated_by = "fallback"
         sections["prescription"] = latest.prescription
         sections["tests_ordered"] = latest.tests_ordered
+        sections["diagnosis"] = latest.diagnosis
         sections["consultation_mode"] = latest.consultation_mode
         sections["doctor"] = inputs.doctor
         sections["department"] = inputs.department

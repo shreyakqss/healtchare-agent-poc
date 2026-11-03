@@ -48,11 +48,12 @@ def test_consent_then_review_gate(client, monkeypatch):
 
     review = {"decision": "approve", **REVIEWER_CREDENTIALS}
     assert client.post(f"{BASE}/cases/{cid}/review", json=review).status_code == 409
+    # No report before pre-screening: signing it is the review, and there is nothing to review yet.
+    assert client.post(f"{BASE}/cases/{cid}/consultation-notes", json={**DOCTOR_CREDENTIALS, "notes": "n"}).status_code == 409
     d = client.post(f"{BASE}/cases/{cid}/prescreen").json()
     assert d["status"] == "NEEDS_REVIEW"
     assert client.get(f"{BASE}/cases/{cid}").json()["triage"]["rule_codes"]
     assert client.post(f"{BASE}/cases/{cid}/finalize", json=FINALIZER_CREDENTIALS).status_code == 409
-    assert client.post(f"{BASE}/cases/{cid}/consultation-notes", json={**DOCTOR_CREDENTIALS, "notes": "n"}).status_code == 409
 
     # NEEDS_REVIEW: the state gate no longer blocks, so a failed identity check must 401.
     monkeypatch.setattr("app.services.clinician_identity.get_hms", lambda: RejectingHMS())
