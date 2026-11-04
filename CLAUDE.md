@@ -69,6 +69,8 @@ tokens must never be exposed to browser code or storage.
   decision support: drafted at pre-screening after urgency/routing are decided, never read by triage or routing, never
   on the patient projection. Only suggestions the doctor accepts/edits are offered to the consultation form, and the
   patient sees them only in the note the doctor signs. Report text may feed it and the doctor assistant, never facts.
+  Once the case is `COMPLETED` or `REJECTED` it is final: regenerate/decide/add 409 (`ai_diagnosis_service._require_open`);
+  the assistant chat stays open, read-only for the differential.
 - The consultation report (`services/report_service`, `agents/report_writer`) may be AI-drafted and AI-edited, but
   only as proposals returned to the doctor's form: nothing is stored until the doctor signs with their HMS password,
   the AI never writes examination findings, and the audit records which sections were still AI-written at signing.

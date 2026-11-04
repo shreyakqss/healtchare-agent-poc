@@ -12,12 +12,14 @@ import { MARKDOWN_COMPONENTS } from "@/features/intake/message-list";
 
 /** A clinical discussion for whoever is reading this case - it reads the uploaded reports and the
  * AI differential, looks up literature, and never writes anything back to the record itself. */
-export function AssistantPanel({ caseId, doctorContext, initialMessages, text, onTextChange, onDiagnosisAdded, className }: {
+export function AssistantPanel({ caseId, doctorContext, initialMessages, text, onTextChange, onDiagnosisAdded, className, canAddDiagnosis = true }: {
   caseId: string; doctorContext: string; initialMessages: AssistantTurn[];
   /** The composer is controlled so the differential beside it can prefill a question. */
   text: string; onTextChange: (text: string) => void;
   /** The doctor took a diagnosis from a reply into the differential. */
   onDiagnosisAdded: (summary: Summary) => void; className?: string;
+  // False once the visit is closed: the differential is final, so replies offer no "Add".
+  canAddDiagnosis?: boolean;
 }) {
   // The chat is kept on the case server-side, so it is here again after a reload.
   const [turns, setTurns] = useState<AssistantTurn[]>(initialMessages);
@@ -75,7 +77,7 @@ export function AssistantPanel({ caseId, doctorContext, initialMessages, text, o
                   <div className={cn("rounded-lg px-3.5 py-2.5 text-sm leading-6", t.role === "doctor" ? "whitespace-pre-wrap bg-brand text-brand-fg" : "border border-line bg-surface")}>
                     {t.role === "doctor" ? t.content : <ReactMarkdown components={MARKDOWN_COMPONENTS}>{t.content}</ReactMarkdown>}
                   </div>
-                  {t.role === "assistant" ? (
+                  {t.role === "assistant" && canAddDiagnosis ? (
                     <AddToDiagnosis caseId={caseId} reply={t.content} onAdded={onDiagnosisAdded} />
                   ) : null}
                 </div>

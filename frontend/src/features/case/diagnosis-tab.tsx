@@ -62,13 +62,17 @@ export function DiagnosisTab({ detail, doctorContext, onChanged, onOpenReport }:
   const accepted = acceptedDiagnoses(summary);
   const reportOpen = ["NEEDS_REVIEW", "APPROVED", "COMPLETED"].includes(detail.status);
   const released = detail.status === "COMPLETED";
+  // Closed visit: the differential that shaped the signed report is final (the API 409s too).
+  const locked = released || detail.status === "REJECTED";
   const reportLabel = released ? "View report" : detail.status === "NEEDS_REVIEW" ? "Review & sign report" : "Open report";
 
   const action = (
     <div className="flex flex-wrap gap-2">
-      <Button size="sm" variant="secondary" loading={busy === "regenerate"} icon={<Icons.refresh size={14} />} onClick={regenerate}>
-        {summary ? "Regenerate" : "Generate"}
-      </Button>
+      {locked ? <Badge tone="neutral">Final</Badge> : (
+        <Button size="sm" variant="secondary" loading={busy === "regenerate"} icon={<Icons.refresh size={14} />} onClick={regenerate}>
+          {summary ? "Regenerate" : "Generate"}
+        </Button>
+      )}
       {reportOpen ? (
         <Button size="sm" icon={<Icons.arrowRight size={14} />} onClick={onOpenReport}>{reportLabel}</Button>
       ) : null}
@@ -85,6 +89,9 @@ export function DiagnosisTab({ detail, doctorContext, onChanged, onOpenReport }:
       />
       <CardBody className="space-y-5">
         {error ? <Alert tone="danger">{error}</Alert> : null}
+        {locked ? (
+          <Alert tone="info">This visit is closed, so its AI diagnosis is final and kept as it was when the report was signed. You can still ask the assistant about it.</Alert>
+        ) : null}
         {sections && reportOpen ? (
           <div className="flex flex-col gap-3 rounded-lg border border-brand-ring bg-brand-soft/40 p-4 sm:flex-row sm:items-center sm:justify-between">
             <div className="min-w-0 text-sm">
@@ -146,7 +153,7 @@ export function DiagnosisTab({ detail, doctorContext, onChanged, onOpenReport }:
                       <Points label="Management if confirmed" items={d.management} />
                     </div>
 
-                    {editing?.index === i ? (
+                    {locked ? null : editing?.index === i ? (
                       <div className="mt-3 flex flex-wrap gap-2">
                         <label htmlFor={`dx-edit-${i}`} className="sr-only">Diagnosis wording</label>
                         <Input id={`dx-edit-${i}`} value={editing.text} maxLength={300} className="min-w-0 flex-1"
@@ -199,7 +206,7 @@ export function DiagnosisTab({ detail, doctorContext, onChanged, onOpenReport }:
       </CardBody>
     </Card>
     <AssistantPanel caseId={detail.case_id} doctorContext={doctorContext} initialMessages={detail.assistant_messages ?? []}
-      text={question} onTextChange={setQuestion}
+      text={question} onTextChange={setQuestion} canAddDiagnosis={!locked}
       onDiagnosisAdded={(s) => { onChanged(s); toast.push({ tone: "success", message: "Added to the diagnosis" }); }} className="lg:sticky lg:top-4" />
     </div>
   );
