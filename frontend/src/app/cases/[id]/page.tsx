@@ -19,8 +19,7 @@ export default async function CasePage({ params }: { params: Promise<{ id: strin
     if (err instanceof ApiError && err.status === 404) notFound();
     throw err;
   }
-  const [audit, config, roster] = await Promise.all([
-    serverApi.clinician.audit(id),
+  const [config, roster] = await Promise.all([
     serverApi.clinician.config().catch(() => null),
     serverApi.clinician.roster().catch(() => null),
   ]);
@@ -45,7 +44,7 @@ export default async function CasePage({ params }: { params: Promise<{ id: strin
         </Link>
       }
     >
-      <CaseView initialCase={detail} initialAudit={audit} doctorContext={doctorContext} me={me} hospital={config?.hospital ?? null} />
+      <CaseView initialCase={detail} doctorContext={doctorContext} me={me} hospital={config?.hospital ?? null} />
     </AppShell>
   );
 }
