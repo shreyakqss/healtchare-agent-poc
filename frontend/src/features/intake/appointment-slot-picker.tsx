@@ -29,7 +29,8 @@ function when(slot: Slot): string {
   return `${dayLabel(slot.start)}, ${TIME_LABEL.format(new Date(slot.start))}`;
 }
 
-interface DoctorTimes { id: string; name: string; slots: Slot[]; next: Slot | null }
+// `previous`: on a follow-up, the doctor who saw the patient at the visit it follows up.
+interface DoctorTimes { id: string; name: string; slots: Slot[]; next: Slot | null; previous: boolean }
 
 /** The patient's appointment, booking-app style: the earliest available doctor first (the
  * default), then every doctor in the department as a card with their next open times. Picking
@@ -59,17 +60,20 @@ export function AppointmentSlotPicker({ caseId, routing, locked, onUpdated }: {
     const byDoctor = new Map<string, DoctorTimes>();
     for (const slot of all) {
       const id = slot.practitioner_id;
-      const entry = byDoctor.get(id) ?? { id, name: slot.doctor_name ?? routing.doctor_name ?? "Doctor", slots: [], next: null };
+      const entry = byDoctor.get(id) ?? { id, name: slot.doctor_name ?? routing.doctor_name ?? "Doctor", slots: [], next: null, previous: false };
       entry.slots.push(slot);
+      if (slot.previous_doctor) entry.previous = true;
       if (!entry.next && !slot.taken) entry.next = slot;
       byDoctor.set(id, entry);
     }
-    // Earliest next time first: the server orders slots earliest-first, less busy doctor first.
-    return [...byDoctor.values()].sort((a, b) =>
+    // A follow-up's previous doctor on top; then earliest next time first (the server orders
+    // slots earliest-first, less busy doctor first).
+    return [...byDoctor.values()].sort((a, b) => Number(b.previous) - Number(a.previous) ||
       (a.next ? new Date(a.next.start).getTime() : Infinity) - (b.next ? new Date(b.next.start).getTime() : Infinity));
   }, [all, routing.doctor_name]);
 
   const earliest = doctors[0]?.next ?? null;
+  const fromLastVisit = Boolean(doctors[0]?.previous && earliest);
   const picked = all.find((s) => s.id === pickedId) ?? null;
 
   if (!all.length) {
@@ -138,7 +142,9 @@ export function AppointmentSlotPicker({ caseId, routing, locked, onUpdated }: {
       {earliest ? (
         <section className="rounded-lg border border-brand-ring bg-brand-soft/40 p-4">
           <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-brand">
-            <Icons.clock size={13} /> Earliest available
+            {fromLastVisit
+              ? <><Icons.refresh size={13} /> Your doctor from your last visit</>
+              : <><Icons.clock size={13} /> Earliest available</>}
           </p>
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex min-w-0 items-center gap-3">
@@ -233,7 +239,10 @@ function DoctorCard({ doctor, pickedId, currentId, showAll, onToggle, hours, onP
         <div className="flex min-w-0 items-center gap-3">
           <Avatar name={doctor.name} />
           <div className="min-w-0">
-            <p className="truncate text-sm font-semibold">{doctor.name}</p>
+            <p className="flex items-center gap-2 truncate text-sm font-semibold">
+              {doctor.name}
+              {doctor.previous ? <span className="rounded-full bg-brand-soft px-2 py-0.5 text-xs font-medium text-brand">Seen you before</span> : null}
+            </p>
             <p className="text-xs text-fg-muted">{doctor.next ? `Next available: ${when(doctor.next)}` : "No open time right now"}</p>
           </div>
         </div>

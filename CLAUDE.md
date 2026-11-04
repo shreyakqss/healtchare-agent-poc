@@ -74,6 +74,15 @@ tokens must never be exposed to browser code or storage.
   the AI never writes examination findings, and the audit records which sections were still AI-written at signing.
   Every save is a new `ConsultationNote` version until release; once the visit summary is released the report is
   final (`/consultation-notes`, `/report/*` 409 on a `COMPLETED` case).
+- Patients register once. The first visit's identity form creates the OpenEMR record; a later visit reuses that
+  MRN (`intake_service.start_session` falls back to `last_linked_hms_patient_id`) and fills the identity step
+  from it on consent (`identity_from_profile`), so the form is shown only when no complete record exists. The
+  Profile tab edits that same record (`PUT /intake-sessions/profile`, looked up by the account's MRN, never a search).
+- A visit is `new` or `follow_up` (`PatientCase.visit_type`, `follow_up_of`). A follow-up names one of the
+  account's own COMPLETED visits (`services/visit_history`), routes to that visit's department unless a triage
+  rule names one, and lists/holds that visit's doctor first (`routing.doctor_first`); the patient may still pick
+  any of the department's doctors. Only what the doctor signed (diagnosis, prescription, tests, advice) is carried
+  over - to the intake planner and the clinician agents/case view - never the AI differential or referral notes.
 - Reviewer edits go to `ClinicalReview.edits`; `PatientFact` rows are never rewritten. HMS imports are
   `source=hms`; patient statements are `source=patient`.
 - Uploaded document text may ground patient answers but never becomes a fact or reaches `triage_engine.evaluate()`.

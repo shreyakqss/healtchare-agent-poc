@@ -2,7 +2,7 @@ import { API_ROOT, http, readCookie, readSse, WORKSPACE_CASES } from "@/lib/api/
 import type {
   AdminDoctor, AdminDoctors, ChangeHoursRequest, DoctorDetails, UpdateDoctorRequest, DoctorPreview, HoursChangePreview, DoctorRemoval, DoctorRemovalCheck, NewDoctorRequest, AppointmentRequestResult, AssistantReply, Attachment, AttachmentSkipResponse, AuditEvent, CaseDetail,
   CaseListItem, ConsultationNote, ConsultationNoteRequest, FinalizeRequest, HMSPractitioner, HMSStatus, HospitalConfig,
-  HospitalSummary, IdentityFormRequest, IntakeConfig, LinkedPatientRecord, MessageResponse, PastPatientItem, PatientCase, PatientVisitItem,
+  HospitalSummary, IdentityFormRequest, IntakeConfig, LinkedPatientRecord, MessageResponse, PastPatientItem, PatientCase, PatientVisitItem, PreviousVisit, VisitType,
   ProposedDiagnosis, ReportEditProposal, ReportSection, Review, ReviewRequest, Roster, SessionResponse, Slot, Summary, TurnEvent,
 } from "@/lib/api/types";
 
@@ -12,8 +12,10 @@ export type * from "@/lib/api/types";
 export const intakeApi = {
   greeting: () => http.get<{ text: string }>("/intake-sessions/greeting"),
   linkedRecord: () => http.get<LinkedPatientRecord | null>("/intake-sessions/linked-record"),
-  start: (body: Record<string, never> = {}) =>
+  start: (body: { visit_type?: VisitType; follow_up_of?: string | null } = {}) =>
     http.post<SessionResponse>("/intake-sessions", body),
+  followUpOptions: () => http.get<PreviousVisit[]>("/intake-sessions/follow-up-options"),
+  saveProfile: (payload: IdentityFormRequest) => http.put<LinkedPatientRecord>("/intake-sessions/profile", payload),
   get: (sessionId: string) => http.get<SessionResponse>(`/intake-sessions/${sessionId}`),
   consent: (sessionId: string, granted: boolean) => http.post<SessionResponse>(`/intake-sessions/${sessionId}/consent`, { granted }),
   submitIdentity: (sessionId: string, payload: IdentityFormRequest) =>

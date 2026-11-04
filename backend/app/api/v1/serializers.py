@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import uuid
 from collections import defaultdict
@@ -43,6 +44,7 @@ from app.schemas.responses import (
     PatientCaseResponse,
     PatientRoutingResponse,
     PatientVisitItem,
+    PreviousVisitResponse,
     ReviewResponse,
     RoutingResponse,
     SessionResponse,
@@ -59,6 +61,7 @@ from app.services import (
     hospital_config,
     letterhead,
     slot_hold_service,
+    visit_history,
 )
 
 logger = logging.getLogger(__name__)
@@ -73,7 +76,16 @@ def session_out(db: Session, session: IntakeSession, case: PatientCase) -> Sessi
         required_attachment_kinds=hospital_config.required_attachment_kinds(),
         pending_attachment_kinds=case_repo.pending_attachment_kinds(db, case.id),
         past_attachments=[attachment_out(a) for a in case_repo.past_attachments(db, case.id)],
+        identity_complete=_identity_done(db, case),
+        visit_type=case.visit_type,
+        previous_visit=previous_visit_out(visit_history.previous_visit(db, case)),
     )
+
+
+def _identity_done(db: Session, case: PatientCase) -> bool:
+    return db.query(AuditEvent.id).filter(
+        AuditEvent.case_id == case.id, AuditEvent.action == "intake.identity_submitted"
+    ).first() is not None and not case_repo.missing_identity_fields(db, case.id)
 
 
 def attachment_out(a: MedicalAttachment) -> AttachmentResponse:
@@ -96,8 +108,7 @@ def active_intake_out(db: Session, session: IntakeSession, case: PatientCase) ->
     )
     base = session_out(db, session, case)
     return ActiveIntakeResponse(
-        **base.model_dump(),
-        identity_complete=identity_complete,
+        **{**base.model_dump(), "identity_complete": identity_complete},
         intake_complete=bool(completed_turn and completed_turn.payload.get("intake_complete")),
         transcript=[
             TranscriptMessage(role=message.role, content=message.content, turn_index=message.turn_index)
@@ -106,6 +117,10 @@ def active_intake_out(db: Session, session: IntakeSession, case: PatientCase) ->
         attachments=[attachment_out(attachment) for attachment in case_repo.attachments(db, case.id)],
         skipped_attachment_kinds=sorted(case_repo.skipped_attachment_kinds(db, case.id)),
     )
+
+
+def previous_visit_out(visit: visit_history.PreviousVisit | None) -> PreviousVisitResponse | None:
+    return PreviousVisitResponse(**dataclasses.asdict(visit)) if visit else None
 
 
 def triage_out(db: Session, t: TriageResult | None) -> TriageResponse | None:
@@ -257,6 +272,8 @@ def case_detail(db: Session, case: PatientCase) -> CaseDetailResponse:
         report_draft=summary_out(case_repo.summary(db, case.id, "report_draft")),
         assistant_messages=[AssistantMessageResponse(role=m.role, content=m.content, author_id=m.author_id, created_at=m.created_at)
                             for m in doctor_assistant_service.history(db, case.id)],
+        visit_type=case.visit_type,
+        previous_visit=previous_visit_out(visit_history.previous_visit(db, case)),
         review=review_out(case_repo.latest_review(db, case.id)),
         consultation_notes=[note_out(n) for n in case_repo.notes(db, case.id)],
         final_summary=summary_out(case_repo.summary(db, case.id, "final_visit")),
@@ -354,6 +371,7 @@ def patient_case_list(db: Session, cases: list[PatientCase]) -> list[PatientVisi
                 case_id=str(case.id),
                 status=session.status,
                 review_decision=review.decision if review else None,
+                visit_type=case.visit_type,
                 department_name=case_routing.department_name if case_routing else None,
                 doctor_name=case_routing.doctor_name if case_routing else None,
                 created_at=case.created_at,
@@ -427,6 +445,7 @@ def case_list(db: Session, cases: list[PatientCase] | None = None) -> list[CaseL
         reason = ", ".join(dict.fromkeys(reasons)) or None
         items.append(CaseListItem(
             case_id=str(case.id), session_id=str(case.session_id), status=session.status if session else "UNKNOWN",
+            visit_type=case.visit_type,
             priority=case_triage.priority if case_triage else None,
             department_id=case_routing.department_id if case_routing else None,
             department_name=case_routing.department_name if case_routing else None,

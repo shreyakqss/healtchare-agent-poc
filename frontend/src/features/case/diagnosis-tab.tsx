@@ -27,8 +27,10 @@ export function acceptedDiagnoses(summary: Summary | null | undefined): { condit
 /** Decision support in the style of Isabel DDx / Glass Health: a ranked differential drafted at
  * pre-screening, which the doctor accepts, rewords or dismisses item by item. Never shown to the
  * patient; only what the doctor accepts can be copied into the consultation they sign. */
-export function DiagnosisTab({ detail, doctorContext, onChanged }: {
+export function DiagnosisTab({ detail, doctorContext, onChanged, onOpenReport }: {
   detail: CaseDetail; doctorContext: string; onChanged: (summary: Summary) => void;
+  // Switch to the Review & visit tab, where accepted diagnoses fill the report.
+  onOpenReport: () => void;
 }) {
   const summary = detail.ai_diagnosis ?? null;
   const sections = summary?.sections as AIDiagnosisSections | undefined;
@@ -57,10 +59,20 @@ export function DiagnosisTab({ detail, doctorContext, onChanged }: {
     return s;
   });
 
+  const accepted = acceptedDiagnoses(summary);
+  const reportOpen = ["NEEDS_REVIEW", "APPROVED", "COMPLETED"].includes(detail.status);
+  const released = detail.status === "COMPLETED";
+  const reportLabel = released ? "View report" : detail.status === "NEEDS_REVIEW" ? "Review & sign report" : "Open report";
+
   const action = (
-    <Button size="sm" variant="secondary" loading={busy === "regenerate"} icon={<Icons.refresh size={14} />} onClick={regenerate}>
-      {summary ? "Regenerate" : "Generate"}
-    </Button>
+    <div className="flex flex-wrap gap-2">
+      <Button size="sm" variant="secondary" loading={busy === "regenerate"} icon={<Icons.refresh size={14} />} onClick={regenerate}>
+        {summary ? "Regenerate" : "Generate"}
+      </Button>
+      {reportOpen ? (
+        <Button size="sm" icon={<Icons.arrowRight size={14} />} onClick={onOpenReport}>{reportLabel}</Button>
+      ) : null}
+    </div>
   );
 
   return (
@@ -73,6 +85,25 @@ export function DiagnosisTab({ detail, doctorContext, onChanged }: {
       />
       <CardBody className="space-y-5">
         {error ? <Alert tone="danger">{error}</Alert> : null}
+        {sections && reportOpen ? (
+          <div className="flex flex-col gap-3 rounded-lg border border-brand-ring bg-brand-soft/40 p-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="min-w-0 text-sm">
+              <p className="font-medium">
+                {accepted.conditions.length
+                  ? `${accepted.conditions.length} accepted ${accepted.conditions.length === 1 ? "diagnosis goes" : "diagnoses go"} into the report`
+                  : "Nothing accepted yet"}
+              </p>
+              <p className="mt-0.5 text-fg-muted">
+                {accepted.conditions.length
+                  ? `${accepted.conditions.join(", ")}${accepted.tests.length ? `, with ${accepted.tests.length} suggested test${accepted.tests.length === 1 ? "" : "s"}` : ""}. Review and sign it on Review & visit.`
+                  : "Accept or edit a diagnosis below and it fills the report's Diagnosis and Investigations sections."}
+              </p>
+            </div>
+            <Button size="sm" variant={accepted.conditions.length ? "primary" : "secondary"} icon={<Icons.arrowRight size={14} />} onClick={onOpenReport} className="shrink-0">
+              {reportLabel}
+            </Button>
+          </div>
+        ) : null}
         {!sections ? (
           <EmptyState icon={<Icons.sparkles size={20} />} title="No AI diagnosis yet"
             description="It is drafted when pre-screening finishes. Generate one now if it is missing or the model was unavailable." />

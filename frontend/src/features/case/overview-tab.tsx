@@ -1,11 +1,12 @@
-import type { CaseDetail } from "@/lib/api";
+import Link from "next/link";
+import type { CaseDetail, PreviousVisit } from "@/lib/api";
 import { Card, CardBody, CardHeader, SectionTitle } from "@/components/ui/card";
 import { Badge, PriorityBadge } from "@/components/ui/badge";
 import { Alert, EmptyState } from "@/components/ui/feedback";
 import { KeyValue, Table, Td, Th } from "@/components/ui/data";
 import { Icons } from "@/components/ui/icons";
 import { FIELD_LABEL } from "@/lib/constants";
-import { formatDateTime, titleCase } from "@/lib/utils";
+import { formatDate, formatDateTime, titleCase } from "@/lib/utils";
 
 function str(v: unknown): string | null {
   return typeof v === "string" && v.trim() ? v : null;
@@ -37,6 +38,7 @@ export function OverviewTab({ detail }: { detail: CaseDetail }) {
   return (
     <div className="grid gap-5 lg:grid-cols-5">
       <div className="space-y-5 lg:col-span-3">
+        {detail.previous_visit ? <PreviousVisitCard visit={detail.previous_visit} /> : null}
         <Card>
           <CardHeader
             title="Clinician briefing"
@@ -167,5 +169,31 @@ export function OverviewTab({ detail }: { detail: CaseDetail }) {
         </Card>
       </div>
     </div>
+  );
+}
+
+function lines(text: string | null): string[] {
+  return (text ?? "").split("\n").map((l) => l.trim()).filter(Boolean);
+}
+
+/** A follow-up: what the doctor signed at the visit it follows up, so the history is in view. */
+function PreviousVisitCard({ visit }: { visit: PreviousVisit }) {
+  return (
+    <Card className="border-brand-ring">
+      <CardHeader
+        title={<span className="flex items-center gap-2"><Icons.refresh size={16} className="text-brand" />Follow-up visit</span>}
+        description={`Follows up the visit on ${formatDate(visit.visit_at)}${visit.doctor_name ? ` with ${visit.doctor_name}` : ""}${visit.department_name ? `, ${visit.department_name}` : ""}.`}
+        action={<Link href={`/cases/${visit.case_id}`} className="text-sm font-medium text-brand hover:underline">Open that visit</Link>}
+      />
+      <CardBody>
+        <div className="grid gap-5 sm:grid-cols-2">
+          <div><SectionTitle>Complaint then</SectionTitle><p className="mt-1.5 text-sm">{visit.complaint ?? "Not recorded"}</p></div>
+          <div><SectionTitle>Diagnosis</SectionTitle><div className="mt-1.5"><Bullets items={lines(visit.diagnosis)} /></div></div>
+          <div><SectionTitle>Prescription</SectionTitle><div className="mt-1.5"><Bullets items={lines(visit.prescription)} /></div></div>
+          <div><SectionTitle>Tests advised</SectionTitle><div className="mt-1.5"><Bullets items={lines(visit.tests)} /></div></div>
+          <div className="sm:col-span-2"><SectionTitle>Advice given</SectionTitle><div className="mt-1.5"><Bullets items={lines(visit.advice)} /></div></div>
+        </div>
+      </CardBody>
+    </Card>
   );
 }

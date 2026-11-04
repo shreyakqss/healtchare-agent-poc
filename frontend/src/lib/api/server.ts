@@ -17,6 +17,7 @@ import type {
   HospitalSummary,
   IntakeConfig,
   LinkedPatientRecord,
+  PreviousVisit,
   PatientCase,
   PastPatientItem,
   PatientVisitItem,
@@ -49,6 +50,7 @@ export const serverApi = {
     activeIntake: () => serverRequest<ActiveIntake | null>("/intake-sessions/active"),
     pastAttachments: () => serverRequest<Attachment[]>("/intake-sessions/past-attachments"),
     linkedRecord: () => serverRequest<LinkedPatientRecord | null>("/intake-sessions/linked-record"),
+    followUpOptions: () => serverRequest<PreviousVisit[]>("/intake-sessions/follow-up-options"),
     case: (id: string) => serverRequest<PatientCase>(`/cases/${encodeURIComponent(id)}/patient-view`),
   },
   clinician: {

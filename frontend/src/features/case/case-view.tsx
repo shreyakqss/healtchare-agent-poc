@@ -71,7 +71,7 @@ export function CaseView({ initialCase, initialAudit, doctorContext, me, hospita
         key={tab}
       >
         {tab === "overview" && <OverviewTab detail={detail} />}
-        {tab === "diagnosis" && <DiagnosisTab detail={detail} doctorContext={doctorContext} onChanged={(s) => setDetail({ ...detail, ai_diagnosis: s })} />}
+        {tab === "diagnosis" && <DiagnosisTab detail={detail} doctorContext={doctorContext} onChanged={(s) => setDetail({ ...detail, ai_diagnosis: s })} onOpenReport={() => setTab("review")} />}
         {tab === "records" && <RecordsTab detail={detail} />}
         {tab === "review" && <ReviewTab detail={detail} me={me} onChanged={refresh} hospital={hospital} />}
         {tab === "conversation" && <TranscriptTab detail={detail} />}

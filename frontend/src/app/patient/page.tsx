@@ -4,20 +4,21 @@ import { serverApi } from "@/lib/api/server";
 import { AppShell } from "@/components/layout/app-shell";
 import { PatientPortal } from "@/features/intake/patient-portal";
 
-export const metadata: Metadata = { title: "Patient intake" };
+export const metadata: Metadata = { title: "Patient portal" };
 
 const FALLBACK_GREETING =
   "Hello, I am the clinic's intake assistant. Tell me what brings you in today, in your own words.";
 
 export default async function PatientPage() {
   const user = await requireRole("patient", "/patient");
-  const [config, greeting, visits, activeIntake, linkedRecord, pastAttachments] = await Promise.all([
+  const [config, greeting, visits, activeIntake, linkedRecord, pastAttachments, followUpOptions] = await Promise.all([
     serverApi.patient.config(),
     serverApi.patient.greeting().catch(() => ({ text: FALLBACK_GREETING })),
     serverApi.patient.visits(),
     serverApi.patient.activeIntake(),
     serverApi.patient.linkedRecord().catch(() => null),
     serverApi.patient.pastAttachments().catch(() => []),
+    serverApi.patient.followUpOptions().catch(() => []),
   ]);
   const clinicName = config?.hospital?.name ?? "Clinic";
   // Self-registered accounts get a placeholder name/email just to satisfy Keycloak's
@@ -25,7 +26,7 @@ export default async function PatientPage() {
   const isPlaceholder = user.email?.endsWith("@self-register.careflow.local") ?? false;
 
   return (
-    <AppShell title="Patient intake" subtitle={clinicName} user={user}>
+    <AppShell title={linkedRecord ? `Welcome back${linkedRecord.name ? `, ${linkedRecord.name.split(" ")[0]}` : ""}` : "Patient intake"} subtitle={clinicName} user={user}>
       <PatientPortal
         initialRequiredFields={config?.required_intake_fields ?? []}
         initialRequiredAttachmentKinds={config?.required_attachment_kinds ?? []}
@@ -38,6 +39,7 @@ export default async function PatientPage() {
         prefillName={linkedRecord?.name ?? (isPlaceholder ? null : user.display_name)}
         prefillEmail={linkedRecord?.email ?? (isPlaceholder ? null : user.email)}
         linkedRecord={linkedRecord}
+        followUpOptions={followUpOptions}
       />
     </AppShell>
   );

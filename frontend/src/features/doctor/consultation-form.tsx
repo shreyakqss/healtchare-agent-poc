@@ -241,6 +241,13 @@ export function ConsultationForm({ c, me, onDone, hospital }: {
                     <Textarea id={`r-${t.key}`} rows={t.rows} value={sections[t.key]} onChange={(e) => setSection(t.key, e.target.value)}
                       className={cn("min-h-0", ai && "border-brand-ring/60")} />
                   </Field>
+                  {t.key === "diagnosis" ? (
+                    <MissingAccepted
+                      conditions={acceptedDiagnoses(c.ai_diagnosis).conditions}
+                      text={sections.diagnosis}
+                      onAdd={(items) => setSection("diagnosis", [sections.diagnosis.trim(), ...items].filter(Boolean).join("\n"))}
+                    />
+                  ) : null}
                   {ai && t.key === "prescription" ? (
                     <p className="mt-1 text-xs font-medium text-warning">AI draft: verify every medicine, dose and duration before signing.</p>
                   ) : null}
@@ -433,6 +440,28 @@ function ReportDocument({ patientName, doctorName, hospital, sections }: {
           </div>
         )) : <p className="text-sm italic text-fg-subtle">Nothing written yet.</p>}
       </div>
+    </div>
+  );
+}
+
+/** Diagnoses accepted on the AI Diagnosis tab that the report does not mention yet - e.g. one
+ * accepted after the report was first saved. The doctor adds them; nothing is added silently. */
+function MissingAccepted({ conditions, text, onAdd }: { conditions: string[]; text: string; onAdd: (items: string[]) => void }) {
+  const lower = text.toLowerCase();
+  const missing = conditions.filter((c) => !lower.includes(c.toLowerCase()));
+  if (!missing.length) return null;
+  return (
+    <div className="mt-1.5 flex flex-wrap items-center gap-2 text-xs">
+      <span className="text-fg-muted">Accepted on AI Diagnosis, not in the report:</span>
+      {missing.map((m) => (
+        <button key={m} type="button" onClick={() => onAdd([m])}
+          className="inline-flex items-center gap-1 rounded-full border border-brand-ring bg-brand-soft px-2 py-0.5 font-medium text-brand hover:bg-brand-soft/70">
+          <Icons.plus size={12} />{m}
+        </button>
+      ))}
+      {missing.length > 1 ? (
+        <button type="button" onClick={() => onAdd(missing)} className="font-medium text-brand hover:underline">Add all</button>
+      ) : null}
     </div>
   );
 }

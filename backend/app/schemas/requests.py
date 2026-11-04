@@ -1,13 +1,24 @@
 from __future__ import annotations
 
+import uuid
 from datetime import UTC, date, datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class StartSessionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+    # "follow_up" needs `follow_up_of`: one of the patient's own completed visits.
+    visit_type: Literal["new", "follow_up"] = "new"
+    follow_up_of: uuid.UUID | None = None
+
+    @model_validator(mode="after")
+    def follow_up_needs_visit(self) -> StartSessionRequest:
+        if (self.visit_type == "follow_up") != (self.follow_up_of is not None):
+            raise ValueError("A follow-up names the visit it follows up; a new visit names none.")
+        return self
 
 
 class ConsentRequest(BaseModel):
@@ -39,6 +50,11 @@ class IdentityFormRequest(BaseModel):
         if value > datetime.now(UTC).date():
             raise ValueError("Date of birth cannot be in the future.")
         return value
+
+
+class ProfileRequest(IdentityFormRequest):
+    """The patient's own profile edit: the same fields as the first-visit registration,
+    written to their existing hospital record."""
 
 
 class MessageRequest(BaseModel):

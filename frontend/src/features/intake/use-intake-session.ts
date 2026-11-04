@@ -2,8 +2,9 @@
 
 import { useCallback, useRef, useState } from "react";
 import { ApiError, casesApi, intakeApi } from "@/lib/api";
-import type { ActiveIntake, Attachment, IdentityFormRequest, PatientCase, SessionResponse } from "@/lib/api";
+import type { ActiveIntake, Attachment, IdentityFormRequest, PatientCase, PreviousVisit, SessionResponse, VisitType } from "@/lib/api";
 import { ATTACHMENT_KINDS } from "@/lib/constants";
+import { formatDate } from "@/lib/utils";
 
 export interface ChatMessage {
   id: number;
@@ -15,6 +16,9 @@ export interface ChatMessage {
 export interface IntakeState {
   sessionId: string | null;
   caseId: string | null;
+  visitType: VisitType;
+  previousVisit: PreviousVisit | null;
+  startingVisit: boolean;
   identityComplete: boolean; // step 1 (name/age/gender/contact) done
   messages: ChatMessage[]; // step 2, the clinical chat
   missingFields: string[] | null; // full (identity + clinical); null until the session exists
@@ -36,6 +40,14 @@ export interface IntakeState {
 
 let nextId = 1;
 
+/** The assistant's first line: the clinic greeting, or for a follow-up, the visit it is about. */
+export function openingFor(greeting: string, previous: PreviousVisit | null): string {
+  if (!previous) return greeting;
+  const about = previous.diagnosis?.split("\n")[0]?.trim() || previous.complaint || "your last visit";
+  const doctor = previous.doctor_name ? ` with ${previous.doctor_name}` : "";
+  return `Welcome back. This is a follow-up to your visit${doctor} on ${formatDate(previous.visit_at)} for **${about}**. How have you been since then, and what would you like the doctor to know today?`;
+}
+
 // A 401 mid-conversation means the CareFlow session itself expired (not a chat/upload
 // failure) - send the patient to sign in again instead of showing an inline error they
 // can't act on.
@@ -47,7 +59,7 @@ function redirectToSignIn(): void {
 export function useIntakeSession(greeting: string, initialActive: ActiveIntake | null, initialPastAttachments: Attachment[] = []) {
   const resumedMessages: ChatMessage[] = initialActive?.identity_complete
     ? [
-        { id: nextId++, role: "assistant", content: greeting },
+        { id: nextId++, role: "assistant", content: openingFor(greeting, initialActive.previous_visit) },
         ...initialActive.transcript.map((message) => ({
           id: nextId++,
           role: message.role,
@@ -58,6 +70,9 @@ export function useIntakeSession(greeting: string, initialActive: ActiveIntake |
   const [state, setState] = useState<IntakeState>({
     sessionId: initialActive?.session_id ?? null,
     caseId: initialActive?.case_id ?? null,
+    visitType: initialActive?.visit_type ?? "new",
+    previousVisit: initialActive?.previous_visit ?? null,
+    startingVisit: false,
     identityComplete: initialActive?.identity_complete ?? false,
     messages: resumedMessages,
     missingFields: initialActive?.missing_fields ?? null,
@@ -106,6 +121,35 @@ export function useIntakeSession(greeting: string, initialActive: ActiveIntake |
     return ref;
   }, [patch]);
 
+  /** The patient chose a new problem or a follow-up: the session starts now. A registered
+   * patient's identity is filled from their profile by the server, so they go straight to the
+   * conversation; a first-time patient gets the registration form. */
+  const startVisit = useCallback(
+    async (visitType: VisitType, followUpOf: string | null, openingLine: string) => {
+      if (sessionRef.current || state.startingVisit) return;
+      patch({ startingVisit: true, error: null });
+      try {
+        const started = await intakeApi.start({ visit_type: visitType, follow_up_of: followUpOf });
+        const consented = await intakeApi.consent(started.session_id, true);
+        sessionRef.current = { sessionId: consented.session_id, caseId: consented.case_id, consented: true };
+        patch({
+          startingVisit: false,
+          sessionId: consented.session_id, caseId: consented.case_id,
+          visitType: consented.visit_type, previousVisit: consented.previous_visit,
+          identityComplete: consented.identity_complete,
+          missingFields: consented.missing_fields, capturedFields: consented.captured_fields,
+          pastAttachments: consented.past_attachments,
+          messages: consented.identity_complete ? [{ id: nextId++, role: "assistant", content: openingLine }] : [],
+        });
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 401) return redirectToSignIn();
+        const detail = err instanceof ApiError ? err.message : "Could not start your visit. Please try again.";
+        patch({ startingVisit: false, error: detail });
+      }
+    },
+    [patch, state.startingVisit],
+  );
+
   const submitIdentity = useCallback(
     async (values: IdentityFormRequest) => {
       if (state.submittingIdentity || state.identityComplete) return;
@@ -119,7 +163,7 @@ export function useIntakeSession(greeting: string, initialActive: ActiveIntake |
           identityComplete: true,
           missingFields: result.missing_fields,
           capturedFields: result.captured_fields,
-          messages: [{ id: nextId++, role: "assistant", content: greeting }],
+          messages: [{ id: nextId++, role: "assistant", content: openingFor(greeting, state.previousVisit) }],
         });
       } catch (err) {
         if (err instanceof ApiError && err.status === 401) return redirectToSignIn();
@@ -127,7 +171,7 @@ export function useIntakeSession(greeting: string, initialActive: ActiveIntake |
         patch({ submittingIdentity: false, error: detail });
       }
     },
-    [ensureSession, greeting, patch, state.identityComplete, state.submittingIdentity],
+    [ensureSession, greeting, patch, state.identityComplete, state.previousVisit, state.submittingIdentity],
   );
 
   const send = useCallback(
@@ -260,5 +304,5 @@ export function useIntakeSession(greeting: string, initialActive: ActiveIntake |
 
   const clearError = useCallback(() => patch({ error: null }), [patch]);
 
-  return { state, submitIdentity, send, retry, ensureSession, refreshCase, clearError, uploadDocument, skipDocument };
+  return { state, startVisit, submitIdentity, send, retry, ensureSession, refreshCase, clearError, uploadDocument, skipDocument };
 }

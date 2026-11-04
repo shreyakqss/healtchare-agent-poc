@@ -32,13 +32,15 @@ class RoutingDecision:
     doctor: dict[str, Any] | None
     appointment_type: dict[str, Any]
     matched_keywords: list[str]
-    basis: str  # "rule_hint" | "keywords" | "default"
+    basis: str  # "follow_up" | "rule_hint" | "keywords" | "default"
     doctors: list[dict[str, Any]] = field(default_factory=list)  # everyone rostered in the department
-    assigned_by: str = "first"  # "earliest" | "fewest_open" | "first"
+    assigned_by: str = "first"  # "previous_doctor" | "earliest" | "fewest_open" | "first"
 
     @property
     def rationale(self) -> str:
-        if self.basis == "rule_hint":
+        if self.basis == "follow_up":
+            why = "this is a follow-up of the patient's earlier visit there"
+        elif self.basis == "rule_hint":
             why = "the triage rule that fired names this specialty"
         elif self.basis == "keywords":
             why = f"the patient reported: {', '.join(self.matched_keywords)}"
@@ -51,7 +53,9 @@ class RoutingDecision:
         )
         if not self.doctor:
             return f"{base} No doctor is rostered for this department."
-        if self.assigned_by == "earliest" and len(self.doctors) > 1:
+        if self.assigned_by == "previous_doctor":
+            how = "saw the patient at the visit this follows up"
+        elif self.assigned_by == "earliest" and len(self.doctors) > 1:
             how = f"earliest free time among the department's {len(self.doctors)} doctors"
         elif self.assigned_by == "fewest_open" and len(self.doctors) > 1:
             how = "no free time to go by, so the doctor with the fewest open cases"
@@ -79,6 +83,13 @@ def by_earliest(slots: list[dict[str, Any]], open_cases: dict[str, int]) -> list
     """Earliest first; at the same time, the doctor with fewer open cases first. Stable, so
     doctors tied on both keep roster order."""
     return sorted(slots, key=lambda s: (_start(s), open_cases.get(s.get("practitioner_id") or "", 0)))
+
+
+def doctor_first(slots: list[dict[str, Any]], practitioner_id: str) -> list[dict[str, Any]]:
+    """A follow-up's ordering: the previous doctor's times first, flagged, then everyone else's,
+    each part keeping its order."""
+    mine = [{**s, "previous_doctor": True} for s in slots if s.get("practitioner_id") == practitioner_id]
+    return mine + [s for s in slots if s.get("practitioner_id") != practitioner_id]
 
 
 def one_per_time(slots: list[dict[str, Any]], keep_id: str | None = None) -> list[dict[str, Any]]:

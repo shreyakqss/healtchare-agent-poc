@@ -31,6 +31,7 @@ from app.services import (
     report_service,
     slot_hold_service,
     triage_rules,
+    visit_history,
 )
 from app.services.hms import effective_doctors_config
 from app.workflows.common import case_id_from, complete_step, completed_step, step
@@ -181,9 +182,12 @@ async def navigate_care(step_input: StepInput) -> StepOutput:
             return StepOutput(content=cached)
         case = case_repo.case_or_404(db, case_id)
         config = effective_doctors_config(hospital_config.load())
-        decision = routing_rules.route(
-            case_repo.facts(db, case_id), config, urgency["priority"], urgency.get("specialty_hint"),
-        )
+        # A follow-up stays in its previous visit's department unless a clinic rule names one.
+        previous = visit_history.previous_visit(db, case)
+        hint = urgency.get("specialty_hint") or (previous.department_id if previous else None)
+        decision = routing_rules.route(case_repo.facts(db, case_id), config, urgency["priority"], hint)
+        if previous and not urgency.get("specialty_hint") and decision.department["id"] == previous.department_id:
+            decision.basis = "follow_up"
         # Every doctor in the department is a candidate: the one with the earliest free time is
         # assigned (fewest open cases on a tie), and the patient may later pick another's time.
         open_cases = doctor_load.open_case_counts(db, [d["id"] for d in decision.doctors], excluding_case=case_id)
@@ -195,11 +199,14 @@ async def navigate_care(step_input: StepInput) -> StepOutput:
             slot_options = slot_hold_service.department_slots(
                 db, get_hms(), decision.department["id"], decision.doctors, 8, case_id, open_cases, utcnow(),
             )
+            if previous and previous.doctor_id:
+                # The doctor who saw the patient last is held by default; the others stay pickable.
+                slot_options = routing_rules.doctor_first(slot_options, previous.doctor_id)
             # The default is held too: it is what the doctor's calendar shows for this case.
             slot = slot_hold_service.hold_first_free(db, case_id, slot_options, "system:care_navigator")
         if slot is not None and slot.get("practitioner_id"):
             decision.doctor = next(d for d in decision.doctors if d["id"] == slot["practitioner_id"])
-            decision.assigned_by = "earliest"
+            decision.assigned_by = "previous_doctor" if previous and slot["practitioner_id"] == previous.doctor_id else "earliest"
         elif decision.doctors:
             decision.doctor = routing_rules.least_loaded(decision.doctors, open_cases)
             decision.assigned_by = "fewest_open"

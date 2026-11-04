@@ -26,8 +26,10 @@ const EMPTY_DRAFT: Draft = {
 
 const REQUIRED_KEYS = ["name", "birth_date", "gender", "address_line1", "city", "state", "postal_code", "country", "contact_preference"] as const;
 
-export function IntakeForm({ onSubmit, busy, disabled, prefillName, prefillEmail, linkedRecord }: {
+export function IntakeForm({ onSubmit, busy, disabled, prefillName, prefillEmail, linkedRecord, mode = "register" }: {
   onSubmit: (values: IdentityFormRequest) => void;
+  // "profile": the patient edits their saved details (Profile tab) - no consent box, saves in place.
+  mode?: "register" | "profile";
   busy: boolean;
   disabled?: boolean;
   // From the signed-in Keycloak account, so the patient doesn't retype what's already known.
@@ -61,7 +63,8 @@ export function IntakeForm({ onSubmit, busy, disabled, prefillName, prefillEmail
           contact_preference: prefillEmail ? "email" : "",
         },
   );
-  const [consented, setConsented] = useState(false);
+  const profile = mode === "profile";
+  const [consented, setConsented] = useState(profile);
   const [touched, setTouched] = useState(false);
 
   function set<K extends keyof Draft>(key: K, value: Draft[K]) {
@@ -95,9 +98,11 @@ export function IntakeForm({ onSubmit, busy, disabled, prefillName, prefillEmail
     <div className="space-y-5">
       <Card>
         <CardHeader
-          title="Your details"
+          title={profile ? "Your profile" : "Your details"}
           description={
-            linkedRecord
+            profile
+              ? "Kept on your clinic record and used for every visit. Changes are saved to the hospital system."
+              : linkedRecord
               ? "Filled in from your last visit - please confirm or update anything that's changed."
               : "We use these details to create your clinic record. Next, the assistant will ask what brings you in."
           }
@@ -148,16 +153,17 @@ export function IntakeForm({ onSubmit, busy, disabled, prefillName, prefillEmail
         </CardBody>
       </Card>
 
-      <label className="flex cursor-pointer items-start gap-3 rounded-md border border-line bg-sunken px-3.5 py-3 text-sm leading-5 text-fg-muted">
+      {profile ? null : (<label className="flex cursor-pointer items-start gap-3 rounded-md border border-line bg-sunken px-3.5 py-3 text-sm leading-5 text-fg-muted">
         <input type="checkbox" checked={consented} onChange={(e) => setConsented(e.target.checked)} className="mt-0.5 h-4 w-4 shrink-0 accent-brand" disabled={disabled} />
         <span>I understand this is a demo and agree to the processing of the information I share. A clinician reviews everything before any decision is made.</span>
-      </label>
+      </label>)}
 
       {touched && !consented ? <Alert tone="warning">Please confirm consent before continuing.</Alert> : null}
 
       <div className="flex justify-end">
-        <Button onClick={submit} loading={busy} disabled={disabled || (touched && !canSubmit)} icon={<Icons.arrowRight size={16} />}>
-          Continue
+        <Button onClick={submit} loading={busy} disabled={disabled || (touched && !canSubmit)}
+          icon={profile ? <Icons.check size={16} /> : <Icons.arrowRight size={16} />}>
+          {profile ? "Save changes" : "Register & continue"}
         </Button>
       </div>
     </div>

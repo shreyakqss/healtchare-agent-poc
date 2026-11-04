@@ -13,20 +13,28 @@ from fastapi.sse import EventSourceResponse
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
-from app.api.v1.serializers import active_intake_out, attachment_out, session_out
-from app.core.errors import DomainError, Unprocessable
-from app.schemas.requests import ConsentRequest, IdentityFormRequest, MessageRequest, StartSessionRequest
+from app.api.v1.serializers import active_intake_out, attachment_out, previous_visit_out, session_out
+from app.core.errors import Conflict, DomainError, Unprocessable
 from app.integrations.hms import get_hms
+from app.integrations.hms.schemas import PatientRegistration
+from app.schemas.requests import (
+    ConsentRequest,
+    IdentityFormRequest,
+    MessageRequest,
+    ProfileRequest,
+    StartSessionRequest,
+)
 from app.schemas.responses import (
     ActiveIntakeResponse,
     AttachmentResponse,
     LinkedPatientRecord,
     MessageResponse,
+    PreviousVisitResponse,
     SessionResponse,
     TurnEvent,
 )
 from app.security import CurrentPrincipal, case_for_principal, rate_limits, require_roles
-from app.services import case_repo, intake_service, prescreen_trigger
+from app.services import case_repo, intake_service, prescreen_trigger, visit_history
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/intake-sessions", tags=["intake"])
@@ -36,8 +44,42 @@ PatientPrincipal = Annotated[CurrentPrincipal, Depends(require_roles("patient"))
 @router.post("", response_model=SessionResponse, status_code=201)
 def start_session(payload: StartSessionRequest, principal: PatientPrincipal, db: Session = Depends(get_db)):
     rate_limits.enforce("intake.start", principal.user_id)
-    session, case = intake_service.start_session(db, principal.user_id)
+    session, case = intake_service.start_session(db, principal.user_id, payload.visit_type, payload.follow_up_of)
     return session_out(db, session, case)
+
+
+@router.get("/follow-up-options", response_model=list[PreviousVisitResponse])
+def follow_up_options(principal: PatientPrincipal, db: Session = Depends(get_db)):
+    """This account's own completed visits - what a follow-up visit may be about."""
+    return [previous_visit_out(v) for v in visit_history.follow_up_options(db, principal.user_id)]
+
+
+def _profile_mrn(principal: CurrentPrincipal, db: Session) -> str | None:
+    return principal.hms_patient_id or case_repo.last_linked_hms_patient_id(db, principal.user_id)
+
+
+@router.put("/profile", response_model=LinkedPatientRecord)
+def update_profile(payload: ProfileRequest, principal: PatientPrincipal, db: Session = Depends(get_db)):
+    """The patient edits their own registration details, written to their own hospital record
+    (looked up by this account's MRN, never by a search). Before the first visit's registration
+    there is no record to edit - that visit's form creates it."""
+    rate_limits.enforce("intake.start", principal.user_id)
+    mrn = _profile_mrn(principal, db)
+    if not mrn:
+        raise Conflict("Your profile is created when you register for your first visit.")
+    get_hms().register_patient(mrn, PatientRegistration(
+        name=payload.name.strip(), birth_date=payload.birth_date, gender=payload.gender.strip(),
+        phone=payload.phone.strip() if payload.phone else None, email=payload.email.strip() if payload.email else None,
+        address_line1=payload.address_line1.strip(),
+        address_line2=payload.address_line2.strip() if payload.address_line2 else None,
+        city=payload.city.strip(), state=payload.state.strip(), postal_code=payload.postal_code.strip(),
+        country=payload.country.strip(), contact_preference=payload.contact_preference.strip(),
+    ))
+    logger.info("Patient profile updated (mrn=%s)", mrn)
+    record = linked_record(principal, db)
+    if record is None:
+        raise Conflict("Your profile was saved but could not be read back. Please reload.")
+    return record
 
 
 @router.get("/greeting")
@@ -59,7 +101,7 @@ def linked_record(principal: PatientPrincipal, db: Session = Depends(get_db)):
     which carry no such claim) by the account's own most recent prior registration. Read-only
     lookup by MRN either way - never a name/DOB search, so it can only ever return this
     account's own record."""
-    mrn = principal.hms_patient_id or case_repo.last_linked_hms_patient_id(db, principal.user_id)
+    mrn = _profile_mrn(principal, db)
     if not mrn:
         return None
     patient = get_hms().get_patient(mrn)

@@ -22,7 +22,7 @@ from app.domain import routing as routing_rules
 from app.domain import scheduling
 from app.integrations.hms import get_hms
 from app.models import PatientCase, RoutingRecommendation
-from app.services import audit, case_repo, hospital_config, slot_hold_service
+from app.services import audit, case_repo, hospital_config, slot_hold_service, visit_history
 from app.services.hms import effective_doctors_config
 
 logger = logging.getLogger(__name__)
@@ -42,6 +42,9 @@ def patient_options(
     if booked := passed_booking(case, routing):
         return [{**booked, "taken": False}], False
     shown = every if every is not None else slot_hold_service.live_options(db, get_hms(), routing, include_taken=True)
+    if previous := visit_history.previous_visit(db, case):
+        # A follow-up lists the doctor who saw the patient last on top; any other stays pickable.
+        shown = routing_rules.doctor_first(shown, previous.doctor_id) if previous.doctor_id else shown
     if case_repo.session_for(db, case).status in DOCTOR_FIXED_STATUSES:
         return [s for s in shown if s.get("practitioner_id") == routing.doctor_id], False
     triage = case_repo.latest_triage(db, case.id)

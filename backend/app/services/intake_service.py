@@ -22,7 +22,7 @@ import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import date, timedelta
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -52,7 +52,16 @@ from app.models import (
 from app.models.facts import SOURCE_HMS
 from app.schemas.requests import IdentityFormRequest
 from app.schemas.responses import MessageResponse, TranscriptMessage, TurnEvent
-from app.services import assistant_tools, audit, case_repo, emergency_service, hospital_config, lifecycle, triage_rules
+from app.services import (
+    assistant_tools,
+    audit,
+    case_repo,
+    emergency_service,
+    hospital_config,
+    lifecycle,
+    triage_rules,
+    visit_history,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -142,25 +151,35 @@ def active_session(db: Session, owner_user_id: uuid.UUID) -> tuple[IntakeSession
     )
 
 
-def start_session(db: Session, owner_user_id: uuid.UUID) -> tuple[IntakeSession, PatientCase]:
+def start_session(
+    db: Session, owner_user_id: uuid.UUID, visit_type: str = "new", follow_up_of: uuid.UUID | None = None,
+) -> tuple[IntakeSession, PatientCase]:
     owner = db.query(ApplicationUser).filter(ApplicationUser.id == owner_user_id).with_for_update().one()
     active = active_session(db, owner_user_id)
     if active is not None:
         return active
+    parent = visit_history.parent_for(db, owner_user_id, follow_up_of) if follow_up_of else None
     session = IntakeSession(status=CaseStatus.CREATED, started_at=utcnow(), channel="web")
     db.add(session)
     db.flush()
 
+    # A returning patient keeps the hospital record their first visit registered; without it a
+    # self-registered account (no Keycloak claim) would create a duplicate record every visit.
+    mrn = owner.hms_patient_id or case_repo.last_linked_hms_patient_id(db, owner_user_id)
     case = PatientCase(
         session_id=session.id,
-        hms_patient_id=owner.hms_patient_id,
+        hms_patient_id=mrn,
         hospital_id=hospital_config.active_id(),
+        visit_type="follow_up" if parent else "new",
+        follow_up_of=parent.id if parent else None,
     )
     db.add(case)
     db.flush()
     db.add(CaseOwner(case_id=case.id, user_id=owner_user_id))
 
-    audit.record(db, case.id, "patient", "intake.session_started", {"channel": "web", "hms_linked": False})
+    audit.record(db, case.id, "patient", "intake.session_started",
+                 {"channel": "web", "hms_linked": bool(mrn), "visit_type": case.visit_type,
+                  "follow_up_of": str(parent.id) if parent else None})
     db.commit()
     return session, case
 
@@ -174,7 +193,62 @@ def record_consent(db: Session, session: IntakeSession, case: PatientCase, grant
     else:
         lifecycle.transition(db, session, CaseStatus.REJECTED, "patient", case.id)
     db.commit()
+    if granted:
+        identity_from_profile(db, session, case)
     return session
+
+
+def _identity_submitted(db: Session, case: PatientCase) -> bool:
+    return db.query(AuditEvent.id).filter(
+        AuditEvent.case_id == case.id, AuditEvent.action == "intake.identity_submitted"
+    ).first() is not None
+
+
+def _write_identity(
+    db: Session, session: IntakeSession, case: PatientCase, transcript_text: str,
+    name: str, birth_date: date, gender: str, contact_preference: str,
+) -> int:
+    turn_index = case_repo.next_turn_index(db, session.id)
+    db.add(IntakeMessage(session_id=session.id, role="patient", content=transcript_text, turn_index=turn_index))
+    for kind, value in (
+        ("name", name),
+        ("age", str(age_from_birth_date(birth_date, utcnow().date()))),
+        ("gender", gender),
+        ("contact_preference", contact_preference),
+    ):
+        value = value.strip()[:MAX_FACT_CHARS]
+        if value:
+            db.add(PatientFact(case_id=case.id, kind=kind, value=value, source_turn=turn_index))
+    return turn_index
+
+
+def identity_from_profile(db: Session, session: IntakeSession, case: PatientCase) -> bool:
+    """A registered patient is not asked who they are again: the identity step is filled from
+    their hospital record (their profile, which they edit on the Profile tab). Falls back to the
+    form - returns False - when there is no record, the HMS is unreachable, or the record lacks
+    a required identity field."""
+    if not case.hms_patient_id or _identity_submitted(db, case):
+        return False
+    try:
+        patient = get_hms().get_patient(case.hms_patient_id)
+    except Exception as exc:  # noqa: BLE001 - any HMS failure just means the form is shown
+        logger.warning("Profile lookup failed (%s); identity form shown", type(exc).__name__)
+        return False
+    if patient is None or not patient.name or not patient.birth_date or not patient.sex:
+        return False
+    preference = patient.contact_preference or ("email" if patient.email and not patient.phone else "phone")
+    detail = patient.email if preference == "email" else patient.phone
+    contact = f"{preference} ({detail.strip()})" if detail else preference
+    transcript_text = (
+        f"Name: {patient.name}\nDate of birth: {patient.birth_date.isoformat()}\nGender: {patient.sex}\n"
+        f"Contact preference: {contact}\n(From the patient's profile.)"
+    )
+    turn_index = _write_identity(db, session, case, transcript_text, patient.name, patient.birth_date, patient.sex, contact)
+    audit.record(db, case.id, "system:intake", "intake.identity_submitted", {"turn_index": turn_index, "from_profile": True})
+    db.commit()
+    if case_repo.missing_identity_fields(db, case.id):
+        logger.info("Profile lacks a required identity field for case %s; form still needed", case.id)
+    return True
 
 
 def _guard_open(db: Session, session: IntakeSession, case: PatientCase) -> None:
@@ -230,12 +304,7 @@ def submit_identity_form(db: Session, session: IntakeSession, case: PatientCase,
     caller (api layer) checks case_repo.missing_identity_fields() afterward and 422s the same
     way the old one-shot form did."""
     _guard_open(db, session, case)
-    already_submitted = (
-        db.query(AuditEvent.id)
-        .filter(AuditEvent.case_id == case.id, AuditEvent.action == "intake.identity_submitted")
-        .first()
-    )
-    if already_submitted:
+    if _identity_submitted(db, case):
         raise Conflict("Identity details have already been submitted for this intake.")
 
     # Patient matching happens before this point in the UI. An explicit linked MRN updates
@@ -252,22 +321,14 @@ def submit_identity_form(db: Session, session: IntakeSession, case: PatientCase,
     )
     case.hms_patient_id = registered.mrn
 
-    turn_index = case_repo.next_turn_index(db, session.id)
-    db.add(IntakeMessage(session_id=session.id, role="patient", content=_identity_transcript_text(payload), turn_index=turn_index))
-
     contact_detail = payload.email if payload.contact_preference == "email" else payload.phone
     contact_preference_value = (
         f"{payload.contact_preference} ({contact_detail.strip()})" if contact_detail else payload.contact_preference
     )
-    for kind, value in (
-        ("name", payload.name),
-        ("age", str(age_from_birth_date(payload.birth_date, utcnow().date()))),
-        ("gender", payload.gender),
-        ("contact_preference", contact_preference_value),
-    ):
-        value = value.strip()[:MAX_FACT_CHARS]
-        if value:
-            db.add(PatientFact(case_id=case.id, kind=kind, value=value, source_turn=turn_index))
+    turn_index = _write_identity(
+        db, session, case, _identity_transcript_text(payload),
+        payload.name, payload.birth_date, payload.gender, contact_preference_value,
+    )
 
     db.commit()
 
@@ -574,6 +635,7 @@ async def _process_turn(db: Session, session: IntakeSession, case: PatientCase, 
                 on_file=_on_file(db, case.id),
                 patient_name=case_repo.demographics(db, case.id).get("name"),
                 medication_candidates=pending_meds if asks_field == "medication" else [],
+                previous_visit=(visit_history.context_text(prev) if (prev := visit_history.previous_visit(db, case)) else None),
             )
             try:
                 async for kind, text in _streamed(lambda emit: question_planner.plan(ctx, emit)):

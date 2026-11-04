@@ -187,7 +187,10 @@ function CaseList({ cases, empty, when, note, danger }: {
             <Avatar name={c.demographics.name || "Unnamed patient"} />
             <div className="min-w-0 flex-1">
               <p className="truncate text-sm font-medium">{c.demographics.name || "Unnamed patient"}</p>
-              <p className="truncate text-xs text-fg-muted">{c.chief_complaint ?? "No chief complaint"}</p>
+              <p className="truncate text-xs text-fg-muted">
+                {c.visit_type === "follow_up" ? <span className="mr-1.5 font-medium text-brand">Follow-up ·</span> : null}
+                {c.chief_complaint ?? "No chief complaint"}
+              </p>
             </div>
             {note?.(c) ? <span className="hidden text-xs text-fg-subtle sm:inline">{note(c)}</span> : null}
             {danger ? null : <PriorityBadge priority={c.priority} />}

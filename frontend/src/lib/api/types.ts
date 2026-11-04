@@ -43,6 +43,18 @@ export interface SessionResponse {
   required_attachment_kinds: string[];
   pending_attachment_kinds: string[];
   past_attachments: Attachment[];
+  /** Step 1 done: by the form, or filled from a registered patient's profile. */
+  identity_complete: boolean;
+  visit_type: VisitType;
+  previous_visit: PreviousVisit | null;
+}
+
+export type VisitType = "new" | "follow_up";
+
+/** A completed visit as a follow-up carries it over: what the doctor signed and released. */
+export interface PreviousVisit {
+  case_id: string; visit_at: string; department_name: string | null; doctor_id: string | null; doctor_name: string | null;
+  complaint: string | null; diagnosis: string | null; prescription: string | null; tests: string | null; advice: string | null;
 }
 
 export interface TranscriptMessage { role: "patient" | "assistant"; content: string; turn_index: number }
@@ -121,6 +133,8 @@ export interface Slot {
   taken?: boolean;
   /** Whose time this is: the options span every doctor in the department. */
   doctor_name?: string | null;
+  /** On a follow-up: the doctor who saw the patient at the visit it follows up (listed first). */
+  previous_doctor?: boolean;
 }
 export interface Routing {
   department_id: string; department_name: string; doctor_id: string | null; doctor_name: string | null;
@@ -163,6 +177,7 @@ export interface Discrepancy {
 export interface AuditEvent { id: string; actor: string; action: string; payload: Record<string, unknown>; created_at: string }
 
 export interface CaseListItem {
+  visit_type?: VisitType;
   case_id: string; session_id: string; status: CaseStatus; priority: Priority | null;
   department_id: string | null; department_name: string | null; doctor_id: string | null; doctor_name: string | null;
   chief_complaint: string | null; demographics: Record<string, string>; hms_patient_id: string | null;
@@ -172,7 +187,6 @@ export interface CaseListItem {
   emergency?: boolean;
 }
 export interface ActiveIntake extends SessionResponse {
-  identity_complete: boolean;
   intake_complete: boolean;
   transcript: TranscriptMessage[];
   attachments: Attachment[];
@@ -222,7 +236,7 @@ export interface AdminPatientItem {
 }
 
 export interface PatientVisitItem {
-  case_id: string; status: CaseStatus; review_decision: ReviewDecision | null;
+  case_id: string; status: CaseStatus; review_decision: ReviewDecision | null; visit_type?: VisitType;
   department_name: string | null; doctor_name: string | null;
   created_at: string; updated_at: string | null;
 }
@@ -264,6 +278,7 @@ export interface CaseDetail {
   required_attachment_kinds: string[]; pending_attachment_kinds: string[];
   triage: Triage | null; routing: Routing | null; discrepancies: Discrepancy[]; prescreening_summary: Summary | null; review: Review | null;
   ai_diagnosis?: Summary | null; report_draft?: Summary | null; assistant_messages?: AssistantMessage[];
+  visit_type?: VisitType; previous_visit?: PreviousVisit | null;
   consultation_notes: ConsultationNote[]; final_summary: Summary | null; care_tasks: CareTask[]; created_at: string;
 }
 

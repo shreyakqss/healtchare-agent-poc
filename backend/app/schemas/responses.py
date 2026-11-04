@@ -6,6 +6,21 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 
+class PreviousVisitResponse(BaseModel):
+    """A completed visit as a follow-up carries it over: what the doctor signed and released."""
+
+    case_id: str
+    visit_at: datetime
+    department_name: str | None = None
+    doctor_id: str | None = None
+    doctor_name: str | None = None
+    complaint: str | None = None
+    diagnosis: str | None = None
+    prescription: str | None = None
+    tests: str | None = None
+    advice: str | None = None
+
+
 class SessionResponse(BaseModel):
     session_id: str
     case_id: str
@@ -18,6 +33,10 @@ class SessionResponse(BaseModel):
     required_attachment_kinds: list[str] = Field(default_factory=list)
     pending_attachment_kinds: list[str] = Field(default_factory=list)
     past_attachments: list[AttachmentResponse] = Field(default_factory=list)
+    # Step 1 done: by the form, or from a registered patient's profile when consent was given.
+    identity_complete: bool = False
+    visit_type: str = "new"
+    previous_visit: PreviousVisitResponse | None = None
 
 
 class TranscriptMessage(BaseModel):
@@ -84,7 +103,6 @@ class AttachmentResponse(BaseModel):
 
 
 class ActiveIntakeResponse(SessionResponse):
-    identity_complete: bool
     intake_complete: bool
     transcript: list[TranscriptMessage] = Field(default_factory=list)
     attachments: list[AttachmentResponse] = Field(default_factory=list)
@@ -129,6 +147,8 @@ class SlotResponse(BaseModel):
     taken: bool = False
     # Whose time this is: slots span every doctor in the department. None on older routings.
     doctor_name: str | None = None
+    # On a follow-up: the doctor who saw the patient at the visit it follows up (listed first).
+    previous_doctor: bool = False
 
 
 class DoctorAssistantResponse(BaseModel):
@@ -274,6 +294,7 @@ class CaseListItem(BaseModel):
     case_id: str
     session_id: str
     status: str
+    visit_type: str = "new"
     priority: str | None
     department_id: str | None
     department_name: str | None
@@ -339,6 +360,7 @@ class AdminPatientItem(BaseModel):
 class PatientVisitItem(BaseModel):
     case_id: str
     status: str
+    visit_type: str = "new"
     review_decision: str | None
     department_name: str | None
     doctor_name: str | None
@@ -393,6 +415,9 @@ class CaseDetailResponse(BaseModel):
     # AI first draft of the consultation report; the doctor's form starts from it.
     report_draft: SummaryResponse | None = None
     assistant_messages: list[AssistantMessageResponse] = Field(default_factory=list)
+    visit_type: str = "new"
+    # The visit a follow-up is about, with its signed diagnosis, prescription and advice.
+    previous_visit: PreviousVisitResponse | None = None
     review: ReviewResponse | None
     consultation_notes: list[ConsultationNoteResponse]
     final_summary: SummaryResponse | None

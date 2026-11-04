@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from app.agents import doctor_assistant
 from app.domain import scheduling
 from app.models import DoctorAssistantMessage, PatientCase
-from app.services import case_repo
+from app.services import case_repo, visit_history
 
 # The intake conversation is the patient's own account; cap it so a long chat cannot crowd out
 # the question (the newest turns are kept).
@@ -43,6 +43,9 @@ def case_context(db: Session, case_id: uuid.UUID, *, with_diagnosis: bool = True
     patient = ", ".join(f"{k} {v[0]}" for k in ("age", "gender") if (v := captured.get(k)))
     if patient:
         lines.append(f"Patient: {patient}")
+    if previous := visit_history.previous_visit(db, case):
+        lines.append("FOLLOW-UP of the patient's previous visit (signed by the treating doctor):\n"
+                     + visit_history.context_text(previous))
     if case.emergency_flagged_at:
         lines.append(
             "EMERGENCY: a red-flag rule matched during intake; the patient was told to call an "

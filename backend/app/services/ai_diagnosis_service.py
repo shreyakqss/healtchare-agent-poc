@@ -12,16 +12,27 @@ from typing import Literal
 from sqlalchemy.orm import Session
 
 from app.agents import diagnosis_writer
-from app.core.errors import NotFound, Unprocessable
+from app.core.errors import Conflict, NotFound, Unprocessable
 from app.db import utcnow
+from app.domain.lifecycle import CaseStatus
 from app.models import ClinicalSummary
 from app.services import audit, case_repo, doctor_assistant_service
 
 KIND = "ai_diagnosis"
+# Once the visit is released (or the case declined) the differential is part of the closed record:
+# the decisions that shaped the signed report must not change after it.
+LOCKED = {CaseStatus.COMPLETED, CaseStatus.REJECTED}
+DIAGNOSIS_LOCKED = "This visit is closed; its AI diagnosis is final."
+
+
+def _require_open(db: Session, case_id: uuid.UUID) -> None:
+    if case_repo.session_for(db, case_repo.case_or_404(db, case_id)).status in LOCKED:
+        raise Conflict(DIAGNOSIS_LOCKED)
 
 
 async def generate(db: Session, case_id: uuid.UUID, actor: str) -> ClinicalSummary:
     """Raises AgentUnavailable when the model is down; the previous differential is kept."""
+    _require_open(db, case_id)
     context = doctor_assistant_service.case_context(db, case_id, with_diagnosis=False)
     result = await diagnosis_writer.write(context)
     summary = ClinicalSummary(
@@ -39,6 +50,7 @@ def decide(
     db: Session, case_id: uuid.UUID, index: int, decision: Literal["accept", "edit", "dismiss"],
     text: str | None, actor: str,
 ) -> ClinicalSummary:
+    _require_open(db, case_id)
     summary = case_repo.summary(db, case_id, KIND)
     if summary is None:
         raise NotFound("No AI diagnosis for this case.")
@@ -70,6 +82,7 @@ def add(
 ) -> ClinicalSummary:
     """A diagnosis the doctor picked from the assistant chat. Added as already accepted - the doctor
     chose it - and marked `added_by: doctor` so it is never mistaken for the model's own ranking."""
+    _require_open(db, case_id)
     condition = condition.strip()
     if not condition:
         raise Unprocessable("A diagnosis needs its name.")
