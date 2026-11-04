@@ -237,6 +237,8 @@ export interface AdminPatientItem {
 
 export interface PatientVisitItem {
   case_id: string; status: CaseStatus; review_decision: ReviewDecision | null; visit_type?: VisitType;
+  complaint?: string | null;
+  follow_up_of?: string | null; follow_up_title?: string | null; follow_up_at?: string | null;
   department_name: string | null; doctor_name: string | null;
   created_at: string; updated_at: string | null;
 }

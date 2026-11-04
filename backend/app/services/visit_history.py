@@ -37,7 +37,7 @@ class PreviousVisit:
     advice: str | None
 
 
-def _complaint(db: Session, case_id: uuid.UUID) -> str | None:
+def complaint(db: Session, case_id: uuid.UUID) -> str | None:
     values = [f.value for f in case_repo.facts(db, case_id) if f.kind == "reason_for_visit"]
     return ", ".join(dict.fromkeys(values)) or None
 
@@ -53,7 +53,7 @@ def summarize(db: Session, case: PatientCase) -> PreviousVisit:
         department_name=routing.department_name if routing else None,
         doctor_id=routing.doctor_id if routing else None,
         doctor_name=(note.doctor_name if note and note.doctor_name else None) or (routing.doctor_name if routing else None),
-        complaint=_complaint(db, case.id),
+        complaint=complaint(db, case.id),
         diagnosis=note.diagnosis if note else None,
         prescription=note.prescription if note else None,
         tests=note.tests_ordered if note else None,

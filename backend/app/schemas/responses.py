@@ -366,6 +366,12 @@ class PatientVisitItem(BaseModel):
     doctor_name: str | None
     created_at: datetime
     updated_at: datetime | None
+    # What the patient came in with, in their words - the card's title.
+    complaint: str | None = None
+    # A follow-up: the visit it follows up, by its signed diagnosis (else complaint) and date.
+    follow_up_of: str | None = None
+    follow_up_title: str | None = None
+    follow_up_at: datetime | None = None
 
 
 class EmergencyAdviceResponse(BaseModel):

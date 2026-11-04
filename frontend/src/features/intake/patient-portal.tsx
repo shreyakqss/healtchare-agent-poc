@@ -47,6 +47,9 @@ export function PatientPortal({
   const pendingKinds = initialRequiredAttachmentKinds.filter(
     (k) => !uploadedKinds.has(k) && !(k in state.skippedKinds),
   );
+  // The checklist is only useful while answers are being collected: not before a visit is
+  // started, not once intake is done, and not on the other tabs.
+  const showProgress = tab === "chat" && state.sessionId !== null && !state.complete;
   const showDocumentPrompt = !documentsDismissed && pendingKinds.length > 0;
 
   async function checkUpdates() {
@@ -65,7 +68,7 @@ export function PatientPortal({
       <Tabs<Tab> idPrefix="patient-portal" className="sticky top-14 z-20 mb-6 bg-canvas" value={tab} onChange={setTab}
         tabs={[{ id: "chat", label: profile ? "Book a visit" : "Intake form" }, { id: "documents", label: "Documents" }, { id: "visits", label: "My visits" }, { id: "profile", label: "Profile" }]} />
 
-      <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_260px]">
+      <div className={cn("grid gap-8", showProgress && "lg:grid-cols-[minmax(0,1fr)_260px]")}>
         <section
           id="patient-portal-panel-chat"
           role="tabpanel"
@@ -207,7 +210,7 @@ export function PatientPortal({
               <h2 className="text-xl font-semibold tracking-tight">My visits</h2>
               <p className="mt-1 text-sm text-fg-muted">Your appointments and visit summaries appear here.</p>
             </header>
-            <VisitsPanel currentCaseId={state.caseId} initialVisits={initialVisits} />
+            <VisitsPanel currentCaseId={state.caseId} currentVisitType={state.visitType} currentPrevious={state.previousVisit} initialVisits={initialVisits} />
           </div>
         </section>
 
@@ -222,12 +225,12 @@ export function PatientPortal({
           </div>
         </section>
 
-        <aside className="lg:sticky lg:top-20 lg:self-start" aria-label="Intake progress">
+        {showProgress ? <aside className="lg:sticky lg:top-20 lg:self-start" aria-label="Intake progress">
           <div className="rounded-lg border border-line bg-surface p-5 shadow-card">
             <IntakeProgress requiredFields={initialRequiredFields} missingFields={state.missingFields} capturedFields={state.capturedFields}
               complete={state.complete} fallbackMode={initialApiOnline && !initialLlmConfigured} />
           </div>
-        </aside>
+        </aside> : null}
       </div>
     </div>
   );

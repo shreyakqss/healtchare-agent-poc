@@ -325,6 +325,19 @@ def listed[T: (CaseListItem, PatientVisitItem)](items: list[T]) -> list[T]:
     return [i for i in items if i.status not in HIDDEN_STATUSES]
 
 
+def _follow_up_fields(db: Session, case: PatientCase, cache: dict) -> dict:
+    if case.visit_type != "follow_up" or case.follow_up_of is None:
+        return {}
+    if case.follow_up_of not in cache:
+        parent = db.get(PatientCase, case.follow_up_of)
+        cache[case.follow_up_of] = visit_history.summarize(db, parent) if parent else None
+    prev = cache[case.follow_up_of]
+    if prev is None:
+        return {}
+    first = next((x.strip() for x in (prev.diagnosis or "").splitlines() if x.strip()), None)
+    return {"follow_up_of": prev.case_id, "follow_up_title": first or prev.complaint, "follow_up_at": prev.visit_at}
+
+
 def patient_case_list(db: Session, cases: list[PatientCase]) -> list[PatientVisitItem]:
     if not cases:
         return []
@@ -359,6 +372,7 @@ def patient_case_list(db: Session, cases: list[PatientCase]) -> list[PatientVisi
         .group_by(AuditEvent.case_id)
         .all()
     )
+    parents: dict[uuid.UUID, visit_history.PreviousVisit] = {}
     items = []
     for case in cases:
         session = sessions[case.session_id]
@@ -372,6 +386,8 @@ def patient_case_list(db: Session, cases: list[PatientCase]) -> list[PatientVisi
                 status=session.status,
                 review_decision=review.decision if review else None,
                 visit_type=case.visit_type,
+                complaint=visit_history.complaint(db, case.id),
+                **_follow_up_fields(db, case, parents),
                 department_name=case_routing.department_name if case_routing else None,
                 doctor_name=case_routing.doctor_name if case_routing else None,
                 created_at=case.created_at,
