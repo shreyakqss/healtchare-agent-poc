@@ -1,5 +1,6 @@
 import Link from "next/link";
-import type { CaseDetail, PreviousVisit } from "@/lib/api";
+import type { AIDiagnosisSections, CaseDetail, PreviousVisit } from "@/lib/api";
+import { Button } from "@/components/ui/button";
 import { Card, CardBody, CardHeader, SectionTitle } from "@/components/ui/card";
 import { Badge, PriorityBadge } from "@/components/ui/badge";
 import { Alert, EmptyState } from "@/components/ui/feedback";
@@ -26,7 +27,7 @@ function Bullets({ items, empty = "None recorded" }: { items: string[]; empty?: 
   );
 }
 
-export function OverviewTab({ detail }: { detail: CaseDetail }) {
+export function OverviewTab({ detail, onOpenDiagnosis }: { detail: CaseDetail; onOpenDiagnosis: () => void }) {
   const s = detail.prescreening_summary;
   const sec = (s?.sections ?? {}) as Record<string, unknown>;
   const t = detail.triage;
@@ -38,6 +39,7 @@ export function OverviewTab({ detail }: { detail: CaseDetail }) {
   return (
     <div className="grid gap-5 lg:grid-cols-5">
       <div className="space-y-5 lg:col-span-3">
+        <WorkingDiagnosis detail={detail} onOpen={onOpenDiagnosis} />
         {detail.previous_visit ? <PreviousVisitCard visit={detail.previous_visit} /> : null}
         <Card>
           <CardHeader
@@ -193,6 +195,47 @@ function PreviousVisitCard({ visit }: { visit: PreviousVisit }) {
           <div><SectionTitle>Tests advised</SectionTitle><div className="mt-1.5"><Bullets items={lines(visit.tests)} /></div></div>
           <div className="sm:col-span-2"><SectionTitle>Advice given</SectionTitle><div className="mt-1.5"><Bullets items={lines(visit.advice)} /></div></div>
         </div>
+      </CardBody>
+    </Card>
+  );
+}
+
+/** The AI's leading diagnosis at a glance (or what the doctor accepted), with its allergy-checked
+ * regimen and how many prescribing alerts wait on the AI Diagnosis tab. Decision support only. */
+function WorkingDiagnosis({ detail, onOpen }: { detail: CaseDetail; onOpen: () => void }) {
+  const sections = detail.ai_diagnosis?.sections as AIDiagnosisSections | undefined;
+  if (!sections?.differentials?.length) return null;
+  const decisions = sections.decisions ?? {};
+  const acceptedIdx = sections.differentials.findIndex((_, i) => ["accept", "edit"].includes(decisions[String(i)]?.decision ?? ""));
+  const idx = acceptedIdx >= 0 ? acceptedIdx : sections.differentials.findIndex((_, i) => decisions[String(i)]?.decision !== "dismiss");
+  if (idx < 0) return null;
+  const top = sections.differentials[idx];
+  const name = decisions[String(idx)]?.text ?? top.condition;
+  const others = sections.differentials.filter((_, i) => i !== idx && decisions[String(i)]?.decision !== "dismiss").map((d) => d.condition);
+  const alerts = sections.safety_alerts?.length ?? 0;
+  return (
+    <Card className="border-brand-ring">
+      <CardHeader
+        title={<span className="flex items-center gap-2"><Icons.sparkles size={16} className="text-brand" />{acceptedIdx >= 0 ? "Working diagnosis (accepted)" : "AI working diagnosis"}</span>}
+        description={acceptedIdx >= 0 ? "Accepted by the treating doctor." : "Most likely on the AI differential. Unverified until you examine and accept it."}
+        action={<Button size="sm" variant="secondary" onClick={onOpen} icon={<Icons.arrowRight size={14} />}>Open AI Diagnosis</Button>}
+      />
+      <CardBody className="space-y-4">
+        <div className="flex flex-wrap items-center gap-2">
+          <p className="text-lg font-semibold">{name}</p>
+          <Badge tone={top.likelihood === "high" ? "danger" : top.likelihood === "medium" ? "warning" : "neutral"}>{top.likelihood} likelihood</Badge>
+          {alerts ? <Badge tone="warning"><Icons.alert size={11} /> {alerts} prescribing alert{alerts === 1 ? "" : "s"}</Badge> : null}
+        </div>
+        {top.supporting.length ? <Bullets items={top.supporting.slice(0, 4)} /> : null}
+        {top.medications?.length ? (
+          <div>
+            <SectionTitle>Suggested Rx if confirmed</SectionTitle>
+            <ul className="mt-1.5 space-y-0.5 text-sm">
+              {top.medications.map((m) => <li key={m.name}><span className="font-medium">{m.name}</span> {m.dose}, {m.frequency}, {m.duration}</li>)}
+            </ul>
+          </div>
+        ) : null}
+        {others.length ? <p className="text-xs text-fg-muted">Also considered: {others.join(", ")}</p> : null}
       </CardBody>
     </Card>
   );

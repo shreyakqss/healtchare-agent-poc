@@ -78,6 +78,11 @@ tokens must never be exposed to browser code or storage.
   the AI never writes examination findings, and the audit records which sections were still AI-written at signing.
   Every save is a new `ConsultationNote` version until release; once the visit summary is released the report is
   final (`/consultation-notes`, `/report/*` 409 on a `COMPLETED` case).
+  It is an OPD consultation record, not a summary: presenting complaints, HPI, past history, allergies, current
+  medications, examination (stored under headings in `notes`), diagnosis (name only), investigations, Rx, advice,
+  follow-up (stored together in `follow_up_instructions`, follow-up last as `Follow-up: ...`) and referral. The
+  writer charts in terse clinical lines and never comments on missing data. The released record carries the
+  doctor's signed advice verbatim; the visit reporter's narrative fields are not shown to the doctor or patient.
 - Patients register once. The first visit's identity form creates the OpenEMR record; a later visit reuses that
   MRN (`intake_service.start_session` falls back to `last_linked_hms_patient_id`) and fills the identity step
   from it on consent (`identity_from_profile`), so the form is shown only when no complete record exists. The

@@ -127,7 +127,7 @@ export function DiagnosisTab({ detail, doctorContext, onChanged, onOpenReport }:
             ) : null}
 
             {sections.red_flags.length ? (
-              <Alert tone="danger" title="Must exclude">
+              <Alert tone="danger" title="Can't miss (exclude these)">
                 <ul className="list-disc space-y-0.5 pl-5">{sections.red_flags.map((r) => <li key={r}>{r}</li>)}</ul>
               </Alert>
             ) : null}
@@ -138,7 +138,10 @@ export function DiagnosisTab({ detail, doctorContext, onChanged, onOpenReport }:
                 const dismissed = decision?.decision === "dismiss";
                 const accepted = decision?.decision === "accept" || decision?.decision === "edit";
                 return (
-                  <li key={`${d.condition}-${i}`} className={cn(
+                  <li key={`${d.condition}-${i}`} className="space-y-1.5">
+                    {i === 0 ? <p className="text-xs font-semibold uppercase tracking-wide text-brand">Most likely</p> : null}
+                    {i === 1 ? <p className="pt-2 text-xs font-semibold uppercase tracking-wide text-fg-muted">Other possibilities</p> : null}
+                  <div className={cn(
                     "rounded-lg border p-4",
                     accepted ? "border-success bg-success-soft/40" : "border-line",
                     dismissed && "opacity-60",
@@ -195,6 +198,7 @@ export function DiagnosisTab({ detail, doctorContext, onChanged, onOpenReport }:
                         </Button>
                       </div>
                     )}
+                  </div>
                   </li>
                 );
               })}

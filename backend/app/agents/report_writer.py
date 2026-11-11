@@ -42,7 +42,8 @@ DRAFT_INSTRUCTIONS = [
     "the most likely diagnosis followed by '(provisional)'. Name only, never the reasoning.",
     "The prescription follows the accepted diagnosis's guideline regimen when the case context gives one, "
     "already adjusted for allergies; otherwise standard adult doses for the patient's age. Generic names, one "
-    "medicine per line, nothing the patient is allergic to.",
+    "medicine per line, nothing the patient is allergic to. One definite strength, schedule and duration per "
+    "line (no ranges, no 'may increase'); the doctor adjusts.",
 ]
 
 EDIT_INSTRUCTIONS = [

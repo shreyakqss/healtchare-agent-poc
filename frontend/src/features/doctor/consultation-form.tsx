@@ -6,44 +6,79 @@ import {
   type CaseDetail, type ConsultationNote, type HospitalIdentity, type ReportEdit, type ReportSection,
 } from "@/lib/api";
 import { Alert, Badge, Button, Card, CardBody, CardHeader, Field, Icons, Textarea, useToast } from "@/components/ui";
-import { cn } from "@/lib/utils";
+import { cn, formatDate, formatDateTime, titleCase } from "@/lib/utils";
 import { CredentialFields, useClinicianCredentials } from "@/features/doctor/credential-fields";
 import { acceptedDiagnoses } from "@/features/case/diagnosis-tab";
 import type { Me } from "@/features/doctor/use-doctor";
 
 type Sections = Record<ReportSection, string>;
 
-/** The consultation report template (the ABDM OP consultation shape), in order. */
-const TEMPLATE: Array<{ key: ReportSection; label: string; hint: string; rows: number }> = [
-  { key: "history", label: "Complaint & history", hint: "Presenting complaint and relevant history", rows: 4 },
+/** The OPD consultation record (SOAP / ABDM OP consultation shape), in order. `half` sections sit
+ * side by side; the rest take the full width. */
+const TEMPLATE: Array<{ key: ReportSection; label: string; hint: string; rows: number; half?: boolean }> = [
+  { key: "complaints", label: "Presenting complaints", hint: "One per line with duration, e.g. Fever x 3 days", rows: 3 },
+  { key: "history", label: "History of presenting illness", hint: "Short clinical lines, including pertinent negatives", rows: 4 },
+  { key: "past_history", label: "Past history", hint: "Medical / surgical; Nil significant if none", rows: 2, half: true },
+  { key: "allergies", label: "Allergies", hint: "With reaction; NKDA if none", rows: 2, half: true },
+  { key: "medications", label: "Current medications", hint: "What the patient already takes", rows: 2 },
   { key: "examination", label: "Examination findings", hint: "Yours alone - the AI never writes findings", rows: 3 },
   { key: "diagnosis", label: "Diagnosis", hint: "Starts from the diagnoses you accepted on the AI Diagnosis tab", rows: 2 },
-  { key: "investigations", label: "Investigations", hint: "Tests to get done, one per line", rows: 3 },
-  { key: "prescription", label: "Prescription", hint: "One medicine per line: dose, frequency, route, duration", rows: 4 },
-  { key: "advice", label: "Advice & follow-up", hint: "Plain language for the patient; becomes the draft follow-up task", rows: 4 },
-  { key: "referral", label: "Notes for other doctors", hint: "Clinicians only, never shown to the patient", rows: 3 },
+  { key: "investigations", label: "Investigations", hint: "Test names, one per line", rows: 2 },
+  { key: "prescription", label: "Rx", hint: "One per line: Tab. Name strength, 1-0-1 (BD) x days, instructions", rows: 4 },
+  { key: "advice", label: "Advice", hint: "Short plain-language lines for the patient", rows: 3 },
+  { key: "follow_up", label: "Follow-up", hint: "When to review, and when to come back earlier", rows: 2 },
+  { key: "referral", label: "Notes for other doctors", hint: "Clinicians only, never shown to the patient", rows: 2 },
 ];
 
-const HISTORY_HEADING = "Complaint and history:";
-const EXAM_HEADING = "Examination:";
+// The clinical part of the record lives in the note's `notes` text under these headings.
+const NOTE_HEADINGS: Array<[ReportSection, string]> = [
+  ["complaints", "Presenting complaints:"],
+  ["history", "History of presenting illness:"],
+  ["past_history", "Past history:"],
+  ["allergies", "Allergies:"],
+  ["medications", "Current medications:"],
+  ["examination", "Examination:"],
+];
+const LEGACY_HISTORY = "Complaint and history:";
+const FOLLOW_UP_PREFIX = "Follow-up: ";
 
 function emptySections(): Sections {
-  return { history: "", examination: "", diagnosis: "", investigations: "", prescription: "", advice: "", referral: "" };
+  return {
+    complaints: "", history: "", past_history: "", allergies: "", medications: "", examination: "",
+    diagnosis: "", investigations: "", prescription: "", advice: "", follow_up: "", referral: "",
+  };
 }
 
-/** History and examination share the note's `notes` text under two headings. */
 function composeNotes(s: Sections): string {
-  return [s.history.trim() && `${HISTORY_HEADING}\n${s.history.trim()}`, s.examination.trim() && `${EXAM_HEADING}\n${s.examination.trim()}`]
-    .filter(Boolean).join("\n\n");
+  return NOTE_HEADINGS.map(([key, heading]) => s[key].trim() && `${heading}\n${s[key].trim()}`).filter(Boolean).join("\n\n");
+}
+
+/** Advice and follow-up are stored together as the patient's instructions, follow-up last. */
+function composeInstructions(s: Sections): string {
+  return [s.advice.trim(), s.follow_up.trim() && `${FOLLOW_UP_PREFIX}${s.follow_up.trim()}`].filter(Boolean).join("\n");
+}
+
+function parseNotes(text: string): Partial<Sections> {
+  const headings: Array<[ReportSection, string]> = [...NOTE_HEADINGS, ["history", LEGACY_HISTORY]];
+  const found = headings
+    .map(([key, heading]) => ({ key, heading, at: text.indexOf(heading) }))
+    .filter((h) => h.at >= 0)
+    .sort((a, b) => a.at - b.at);
+  if (!found.length) return { history: text.trim() };
+  return Object.fromEntries(found.map((h, i) => [
+    h.key, text.slice(h.at + h.heading.length, i + 1 < found.length ? found[i + 1].at : undefined).trim(),
+  ]));
 }
 
 function fromNote(n: ConsultationNote): Sections {
-  const exam = n.notes.indexOf(EXAM_HEADING);
-  const history = (exam >= 0 ? n.notes.slice(0, exam) : n.notes).replace(HISTORY_HEADING, "").trim();
+  const lines = (n.follow_up_instructions ?? "").split("\n");
+  const followUp = lines.find((l) => l.startsWith(FOLLOW_UP_PREFIX));
   return {
-    history, examination: exam >= 0 ? n.notes.slice(exam + EXAM_HEADING.length).trim() : "",
+    ...emptySections(), ...parseNotes(n.notes),
     diagnosis: n.diagnosis ?? "", investigations: n.tests_ordered ?? "", prescription: n.prescription ?? "",
-    advice: n.follow_up_instructions ?? "", referral: n.referral_notes ?? "",
+    advice: lines.filter((l) => l !== followUp).join("\n").trim(),
+    follow_up: followUp ? followUp.slice(FOLLOW_UP_PREFIX.length).trim() : "",
+    referral: n.referral_notes ?? "",
   };
 }
 
@@ -120,7 +155,7 @@ export function ConsultationForm({ c, me, onDone, hospital }: {
         doctor_username: credentials.username.trim(), doctor_password: credentials.password,
         consultation_mode: "in_person", notes: composeNotes(sections),
         diagnosis: opt(sections.diagnosis), prescription: opt(sections.prescription),
-        tests_ordered: opt(sections.investigations), follow_up_instructions: opt(sections.advice),
+        tests_ordered: opt(sections.investigations), follow_up_instructions: opt(composeInstructions(sections)),
         referral_notes: opt(sections.referral), ai_drafted_sections: aiSections,
       });
       toast.push({ tone: "success", message: "Report saved" });
@@ -197,7 +232,8 @@ export function ConsultationForm({ c, me, onDone, hospital }: {
               <p className="mt-1 whitespace-pre-line">{saved.referral}</p>
             </div>
           ) : null}
-          <ReportDocument patientName={c.demographics.name} doctorName={latest.doctor_name} sections={saved} hospital={hospital} />
+          <ReportDocument c={c} doctorName={latest.doctor_name} sections={saved} hospital={hospital} full
+            signedAt={latest.created_at} />
           {c.consultation_notes.length > 1 ? (
             <p className="text-xs text-fg-subtle">Version {c.consultation_notes.length}; earlier versions are kept in the record and the audit trail.</p>
           ) : null}
@@ -215,7 +251,7 @@ export function ConsultationForm({ c, me, onDone, hospital }: {
     );
   }
 
-  const hasBody = Boolean(sections.history.trim() || sections.examination.trim());
+  const hasBody = Boolean(sections.complaints.trim() || sections.history.trim() || sections.examination.trim());
 
   return (
     <Card className="border-brand-ring/40">
@@ -233,11 +269,11 @@ export function ConsultationForm({ c, me, onDone, hospital }: {
       />
       <CardBody className="space-y-4">
         <div className="grid gap-6 lg:grid-cols-2">
-          <div className="space-y-4">
+          <div className="grid gap-4 sm:grid-cols-2">
             {TEMPLATE.map((t) => {
               const ai = aiSections.includes(t.key);
               return (
-                <div key={t.key}>
+                <div key={t.key} className={t.half ? undefined : "sm:col-span-2"}>
                   <Field htmlFor={`r-${t.key}`} hint={t.hint}
                     label={<span className="inline-flex items-center gap-2">{t.label}{ai ? <Badge tone="brand">AI draft</Badge> : null}</span>}>
                     <Textarea id={`r-${t.key}`} rows={t.rows} value={sections[t.key]} onChange={(e) => setSection(t.key, e.target.value)}
@@ -259,7 +295,7 @@ export function ConsultationForm({ c, me, onDone, hospital }: {
           </div>
 
           <div className="space-y-4">
-            <ReportDocument patientName={c.demographics.name} doctorName={me.name} sections={sections} hospital={hospital} />
+            <ReportDocument c={c} doctorName={me.name} sections={sections} hospital={hospital} />
             <ReportAssistant caseId={c.case_id} sections={sections} onApply={(e) => setSection(e.section, e.text, true)} />
           </div>
         </div>
@@ -392,56 +428,98 @@ function ReportAssistant({ caseId, sections, onApply }: {
   );
 }
 
-const DOCUMENT_SECTIONS: Array<{ key: ReportSection; label: string }> = [
+// The patient's copy: what they take away. The clinical record adds history and examination.
+const PATIENT_SECTIONS: Array<{ key: ReportSection; label: string }> = [
   { key: "diagnosis", label: "Diagnosis" },
-  { key: "prescription", label: "Prescription" },
-  { key: "investigations", label: "Tests / investigations" },
-  { key: "advice", label: "Advice & follow-up" },
+  { key: "prescription", label: "Rx" },
+  { key: "investigations", label: "Investigations" },
+  { key: "advice", label: "Advice" },
+  { key: "follow_up", label: "Follow-up" },
+];
+const CLINICAL_SECTIONS: Array<{ key: ReportSection; label: string }> = [
+  { key: "complaints", label: "Presenting complaints" },
+  { key: "history", label: "History of presenting illness" },
+  { key: "past_history", label: "Past history" },
+  { key: "allergies", label: "Allergies" },
+  { key: "medications", label: "Current medications" },
+  { key: "examination", label: "Examination" },
 ];
 
-/** A live, read-only render of what the patient will see, on the clinic's own letterhead.
- * `hospital` is the facility record this app already reads for the clinic's identity (OpenEMR
- * first, YAML config as fallback - see GET /hospital/config). History, examination and notes for
- * other doctors are clinical record, not the patient's document. */
-function ReportDocument({ patientName, doctorName, hospital, sections }: {
-  patientName: string; doctorName: string | null; hospital: HospitalIdentity | null; sections: Sections;
+/** The consultation record on the clinic's letterhead, laid out like a printed OPD sheet:
+ * patient details, then the record section by section, then the doctor's signature block.
+ * While editing it previews the patient's copy; `full` (the signed record) adds the clinical
+ * sections. `hospital` is the facility record (OpenEMR first, YAML config as fallback). */
+function ReportDocument({ c, doctorName, hospital, sections, full = false, signedAt }: {
+  c: CaseDetail; doctorName: string | null; hospital: HospitalIdentity | null; sections: Sections;
+  full?: boolean; signedAt?: string;
 }) {
   const addressLine = hospital?.address
     ? [hospital.address.line1, hospital.address.city, hospital.address.state, hospital.address.postal_code].filter(Boolean).join(", ")
     : null;
   const contactLine = hospital ? [hospital.phone, hospital.email].filter(Boolean).join(" · ") : null;
-  const filled = DOCUMENT_SECTIONS.filter((s) => sections[s.key]?.trim());
+  const shown = [...(full ? CLINICAL_SECTIONS : []), ...PATIENT_SECTIONS].filter((s) => sections[s.key]?.trim());
+  const ageSex = [c.demographics.age && `${c.demographics.age} y`, c.demographics.sex ? titleCase(c.demographics.sex) : null].filter(Boolean).join(" / ");
+  const allergies = sections.allergies.trim();
 
   return (
-    <div className="rounded-md border border-line bg-surface shadow-card">
+    <div className="rounded-md border border-line bg-surface text-fg shadow-card">
       <div className={hospital?.has_letterhead ? "border-b border-line" : "border-b-2 border-brand px-5 py-4"}>
         {hospital?.has_letterhead ? (
           // eslint-disable-next-line @next/next/no-img-element -- the clinic's own uploaded letterhead, not a static import
           <img src={hospitalApi.letterheadUrl(hospital.id)} alt={`${hospital.name} letterhead`} className="w-full object-contain" />
         ) : hospital ? (
           <>
-            <p className="text-lg font-bold text-fg">{hospital.name}</p>
+            <p className="text-lg font-bold">{hospital.name}</p>
             {addressLine ? <p className="mt-0.5 text-xs text-fg-muted">{addressLine}</p> : null}
             {contactLine ? <p className="text-xs text-fg-muted">{contactLine}</p> : null}
           </>
-        ) : (
-          <p className="text-xs font-semibold uppercase tracking-wide text-fg-subtle">Visit report</p>
-        )}
+        ) : null}
       </div>
-      <div className="max-h-[32rem] min-h-[15.5rem] space-y-4 overflow-y-auto px-5 py-4">
-        <dl className="grid grid-cols-2 gap-2 text-xs text-fg-muted">
-          <div><dt className="text-fg-subtle">Patient</dt><dd className="font-medium text-fg">{patientName || "Unnamed patient"}</dd></div>
-          <div><dt className="text-fg-subtle">Date</dt><dd className="font-medium text-fg" suppressHydrationWarning>{new Date().toLocaleDateString()}</dd></div>
-          <div className="col-span-2"><dt className="text-fg-subtle">Clinician</dt><dd className="font-medium text-fg">{doctorName ?? "–"}</dd></div>
+      <div className="max-h-[40rem] min-h-[15.5rem] space-y-4 overflow-y-auto px-5 py-4">
+        <p className="text-center text-xs font-semibold uppercase tracking-widest text-fg-muted">
+          {full ? "OPD consultation record" : "Prescription & advice (patient copy)"}
+        </p>
+        <dl className="grid grid-cols-2 gap-x-4 gap-y-1.5 rounded-md border border-line px-3 py-2.5 text-xs sm:grid-cols-4">
+          <Meta label="Patient" value={c.demographics.name || "–"} />
+          <Meta label="Age / Sex" value={ageSex || "–"} />
+          <Meta label="MRN" value={c.hms_patient_id ?? "–"} />
+          <Meta label="Date" value={formatDate(signedAt ?? c.created_at)} />
+          <Meta label="Doctor" value={doctorName ?? "–"} />
+          <Meta label="Department" value={c.routing?.department_name ?? "–"} />
         </dl>
-        <hr className="border-line" />
-        {filled.length ? filled.map((s) => (
-          <div key={s.key}>
-            <p className="text-xs font-medium text-fg-muted">{s.label}</p>
-            <p className="mt-0.5 whitespace-pre-wrap text-[15px] leading-6 text-fg">{sections[s.key]}</p>
-          </div>
+        {allergies && !full ? (
+          <p className="rounded-md border border-danger/40 bg-danger-soft px-3 py-1.5 text-xs font-medium text-danger">Allergies: {allergies.replace(/\n/g, ", ")}</p>
+        ) : null}
+        {shown.length ? shown.map((s) => (
+          <section key={s.key}>
+            <h4 className="border-b border-line pb-0.5 text-xs font-semibold uppercase tracking-wide text-fg-muted">
+              {s.key === "prescription" ? <span className="mr-1 font-serif text-base normal-case text-fg">&#8478;</span> : null}{s.label}
+            </h4>
+            {s.key === "prescription" ? (
+              <ol className="mt-1.5 list-decimal space-y-1 pl-5 text-sm leading-6">
+                {sections.prescription.split("\n").filter((l) => l.trim()).map((l, i) => <li key={i}>{l}</li>)}
+              </ol>
+            ) : (
+              <p className="mt-1.5 whitespace-pre-wrap text-sm leading-6">{sections[s.key]}</p>
+            )}
+          </section>
         )) : <p className="text-sm italic text-fg-subtle">Nothing written yet.</p>}
+        <div className="flex justify-end pt-4">
+          <div className="min-w-48 border-t border-fg-subtle pt-1 text-right text-xs">
+            <p className="font-semibold">{doctorName ?? "Doctor"}</p>
+            <p className="text-fg-muted">{signedAt ? `Signed ${formatDateTime(signedAt)}` : "Signature on signing"}</p>
+          </div>
+        </div>
       </div>
+    </div>
+  );
+}
+
+function Meta({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0">
+      <dt className="text-fg-subtle">{label}</dt>
+      <dd className="truncate font-medium" suppressHydrationWarning>{value}</dd>
     </div>
   );
 }

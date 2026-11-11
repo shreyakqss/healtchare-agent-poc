@@ -61,7 +61,8 @@ export function PatientResults({ detail, onUpdated, onRefresh, refreshing }: {
   const routing = detail.routing;
   const completed = detail.status === "COMPLETED";
   const sections = detail.final_summary ?? {};
-  const friendly = asString(sections.patient_friendly_summary);
+  const doctor = asString(sections.doctor);
+  const department = asString(sections.department);
   const diagnosis = asString(sections.diagnosis);
   const prescription = asString(sections.prescription);
   const testsOrdered = asString(sections.tests_ordered);
@@ -86,14 +87,23 @@ export function PatientResults({ detail, onUpdated, onRefresh, refreshing }: {
             // eslint-disable-next-line @next/next/no-img-element -- the clinic's own uploaded letterhead, not a static import
             <img src={casesApi.letterheadUrl(detail.case_id)} alt="Clinic letterhead" className="-mx-5 -mt-5 mb-1 block w-[calc(100%+2.5rem)] max-w-none border-b border-line bg-white object-contain" />
           ) : null}
-          {friendly ? <p className="text-[15px] leading-7">{friendly}</p> : null}
+          {/* The record the doctor signed, section by section - no AI summary in front of it. */}
+          <p className="text-center text-xs font-semibold uppercase tracking-widest text-fg-muted">Prescription &amp; advice</p>
+          <dl className="grid grid-cols-2 gap-x-4 gap-y-1.5 rounded-md border border-line px-3 py-2.5 text-xs">
+            <Item label="Doctor" value={doctor ?? "–"} />
+            <Item label="Department" value={department ?? "–"} />
+          </dl>
           <dl className="grid gap-4">
             {mode ? <Item label="Consultation" value={mode === "virtual" ? "Video consultation" : "In person"} /> : null}
             {diagnosis ? <Item label="Diagnosis" value={<span className="whitespace-pre-wrap">{diagnosis}</span>} /> : null}
-            {prescription ? <Item label="Prescription" value={<span className="whitespace-pre-wrap">{prescription}</span>} /> : null}
+            {prescription ? (
+              <Item label="Rx" value={
+                <ol className="list-decimal space-y-1 pl-5">{prescription.split("\n").filter((l) => l.trim()).map((l, i) => <li key={i}>{l}</li>)}</ol>
+              } />
+            ) : null}
             {testsOrdered ? <Item label="Tests / investigations" value={<span className="whitespace-pre-wrap">{testsOrdered}</span>} /> : null}
             {followUps.length ? (
-              <Item label="Follow-up instructions" value={<ul className="list-disc space-y-1 pl-5">{followUps.map((f) => <li key={f}>{f}</li>)}</ul>} />
+              <Item label="Advice & follow-up" value={<ul className="list-disc space-y-1 pl-5">{followUps.map((f) => <li key={f}>{f}</li>)}</ul>} />
             ) : null}
             {reference ? <Item label="Appointment request reference" value={<span className="font-mono">{reference}</span>} /> : null}
           </dl>

@@ -66,7 +66,7 @@ export function CaseView({ initialCase, doctorContext, me, hospital }: {
         className="animate-in"
         key={tab}
       >
-        {tab === "overview" && <OverviewTab detail={detail} />}
+        {tab === "overview" && <OverviewTab detail={detail} onOpenDiagnosis={() => setTab("diagnosis")} />}
         {tab === "diagnosis" && <DiagnosisTab detail={detail} doctorContext={doctorContext} onChanged={(s) => setDetail({ ...detail, ai_diagnosis: s })} onOpenReport={() => setTab("review")} />}
         {tab === "records" && <RecordsTab detail={detail} />}
         {tab === "review" && <ReviewTab detail={detail} me={me} onChanged={refresh} hospital={hospital} />}

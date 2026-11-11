@@ -109,7 +109,9 @@ export interface ConsultationNoteRequest {
   diagnosis?: string; ai_drafted_sections?: string[];
 }
 /** The consultation report template (backend report_service.SECTIONS). */
-export type ReportSection = "history" | "examination" | "diagnosis" | "investigations" | "prescription" | "advice" | "referral";
+export type ReportSection =
+  | "complaints" | "history" | "past_history" | "allergies" | "medications" | "examination"
+  | "diagnosis" | "investigations" | "prescription" | "advice" | "follow_up" | "referral";
 export interface ReportEdit { section: ReportSection; text: string; reason: string }
 export interface ReportEditProposal { reply: string; edits: ReportEdit[] }
 export interface FinalizeRequest { finalizer_username: string; finalizer_password: string }
