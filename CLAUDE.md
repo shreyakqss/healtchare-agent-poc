@@ -35,7 +35,9 @@ Never run `next build` while `next dev` is live on the same `.next`.
 Postgres: `docker compose up -d db` or a local instance; this project owns the `healthcare_agent` database only.
 OpenEMR: `docker compose up -d openemr`, then register the OAuth client once
 (`python scripts/openemr_register_client.py`). `backend/.env` holds
-`DATABASE_URL`, the `OPENEMR_*` settings and `OPENAI_API_KEY` for conversational intake. If the model is unavailable,
+`DATABASE_URL`, the `OPENEMR_*` settings and the model settings: `LLM_PROVIDER=anthropic` (default) with
+`ANTHROPIC_API_KEY` and `LLM_MODEL=claude-sonnet-5-5`, or `LLM_PROVIDER=openai` with `OPENAI_API_KEY`/`LLM_BASE_URL`.
+agno 2.9 needs the 0.x `anthropic` SDK (pinned); 1.x+ rejects its arguments. If the model is unavailable,
 the transcript is preserved but no fact or completed field is guessed. Without
 OpenEMR the API still starts and serves existing cases, but intake cannot register or look up a patient.
 
@@ -125,6 +127,10 @@ Every status write goes through `services/lifecycle.transition()`; every state c
   (`ge=`, `maxLength`). OpenAI strict mode rejects them.
 - Reasoning models reject `temperature`; older chat models reject `reasoning_effort`. `LLM_SUPPORTS_EFFORT`
   picks which one `build_model()` sends.
+- Intake has two phases: the clinic's required fields (`question_planner`), then a focused history
+  (`clinical_interviewer`, `asks_field="clinical_detail"`, at most `MAX_FOCUSED_QUESTIONS`) that ends when the
+  interviewer says the doctor has enough, or closes intake if the model is down. Denied symptoms are `negative`
+  facts (pertinent negatives) - never matched by routing or triage.
 - The intake loop closes a field the patient denied with a sentinel row (`app/domain/intake_fields.py`). Never
   write `NONE_REPORTED` for an answer that was not a denial.
 - `scripts/seed.py` prints ASCII only (Windows console is cp1252).

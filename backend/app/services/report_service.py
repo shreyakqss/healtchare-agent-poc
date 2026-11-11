@@ -17,7 +17,10 @@ from app.domain.lifecycle import CaseStatus
 from app.models import ClinicalSummary
 from app.services import audit, case_repo, doctor_assistant_service
 
-SECTIONS = ("history", "examination", "diagnosis", "investigations", "prescription", "advice", "referral")
+SECTIONS = (
+    "complaints", "history", "past_history", "allergies", "medications", "examination",
+    "diagnosis", "investigations", "prescription", "advice", "follow_up", "referral",
+)
 
 
 def accepted_diagnoses(db: Session, case_id: uuid.UUID) -> list[str]:

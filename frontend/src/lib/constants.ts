@@ -29,6 +29,7 @@ export const FIELD_LABEL: Record<string, string> = {
   allergy: "Allergies",
   contact_preference: "Contact preference",
   condition: "Condition",
+  negative: "Denies",
 };
 
 export const ACTOR_LABEL: Record<string, string> = {

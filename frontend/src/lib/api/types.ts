@@ -247,9 +247,14 @@ export interface AssistantTurn { role: "doctor" | "assistant"; content: string }
 export interface AssistantMessage extends AssistantTurn { author_id: string; created_at: string }
 
 /** One suggestion of the AI differential (agents/schemas.py AIDiagnosis). */
+/** A guideline first-line medicine for a differential, already checked against allergies. */
+export interface MedicationSuggestion {
+  name: string; dose: string; route: string; frequency: string; duration: string; purpose: string; caution?: string;
+}
 export interface DiagnosisSuggestion {
   condition: string; likelihood: "high" | "medium" | "low";
   supporting: string[]; against: string[]; tests: string[]; management: string[];
+  medications?: MedicationSuggestion[]; allergy_check?: string;
   /** Added by the doctor from the assistant chat, not ranked by the model. */
   added_by?: "doctor";
 }
@@ -258,6 +263,8 @@ export interface ProposedDiagnosis { condition: string; likelihood: DiagnosisSug
 export interface DiagnosisDecision { decision: "accept" | "edit" | "dismiss"; text?: string; by: string; at: string }
 export interface AIDiagnosisSections {
   differentials: DiagnosisSuggestion[]; red_flags: string[]; missing_information: string[]; reasoning: string;
+  /** Allergy cross-reactions, interactions, contraindications to see before prescribing. */
+  safety_alerts?: string[];
   decisions: Record<string, DiagnosisDecision>;
 }
 export interface AssistantReply { reply: string }

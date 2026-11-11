@@ -12,6 +12,8 @@ from functools import lru_cache
 from typing import Any, TypeVar
 
 from agno.agent import Agent
+from agno.models.anthropic import Claude
+from agno.models.base import Model
 from agno.models.openai import OpenAIChat
 from agno.run.agent import RunEvent
 from pydantic import BaseModel
@@ -31,7 +33,19 @@ def llm_available() -> bool:
 
 
 @lru_cache(maxsize=1)
-def build_model() -> OpenAIChat:
+def build_model() -> Model:
+    if settings.LLM_PROVIDER == "anthropic":
+        return Claude(
+            id=settings.LLM_MODEL,
+            api_key=settings.ANTHROPIC_API_KEY,
+            max_tokens=settings.LLM_MAX_TOKENS,
+            # No temperature: current Claude models and SDK reject it.
+            timeout=settings.LLM_TIMEOUT_SECONDS,
+        )
+    return _openai_model()
+
+
+def _openai_model() -> OpenAIChat:
     kwargs: dict[str, Any] = {
         "id": settings.LLM_MODEL,
         "api_key": settings.OPENAI_API_KEY,

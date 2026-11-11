@@ -11,7 +11,7 @@ import time
 from typing import Any
 
 import app.services.intake_service as intake_service_module
-from app.agents.schemas import ExtractedFact, ExtractionResult, PatientAnswerReview
+from app.agents.schemas import ExtractedFact, ExtractionResult, FocusedQuestion, PatientAnswerReview
 from app.core.config import settings
 
 BASE = "/api/v1/healthcare"
@@ -75,7 +75,13 @@ async def fake_answer_review(scope: str, question: str, reference: str, answer: 
     return PatientAnswerReview(decision="allow")
 
 
+async def fake_next_question(transcript, on_file, asked, limit, previous_visit=None) -> FocusedQuestion:
+    """No focused history by default, so the required-field mechanics close as before."""
+    return FocusedQuestion(done=True)
+
+
 def patch_intake_agents(monkeypatch) -> None:
+    monkeypatch.setattr(intake_service_module.clinical_interviewer, "next_question", fake_next_question)
     monkeypatch.setattr(intake_service_module.fact_extractor, "extract", fake_extract)
     monkeypatch.setattr(intake_service_module.question_planner, "plan", fake_plan)
     monkeypatch.setattr(intake_service_module.patient_assistant, "answer", fake_answer)

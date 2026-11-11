@@ -54,7 +54,8 @@ def case_context(db: Session, case_id: uuid.UUID, *, with_diagnosis: bool = True
     # Joined, not just the last one: a single turn can name several problems at once
     # ("fever and body ache") as separate reason_for_visit facts - a doctor needs all of them.
     for label, kind in (("Chief complaint", "reason_for_visit"), ("Symptoms", "symptom"),
-                        ("Duration", "duration"), ("History (patient-reported)", "history")):
+                        ("Duration", "duration"), ("History (patient-reported)", "history"),
+                        ("Denies (pertinent negatives)", "negative")):
         values = list(dict.fromkeys(captured.get(kind) or [f.value for f in facts if f.kind == kind]))
         if values:
             lines.append(f"{label}: {', '.join(values)}")
@@ -88,6 +89,13 @@ def case_context(db: Session, case_id: uuid.UUID, *, with_diagnosis: bool = True
         ranked = [f"{d['condition']} ({d['likelihood']})" for d in diagnosis.sections.get("differentials", [])]
         if ranked:
             lines.append("AI differential (unverified suggestion): " + "; ".join(ranked))
+        for d in diagnosis.sections.get("differentials", []):
+            if meds := d.get("medications"):
+                lines.append(f"Suggested regimen if {d['condition']}: " + "; ".join(
+                    f"{m['name']} {m['dose']} {m['route']} {m['frequency']} for {m['duration']}"
+                    + (f" (caution: {m['caution']})" if m.get("caution") else "") for m in meds))
+        if alerts := diagnosis.sections.get("safety_alerts"):
+            lines.append("Prescribing safety alerts: " + "; ".join(alerts))
     for n, note in enumerate(notes, 1):
         lines.append(f"Consultation note {n}: {note.notes}")
     if transcript := _intake_transcript(db, case):

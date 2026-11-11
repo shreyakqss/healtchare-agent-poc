@@ -59,6 +59,8 @@ function startingReport(c: CaseDetail, latest: ConsultationNote | null): { secti
   if (accepted.conditions.length) {
     sections.diagnosis = accepted.conditions.join("\n");
     sections.investigations = accepted.tests.join("\n") || sections.investigations;
+    // The accepted diagnoses' allergy-checked regimens; still an AI draft the doctor must verify.
+    sections.prescription = accepted.medicines.join("\n") || sections.prescription;
     return { sections, ai: ai.filter((k) => k !== "diagnosis" && (k !== "investigations" || !accepted.tests.length)) };
   }
   return { sections, ai };

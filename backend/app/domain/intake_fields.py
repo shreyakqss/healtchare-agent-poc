@@ -41,7 +41,11 @@ FIELD_PROMPTS = {
     "medication": "any medications you currently take",
     "allergy": "any allergies you have",
     "contact_preference": "how you prefer to be contacted",
+    # Not a required field: the focused history the clinical interviewer asks once those are done.
+    "clinical_detail": "a few more details about your symptoms",
 }
+
+FOCUSED_FIELD = "clinical_detail"
 
 
 class Fact(Protocol):

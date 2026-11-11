@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { ApiError, casesApi, type AIDiagnosisSections, type CaseDetail, type DiagnosisSuggestion, type Summary } from "@/lib/api";
+import { ApiError, casesApi, type AIDiagnosisSections, type CaseDetail, type DiagnosisSuggestion, type MedicationSuggestion, type Summary } from "@/lib/api";
 import { Alert, Badge, Button, Card, CardBody, CardHeader, EmptyState, Icons, Input, useToast, type Tone } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import { AssistantPanel } from "@/features/case/assistant-tab";
@@ -10,18 +10,20 @@ const LIKELIHOOD_TONE: Record<DiagnosisSuggestion["likelihood"], Tone> = { high:
 
 /** What the doctor accepted (or reworded) from the AI differential, with the tests suggested
  * for those - the only part offered to the consultation form. */
-export function acceptedDiagnoses(summary: Summary | null | undefined): { conditions: string[]; tests: string[] } {
+export function acceptedDiagnoses(summary: Summary | null | undefined): { conditions: string[]; tests: string[]; medicines: string[] } {
   const sections = summary?.sections as AIDiagnosisSections | undefined;
   const conditions: string[] = [];
   const tests: string[] = [];
+  const medicines: string[] = [];
   (sections?.differentials ?? []).forEach((d, i) => {
     const decision = sections?.decisions?.[String(i)];
     if (decision?.decision === "accept" || decision?.decision === "edit") {
       conditions.push(decision.text ?? d.condition);
       tests.push(...d.tests);
+      medicines.push(...(d.medications ?? []).map((m) => `${m.name} ${m.dose}, ${m.route}, ${m.frequency}, ${m.duration}`));
     }
   });
-  return { conditions, tests: [...new Set(tests)] };
+  return { conditions, tests: [...new Set(tests)], medicines: [...new Set(medicines)] };
 }
 
 /** Decision support in the style of Isabel DDx / Glass Health: a ranked differential drafted at
@@ -118,6 +120,12 @@ export function DiagnosisTab({ detail, doctorContext, onChanged, onOpenReport }:
           <>
             {sections.reasoning ? <p className="text-sm leading-6 text-fg-muted">{sections.reasoning}</p> : null}
 
+            {sections.safety_alerts?.length ? (
+              <Alert tone="warning" title="Before prescribing">
+                <ul className="list-disc space-y-0.5 pl-5">{sections.safety_alerts.map((a) => <li key={a}>{a}</li>)}</ul>
+              </Alert>
+            ) : null}
+
             {sections.red_flags.length ? (
               <Alert tone="danger" title="Must exclude">
                 <ul className="list-disc space-y-0.5 pl-5">{sections.red_flags.map((r) => <li key={r}>{r}</li>)}</ul>
@@ -152,6 +160,7 @@ export function DiagnosisTab({ detail, doctorContext, onChanged, onOpenReport }:
                       <Points label="Tests to confirm" items={d.tests} />
                       <Points label="Management if confirmed" items={d.management} />
                     </div>
+                    <Medicines items={d.medications ?? []} allergyCheck={d.allergy_check} />
 
                     {locked ? null : editing?.index === i ? (
                       <div className="mt-3 flex flex-wrap gap-2">
@@ -218,6 +227,29 @@ function Points({ label, items }: { label: string; items: string[] }) {
     <div>
       <p className="text-xs font-medium text-fg-muted">{label}</p>
       <ul className="mt-0.5 list-disc space-y-0.5 pl-5">{items.map((p) => <li key={p}>{p}</li>)}</ul>
+    </div>
+  );
+}
+
+/** The guideline regimen if this diagnosis is confirmed, already adjusted for allergies - a draft
+ * the doctor checks; it reaches the prescription only through the report they sign. */
+function Medicines({ items, allergyCheck }: { items: MedicationSuggestion[]; allergyCheck?: string }) {
+  if (!items.length && !allergyCheck) return null;
+  return (
+    <div className="mt-3 rounded-md border border-line bg-sunken p-3">
+      <p className="flex items-center gap-1.5 text-xs font-medium text-fg-muted"><Icons.pill size={13} /> Suggested medicines if confirmed</p>
+      {items.length ? (
+        <ul className="mt-2 space-y-2 text-sm">
+          {items.map((m) => (
+            <li key={`${m.name}-${m.dose}`}>
+              <p><span className="font-semibold">{m.name}</span> {m.dose}, {m.route}, {m.frequency}, {m.duration}
+                <span className="text-fg-muted"> ({m.purpose})</span></p>
+              {m.caution ? <p className="mt-0.5 flex gap-1.5 text-xs text-warning"><Icons.alert size={12} className="mt-0.5 shrink-0" />{m.caution}</p> : null}
+            </li>
+          ))}
+        </ul>
+      ) : <p className="mt-1 text-sm text-fg-subtle">No medicine indicated.</p>}
+      {allergyCheck ? <p className="mt-2 flex gap-1.5 text-xs text-fg-muted"><Icons.shield size={12} className="mt-0.5 shrink-0" />{allergyCheck}</p> : null}
     </div>
   );
 }

@@ -49,7 +49,9 @@ class Settings(BaseSettings):
     WORKFLOW_LEASE_SECONDS: int = 300
     WORKFLOW_MAX_ATTEMPTS: int = 3
 
-    # LLM — every model call goes through app/agents/llm.py (agno OpenAIChat).
+    # LLM — every model call goes through app/agents/llm.py. "anthropic" (Claude) or "openai"
+    # (OpenAI or any OpenAI-compatible endpoint at LLM_BASE_URL).
+    LLM_PROVIDER: str = "anthropic"
     LLM_BASE_URL: str = "https://api.openai.com/v1"
     LLM_MODEL: str = "gpt-4.1-mini"
     LLM_TIMEOUT_SECONDS: float = 120.0
@@ -57,6 +59,8 @@ class Settings(BaseSettings):
     LLM_SUPPORTS_EFFORT: bool = False
     LLM_EFFORT: str = "low"
     OPENAI_API_KEY: str | None = None
+    ANTHROPIC_API_KEY: str | None = None
+    LLM_MAX_TOKENS: int = 16000
 
     TAVILY_API_KEY: str | None = None
 
@@ -114,7 +118,8 @@ class Settings(BaseSettings):
 
     @property
     def llm_enabled(self) -> bool:
-        return bool(self.OPENAI_API_KEY)
+        key = self.ANTHROPIC_API_KEY if self.LLM_PROVIDER == "anthropic" else self.OPENAI_API_KEY
+        return bool(key)
 
     @property
     def tracing_enabled(self) -> bool:

@@ -27,7 +27,14 @@ from datetime import date, timedelta
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.agents import AgentUnavailable, answer_guard, fact_extractor, patient_assistant, question_planner
+from app.agents import (
+    AgentUnavailable,
+    answer_guard,
+    clinical_interviewer,
+    fact_extractor,
+    patient_assistant,
+    question_planner,
+)
 from app.agents.question_planner import PlannerContext
 from app.agents.schemas import ExtractedFact, ExtractionResult, QuestionResponse
 from app.core.config import settings
@@ -65,7 +72,10 @@ from app.services import (
 
 logger = logging.getLogger(__name__)
 
-MAX_ASSISTANT_QUESTIONS = 12
+MAX_ASSISTANT_QUESTIONS = 18
+# The focused history after the required fields (clinical_interviewer): enough for a doctor's
+# differential without turning intake into an interrogation.
+MAX_FOCUSED_QUESTIONS = 6
 MAX_FACT_CHARS = 220
 
 CLOSING = (
@@ -588,9 +598,12 @@ async def _process_turn(db: Session, session: IntakeSession, case: PatientCase, 
 
     emergency = _red_flag(db, case, turn_index)
     outstanding = case_repo.missing_clinical_fields(db, case.id)
-    asked_so_far = sum(
-        1 for m in case_repo.messages(db, session.id) if m.role == "assistant" and m.asks_field is not None
-    )
+    assistant_turns = [m for m in case_repo.messages(db, session.id) if m.role == "assistant" and m.asks_field is not None]
+    asked_so_far = len(assistant_turns)
+    focused_asked = sum(1 for m in assistant_turns if m.asks_field == intake_fields.FOCUSED_FIELD)
+    # Required fields first; then the focused history, until the interviewer says the doctor
+    # has enough or the cap is reached.
+    focused_open = not outstanding and focused_asked < MAX_FOCUSED_QUESTIONS and asked_so_far < MAX_ASSISTANT_QUESTIONS
     asks_field: str | None = None
     planner_mode = "code"
     reply_streamed = False
@@ -602,8 +615,8 @@ async def _process_turn(db: Session, session: IntakeSession, case: PatientCase, 
         yield TurnEvent(type="token", text=reply)
         reply_streamed = True
     elif question:
-        complete = not outstanding or asked_so_far >= MAX_ASSISTANT_QUESTIONS
-        asks_field = None if complete else outstanding[0]
+        complete = (not outstanding and not focused_open) or asked_so_far >= MAX_ASSISTANT_QUESTIONS
+        asks_field = None if complete else (outstanding[0] if outstanding else intake_fields.FOCUSED_FIELD)
         reply, planner_mode = await _answer_patient_question(
             db, session, case, extraction, asks_field, outstanding, complete
         )
@@ -615,7 +628,23 @@ async def _process_turn(db: Session, session: IntakeSession, case: PatientCase, 
         # candidates were already answered - independent of the required-field loop below.
         pending_meds = case_repo.pending_medication_candidates(db, case.id)
         force_medication = bool(pending_meds) and "medication" not in outstanding
-        if not outstanding and not force_medication:
+        if not outstanding and not force_medication and focused_open:
+            try:
+                nxt = await clinical_interviewer.next_question(
+                    case_repo.transcript(db, session.id), _on_file(db, case.id), focused_asked, MAX_FOCUSED_QUESTIONS,
+                    visit_history.context_text(prev) if (prev := visit_history.previous_visit(db, case)) else None,
+                )
+            except AgentUnavailable as exc:
+                logger.warning("Clinical interviewer unavailable (%s); closing intake", type(exc).__name__)
+                nxt = None
+            if nxt is not None and not nxt.done and nxt.question.strip():
+                reply, complete, planner_mode = nxt.question.strip(), False, "interviewer"
+                asks_field = intake_fields.FOCUSED_FIELD
+                yield TurnEvent(type="token", text=reply)
+                reply_streamed = True
+            else:
+                reply, complete = CLOSING, True
+        elif not outstanding and not force_medication:
             reply, complete = CLOSING, True
         elif asked_so_far >= MAX_ASSISTANT_QUESTIONS:
             reply, complete = CLOSING_WITH_GAPS, True

@@ -88,7 +88,7 @@ class ConsultationNoteRequest(BaseModel):
     referral_notes: str | None = None
     diagnosis: str | None = None
     # Report sections still exactly as the AI wrote them when the doctor signed - audit only.
-    ai_drafted_sections: list[str] = Field(default_factory=list, max_length=10)
+    ai_drafted_sections: list[str] = Field(default_factory=list, max_length=16)
     # The doctor's own final-draft report to the patient. Optional: when blank, the model
     # drafts the patient-facing summary from these notes at finalize time, same as before.
     patient_report: str | None = None

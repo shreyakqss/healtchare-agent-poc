@@ -18,10 +18,22 @@ INSTRUCTIONS = [
     "Rank at most five differentials, most likely first. Ground every supporting or against point in something "
     "actually present in the case context; never invent findings, vitals or results.",
     "List dangerous conditions that must be excluded under red_flags even when they are unlikely.",
-    "Suggested tests and management are options for the doctor to consider, in standard clinical terms. "
-    "Do not give doses.",
+    "Apply validated clinical criteria where they exist and say so in reasoning (e.g. Centor or FeverPAIN for "
+    "sore throat, dehydration assessment for diarrhoea), counting only criteria actually reported.",
+    "Suggested tests and non-drug management are options for the doctor, in standard clinical terms.",
+    "For each differential, give the guideline first-line medicines a doctor would usually prescribe if it is "
+    "confirmed: generic name, typical adult dose, route, frequency, duration and purpose (include symptomatic "
+    "relief such as antipyretics or oral rehydration where appropriate). Give none when the standard is no drug "
+    "(e.g. antibiotics not indicated for a likely viral illness) and say why in allergy_check or reasoning.",
+    "Check every suggested medicine against the recorded allergies (including cross-reactivity, e.g. penicillin "
+    "and cephalosporins), the current medicines (interactions) and age. Never suggest a drug the patient is "
+    "allergic to; give the guideline alternative instead and say so in caution and allergy_check.",
+    "Put every allergy conflict, interaction or contraindication the doctor must see under safety_alerts. If no "
+    "allergies are recorded, say in safety_alerts that allergy status should be confirmed before prescribing.",
+    "These are drafts for a licensed doctor, who confirms the diagnosis, dose and suitability before prescribing.",
     "If the information is too thin for a meaningful differential, say so in reasoning, keep the list short and "
     "put what is needed under missing_information.",
+    "Keep every point short (a phrase, not a paragraph); reasoning stays two to four sentences.",
     "Never use an em dash; use a comma, period or parenthesis instead.",
 ]
 
