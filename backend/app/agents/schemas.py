@@ -136,7 +136,7 @@ class AIDiagnosis(BaseModel):
     writes it into the consultation themselves."""
 
     differentials: list[DiagnosisSuggestion] = Field(
-        default_factory=list, description="Most likely first, at most five."
+        default_factory=list, description="Most likely first; only genuinely plausible ones (often one to three, never more than five)."
     )
     red_flags: list[str] = Field(
         default_factory=list, description="Serious conditions that must be excluded, with the reason."
