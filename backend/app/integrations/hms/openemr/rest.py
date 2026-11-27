@@ -15,6 +15,7 @@ Quirks confirmed against OpenEMR 8.3.0 and encoded here:
 from __future__ import annotations
 
 import logging
+import time
 from datetime import date
 from typing import Any
 
@@ -29,6 +30,8 @@ DOCUMENT_CATEGORY = "/Documents"
 # visit - which is the only kind CareFlow produces.
 ENCOUNTER_CATEGORY_ID = "5"
 ENCOUNTER_CLASS_AMBULATORY = "AMB"
+# How long one full calendar read is reused (covers one routing pass over every doctor).
+CALENDAR_TTL_SECONDS = 2.0
 _SOAP_NOT_RECORDED = "Not recorded during intake."
 
 
@@ -81,6 +84,7 @@ class StandardApi:
     def __init__(self, base_url: str, api_path: str, tokens: TokenProvider):
         self._base = base_url.rstrip("/") + api_path
         self._tokens = tokens
+        self._calendar: tuple[float, list[dict[str, Any]]] | None = None
 
     # --- transport -----------------------------------------------------------
 
@@ -141,8 +145,19 @@ class StandardApi:
     def calendar_events(self) -> list[dict[str, Any]]:
         """Every calendar row: provider blocks ("In Office", category 2, no patient) as well as
         patient appointments. Recurrence rules are not returned, so office hours must be entered
-        as individual (non-repeating) events to be seen here."""
-        return self._list("appointment")
+        as individual (non-repeating) events to be seen here.
+
+        Memoised for CALENDAR_TTL_SECONDS: one routing pass reads it once per doctor, and the
+        endpoint returns the whole calendar. CareFlow's own writes call `invalidate_calendar()`."""
+        cached = self._calendar
+        if cached and time.monotonic() - cached[0] < CALENDAR_TTL_SECONDS:
+            return cached[1]
+        events = self._list("appointment")
+        self._calendar = (time.monotonic(), events)
+        return events
+
+    def invalidate_calendar(self) -> None:
+        self._calendar = None
 
     def practitioner_usernames(self) -> dict[str, str]:
         """`{practitioner uuid: login username}` for the clinicians who have one.

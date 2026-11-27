@@ -52,7 +52,7 @@ async def generate(db: Session, case_id: uuid.UUID, actor: str) -> ClinicalSumma
 
 def decide(
     db: Session, case_id: uuid.UUID, index: int, decision: Literal["accept", "edit", "dismiss"],
-    text: str | None, actor: str,
+    text: str | None, actor: str, expected_condition: str | None = None,
 ) -> ClinicalSummary:
     _require_open(db, case_id)
     summary = case_repo.summary(db, case_id, KIND)
@@ -64,6 +64,8 @@ def decide(
     if decision == "edit" and not (text or "").strip():
         raise Unprocessable("An edited diagnosis needs its wording.")
     condition = differentials[index]["condition"]
+    if expected_condition is not None and expected_condition != condition:
+        raise Conflict("The suggestions have changed since this page loaded. Reload the case and decide again.")
     entry = {"decision": decision, "by": actor, "at": utcnow().isoformat()}
     if decision == "edit":
         entry["text"] = text.strip()

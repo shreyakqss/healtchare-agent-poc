@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import uuid
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy.orm import Session
 
 from app.models import AdminAuditEvent, AuditEvent
+
+if TYPE_CHECKING:
+    from app.security import CurrentPrincipal
 
 
 def record(db: Session, case_id: uuid.UUID, actor: str, action: str, payload: dict[str, Any] | None = None) -> AuditEvent:
@@ -13,6 +16,11 @@ def record(db: Session, case_id: uuid.UUID, actor: str, action: str, payload: di
     event = AuditEvent(case_id=case_id, actor=actor, action=action, payload=payload or {})
     db.add(event)
     return event
+
+
+def admin_actor(principal: CurrentPrincipal) -> str:
+    return f"admin:{principal.username or principal.user_id}"
+
 
 def record_admin(db: Session, clinic_id: str, actor: str, action: str, payload: dict[str, Any] | None = None) -> AdminAuditEvent:
     """Append one clinic-level admin audit row. Caller commits."""

@@ -141,6 +141,8 @@ class AIDiagnosisDecisionRequest(BaseModel):
     index: int = Field(ge=0, le=20)
     decision: Literal["accept", "edit", "dismiss"]
     text: str | None = Field(default=None, max_length=300)
+    # The condition the doctor saw at `index`: a stale tab or a regenerated differential is refused.
+    condition: str | None = Field(default=None, max_length=300)
 
 
 class FinalizeRequest(BaseModel):

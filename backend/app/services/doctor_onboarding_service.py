@@ -71,8 +71,7 @@ def clinic_for(principal: CurrentPrincipal) -> Clinic:
     )
 
 
-def _actor(principal: CurrentPrincipal) -> str:
-    return f"admin:{principal.username or principal.user_id}"
+_actor = audit.admin_actor
 
 
 # --- reads -------------------------------------------------------------------------------

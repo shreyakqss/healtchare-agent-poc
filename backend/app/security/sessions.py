@@ -288,7 +288,7 @@ def self_register_patient(db: Session, return_to: str | None) -> tuple[LoginSess
     from app.security.oidc import OidcVerifier, configured_verifier
 
     username = f"patient-{secrets.token_hex(4)}"
-    password = username
+    password = secrets.token_urlsafe(16)  # shown once to the patient; never derivable from the username
     admin_client.create_user(username, password, "patient")
     try:
         tokens = _token_request(

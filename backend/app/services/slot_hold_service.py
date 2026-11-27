@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 import uuid
 from datetime import UTC, datetime
+from zoneinfo import ZoneInfo
 
 import httpx
 from sqlalchemy.exc import IntegrityError
@@ -20,7 +21,7 @@ from app.core.errors import Conflict
 from app.domain import routing as routing_rules
 from app.domain import scheduling
 from app.models import RoutingRecommendation, SlotHold
-from app.services import audit, doctor_load
+from app.services import audit, doctor_load, hospital_config
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +44,9 @@ def upcoming(slots: list[dict], now: datetime | None = None) -> list[dict]:
 
 def held_starts(db: Session, practitioner_id: str, excluding_case: uuid.UUID | None = None) -> set[datetime]:
     """Start times other cases already hold with this practitioner."""
-    query = db.query(SlotHold.slot_start).filter(SlotHold.practitioner_id == practitioner_id)
+    query = db.query(SlotHold.slot_start).filter(  # past holds can't collide with a future slot
+        SlotHold.practitioner_id == practitioner_id, SlotHold.slot_start >= datetime.now(UTC)
+    )
     if excluding_case is not None:
         query = query.filter(SlotHold.case_id != excluding_case)
     return {row.slot_start for row in query}
@@ -113,6 +116,8 @@ def department_slots(
     for doctor in doctors:
         found += _named(open_slots(db, hms, department_id, doctor["id"], per_doctor, excluding_case), doctor["name"])
     if not found:
+        # Business hours are the clinic's, not UTC's: build the window on the clinic-local clock.
+        now = now.astimezone(ZoneInfo(hospital_config.hospital().get("timezone") or "UTC"))
         for doctor in doctors:
             held = len(held_starts(db, doctor["id"], excluding_case))
             synthetic = scheduling.fallback_slots(

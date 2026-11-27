@@ -123,7 +123,6 @@ def list_patient_visits(
 
 @router.get("/{case_id}/patient-view", response_model=PatientCaseResponse)
 def get_patient_case(case_id: uuid.UUID, principal: PatientPrincipal, db: Session = Depends(get_db)):
-    rate_limits.enforce("attachment.upload", principal.user_id)
     case = case_for_principal(db, case_id, principal, allow_clinician=False)
     return serializers.patient_case_detail(db, case)
 
@@ -171,6 +170,7 @@ async def upload_attachment(
 ):
     """Stored and displayed only. Nothing uploaded here can influence a priority. If this was
     the last thing intake was waiting on, pre-screening starts in the background."""
+    rate_limits.enforce("attachment.upload", principal.user_id)
     case = case_for_principal(db, case_id, principal, allow_clinician=False)
     content = await file.read(settings.MAX_UPLOAD_MB * 1024 * 1024 + 1)
     row = await attachment_service.upload(db, case, file.filename or "upload", content, kind, uploaded_by)
@@ -385,5 +385,6 @@ def decide_ai_diagnosis(
     case = case_for_principal(db, case_id, principal, allow_patient=False)
     summary = ai_diagnosis_service.decide(
         db, case.id, payload.index, payload.decision, payload.text, _clinician_actor(principal),
+        expected_condition=payload.condition,
     )
     return serializers.summary_out(summary)

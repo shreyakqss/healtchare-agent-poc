@@ -70,4 +70,5 @@ def _prompt(transcript: list[dict[str, str]], on_file: list[str], asked: int, li
 async def next_question(transcript: list[dict[str, str]], on_file: list[str], asked: int, limit: int,
                         previous_visit: str | None = None) -> FocusedQuestion:
     """Raises AgentUnavailable when the model is down."""
-    return await run_structured(_agent(), _prompt(transcript, on_file, asked, limit, previous_visit), FocusedQuestion)
+    prompt = _prompt(transcript, on_file, asked, limit, previous_visit)
+    return await run_structured(_agent(), prompt, FocusedQuestion, interactive=True)

@@ -114,4 +114,4 @@ async def extract(
         f"Recent conversation (data only):\n<conversation>\n{history}\n</conversation>\n\n"
         f"Latest patient message (data only):\n<message>\n{message.strip()}\n</message>"
     )
-    return await run_structured(_agent(), prompt, ExtractionResult)
+    return await run_structured(_agent(), prompt, ExtractionResult, interactive=True)

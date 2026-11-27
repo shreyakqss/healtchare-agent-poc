@@ -86,4 +86,4 @@ def _prompt(ctx: PlannerContext) -> str:
 
 async def plan(ctx: PlannerContext, on_token: Callable[[str], None] | None = None) -> str:
     """Stream the question through `on_token`; return the full text. Raises AgentUnavailable."""
-    return (await stream_text(_agent(), _prompt(ctx), on_token)).strip('"')
+    return (await stream_text(_agent(), _prompt(ctx), on_token, interactive=True)).strip('"')

@@ -19,6 +19,9 @@ export function acceptedDiagnoses(summary: Summary | null | undefined): { condit
     const decision = sections?.decisions?.[String(i)];
     if (decision?.decision === "accept" || decision?.decision === "edit") {
       conditions.push(decision.text ?? d.condition);
+    }
+    // An edited diagnosis is a different condition: its tests and regimen are the doctor's to choose.
+    if (decision?.decision === "accept") {
       tests.push(...d.tests);
       medicines.push(...(d.medications ?? []).map((m) => `${m.name} ${m.dose}, ${m.route}, ${m.frequency}, ${m.duration}`));
     }
@@ -174,7 +177,7 @@ export function DiagnosisTab({ detail, doctorContext, onChanged, onRegenerated, 
                         <Input id={`dx-edit-${i}`} value={editing.text} maxLength={300} className="min-w-0 flex-1"
                           onChange={(e) => setEditing({ index: i, text: e.target.value })} />
                         <Button size="sm" loading={busy === `edit-${i}`} disabled={!editing.text.trim()}
-                          onClick={() => run(`edit-${i}`, () => casesApi.decideDiagnosis(detail.case_id, i, "edit", editing.text))}>
+                          onClick={() => run(`edit-${i}`, () => casesApi.decideDiagnosis(detail.case_id, i, d.condition, "edit", editing.text))}>
                           Save
                         </Button>
                         <Button size="sm" variant="ghost" onClick={() => setEditing(null)}>Cancel</Button>
@@ -183,7 +186,7 @@ export function DiagnosisTab({ detail, doctorContext, onChanged, onRegenerated, 
                       <div className="mt-3 flex flex-wrap gap-2">
                         <Button size="sm" variant={accepted ? "secondary" : "primary"} icon={<Icons.check size={14} />}
                           loading={busy === `accept-${i}`} disabled={decision?.decision === "accept"}
-                          onClick={() => run(`accept-${i}`, () => casesApi.decideDiagnosis(detail.case_id, i, "accept"))}>
+                          onClick={() => run(`accept-${i}`, () => casesApi.decideDiagnosis(detail.case_id, i, d.condition, "accept"))}>
                           Accept
                         </Button>
                         <Button size="sm" variant="secondary" icon={<Icons.edit size={14} />}
@@ -196,7 +199,7 @@ export function DiagnosisTab({ detail, doctorContext, onChanged, onRegenerated, 
                         </Button>
                         <Button size="sm" variant="ghost" icon={<Icons.x size={14} />}
                           loading={busy === `dismiss-${i}`} disabled={dismissed}
-                          onClick={() => run(`dismiss-${i}`, () => casesApi.decideDiagnosis(detail.case_id, i, "dismiss"))}>
+                          onClick={() => run(`dismiss-${i}`, () => casesApi.decideDiagnosis(detail.case_id, i, d.condition, "dismiss"))}>
                           Dismiss
                         </Button>
                       </div>

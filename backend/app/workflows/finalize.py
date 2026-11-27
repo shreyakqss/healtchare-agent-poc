@@ -21,6 +21,7 @@ from app.db import db_session
 from app.domain import scheduling
 from app.domain.lifecycle import CaseStatus
 from app.integrations.hms import get_hms
+from app.integrations.hms.rendering import render_note
 from app.integrations.hms.schemas import AppointmentRequest
 from app.models import CareTask, ClinicalSummary
 from app.services import audit, case_repo, hospital_config, lifecycle, workflow_operations
@@ -50,7 +51,7 @@ async def write_summary(step_input: StepInput) -> StepOutput:
             department=routing.department_name if routing else None,
             doctor=display_doctor,
             consultation_mode=latest.consultation_mode,
-            notes="\n\n".join(n.notes for n in notes),
+            notes=latest.notes,  # each version is the whole report; earlier ones are superseded
             prescription=latest.prescription,
             follow_up=latest.follow_up_instructions,
             tests_ordered=latest.tests_ordered,
@@ -70,10 +71,10 @@ async def write_summary(step_input: StepInput) -> StepOutput:
             generated_by = "fallback"
         # The released record is what the doctor signed, word for word: advice and follow-up are
         # their lines, not the model's rewording (the narrative fields are kept for the HMS copy only).
-        if latest.follow_up_instructions:
-            sections["follow_up_instructions"] = [
-                line.strip() for line in latest.follow_up_instructions.splitlines() if line.strip()
-            ]
+        # Always the signed lines, even when empty, so model-written advice never reaches the patient.
+        sections["follow_up_instructions"] = [
+            line.strip() for line in (latest.follow_up_instructions or "").splitlines() if line.strip()
+        ]
         sections["prescription"] = latest.prescription
         sections["tests_ordered"] = latest.tests_ordered
         sections["diagnosis"] = latest.diagnosis
@@ -93,7 +94,7 @@ async def write_summary(step_input: StepInput) -> StepOutput:
 
         case = case_repo.case_or_404(db, case_id)
         if case.hms_patient_id:
-            text = "\n".join(f"{key}: {value}" for key, value in sections.items())
+            content = render_note("Visit Summary", sections)
             push_op, already_pushed = workflow_operations.begin_external(
                 db, case_id, f"case:{case_id}:visit-summary:v1", "hms.visit_summary"
             )
@@ -102,7 +103,7 @@ async def write_summary(step_input: StepInput) -> StepOutput:
             else:
                 reference, error_type = await asyncio.to_thread(
                     push_document_with_retry,
-                    get_hms(), case.hms_patient_id, title="Visit Summary", content=text.encode("utf-8"), content_type="text/plain",
+                    get_hms(), case.hms_patient_id, title="Visit Summary", content=content, content_type="text/plain",
                 )
                 workflow_operations.finish_external(
                     db,
@@ -263,9 +264,7 @@ async def run_finalize(
     except Exception as exc:
         logger.error("Finalize failed (%s)", type(exc).__name__)
         if mark_failed:
+            # Audit only: the signed case stays APPROVED (and keeps its slot) so release can be retried.
             with db_session() as db:
-                case = case_repo.case_or_404(db, case_id)
-                session = case_repo.session_for(db, case)
                 audit.record(db, case_id, "system:finalize", "workflow.failed", {"error_type": type(exc).__name__})
-                lifecycle.transition(db, session, CaseStatus.FAILED, "system:finalize", case_id)
         raise

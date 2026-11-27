@@ -88,19 +88,26 @@ def make_agent(
     )
 
 
-async def _within_timeout(coro: Awaitable[Any], agent_name: str) -> Any:
+def _deadline(interactive: bool) -> float:
+    return settings.LLM_INTERACTIVE_TIMEOUT_SECONDS if interactive else settings.LLM_TIMEOUT_SECONDS
+
+
+async def _within_timeout(coro: Awaitable[Any], agent_name: str, interactive: bool = False) -> Any:
     """Enforce the model deadline even when provider streaming or retries remain active."""
     task = asyncio.ensure_future(coro)
-    _, pending = await asyncio.wait({task}, timeout=settings.LLM_TIMEOUT_SECONDS)
+    _, pending = await asyncio.wait({task}, timeout=_deadline(interactive))
     if task in pending:
         task.cancel()
         task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
-        raise AgentUnavailable(f"{agent_name} exceeded the {settings.LLM_TIMEOUT_SECONDS}s timeout.")
+        raise AgentUnavailable(f"{agent_name} exceeded the {_deadline(interactive)}s timeout.")
     return task.result()
 
 
-async def stream_text(agent: Agent, prompt: str, on_token: Callable[[str], None] | None = None) -> str:
-    """Stream an agent's text through `on_token`; return the full text. Raises AgentUnavailable."""
+async def stream_text(
+    agent: Agent, prompt: str, on_token: Callable[[str], None] | None = None, *, interactive: bool = False,
+) -> str:
+    """Stream an agent's text through `on_token`; return the full text. Raises AgentUnavailable.
+    `interactive`: a patient is waiting on this turn, so the shorter deadline applies."""
     if not llm_available():
         raise AgentUnavailable("No LLM API key configured.")
 
@@ -114,7 +121,7 @@ async def stream_text(agent: Agent, prompt: str, on_token: Callable[[str], None]
         return text
 
     try:
-        text = str(await _within_timeout(_run(), agent.name)).strip()
+        text = str(await _within_timeout(_run(), agent.name, interactive)).strip()
     except AgentUnavailable:
         raise
     except Exception as exc:
@@ -124,7 +131,9 @@ async def stream_text(agent: Agent, prompt: str, on_token: Callable[[str], None]
     return text
 
 
-async def run_structured(agent: Agent, prompt: str, schema: type[T], **media: Any) -> T:
+async def run_structured(
+    agent: Agent, prompt: str, schema: type[T], *, interactive: bool = False, **media: Any,
+) -> T:
     """Run an agent whose output_schema is `schema`; always returns an instance or raises AgentUnavailable.
 
     A provider can fail without raising - a WAF block or an error page comes back as
@@ -134,7 +143,7 @@ async def run_structured(agent: Agent, prompt: str, schema: type[T], **media: An
     if not llm_available():
         raise AgentUnavailable("No LLM API key configured.")
     try:
-        content = (await _within_timeout(agent.arun(prompt, **media), agent.name)).content
+        content = (await _within_timeout(agent.arun(prompt, **media), agent.name, interactive)).content
         if isinstance(content, schema):
             return content
         if isinstance(content, dict):
@@ -145,6 +154,6 @@ async def run_structured(agent: Agent, prompt: str, schema: type[T], **media: An
     except AgentUnavailable:
         raise
     except TimeoutError as exc:
-        raise AgentUnavailable(f"{agent.name} exceeded the {settings.LLM_TIMEOUT_SECONDS}s timeout.") from exc
+        raise AgentUnavailable(f"{agent.name} exceeded the {_deadline(interactive)}s timeout.") from exc
     except Exception as exc:  # provider / network / validation
         raise AgentUnavailable(str(exc)) from exc

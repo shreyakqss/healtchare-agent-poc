@@ -15,7 +15,7 @@ from app.core.errors import NotFound
 from app.schemas.requests import HospitalYamlRequest, NewHospitalRequest
 from app.schemas.responses import RosterDoctor, RosterResponse, WeeklyHoursResponse
 from app.security import CurrentPrincipal, require_active_clinic, require_roles
-from app.services import hospital_config, letterhead, triage_rules
+from app.services import audit, hospital_config, letterhead, triage_rules
 from app.services.hms import effective_hospital, effective_roster
 
 router = APIRouter(prefix="/hospital", tags=["hospital"])
@@ -23,6 +23,12 @@ PatientPrincipal = Annotated[CurrentPrincipal, Depends(require_roles("patient"))
 ClinicianPrincipal = Annotated[CurrentPrincipal, Depends(require_roles("clinician"))]
 AdminPrincipal = Annotated[CurrentPrincipal, Depends(require_roles("admin"))]
 StaffPrincipal = Annotated[CurrentPrincipal, Depends(require_roles("clinician", "admin"))]
+
+
+def _audit(db: Session, hospital_id: str, principal: CurrentPrincipal, action: str) -> None:
+    """Clinic policy (triage rules set priority) changes only with a trail of who changed it."""
+    audit.record_admin(db, hospital_id, audit.admin_actor(principal), f"hospital_config.{action}")
+    db.commit()
 
 
 def _summary(hospital_id: str) -> dict:
@@ -102,9 +108,10 @@ def get_json(hospital_id: str, _: AdminPrincipal):
 
 
 @router.put("/hospitals/{hospital_id}/json")
-def save_json(hospital_id: str, body: dict, _: AdminPrincipal, db: Session = Depends(get_db)):
+def save_json(hospital_id: str, body: dict, principal: AdminPrincipal, db: Session = Depends(get_db)):
     cfg = hospital_config.write_json(hospital_id, body)
     triage_rules.sync(db, hospital_id)
+    _audit(db, hospital_id, principal, "saved")
     return cfg
 
 
@@ -114,36 +121,43 @@ def get_yaml(hospital_id: str, _: AdminPrincipal):
 
 
 @router.put("/hospitals/{hospital_id}/yaml")
-def save_yaml(hospital_id: str, body: HospitalYamlRequest, _: AdminPrincipal, db: Session = Depends(get_db)):
+def save_yaml(hospital_id: str, body: HospitalYamlRequest, principal: AdminPrincipal, db: Session = Depends(get_db)):
     cfg = hospital_config.write_text(hospital_id, body.yaml)
     triage_rules.sync(db, hospital_id)
+    _audit(db, hospital_id, principal, "saved")
     return cfg
 
 
 @router.post("/hospitals", status_code=201)
-def create_hospital(body: NewHospitalRequest, _: AdminPrincipal, db: Session = Depends(get_db)):
+def create_hospital(body: NewHospitalRequest, principal: AdminPrincipal, db: Session = Depends(get_db)):
     hospital_config.create(body.hospital_id, body.yaml)
     triage_rules.sync(db, body.hospital_id)
+    _audit(db, body.hospital_id, principal, "created")
     return _summary(body.hospital_id)
 
 
 @router.post("/hospitals/{hospital_id}/activate")
-def activate(hospital_id: str, _: AdminPrincipal, db: Session = Depends(get_db)):
+def activate(hospital_id: str, principal: AdminPrincipal, db: Session = Depends(get_db)):
     hospital_config.activate(hospital_id)
     triage_rules.sync(db, hospital_id)
+    _audit(db, hospital_id, principal, "activated")
     return _summary(hospital_id)
 
 
 @router.delete("/hospitals/{hospital_id}", status_code=204, response_class=Response)
-def delete_hospital(hospital_id: str, _: AdminPrincipal):
+def delete_hospital(hospital_id: str, principal: AdminPrincipal, db: Session = Depends(get_db)):
     hospital_config.delete(hospital_id)
+    _audit(db, hospital_id, principal, "deleted")
     return Response(status_code=204)
 
 
 @router.post("/hospitals/{hospital_id}/letterhead")
-async def upload_letterhead(hospital_id: str, _: AdminPrincipal, file: UploadFile = File(...)):
+async def upload_letterhead(
+    hospital_id: str, principal: AdminPrincipal, file: UploadFile = File(...), db: Session = Depends(get_db),
+):
     content = await file.read(letterhead.MAX_SIZE_BYTES + 1)
     letterhead.save(hospital_id, file.filename or "letterhead", content)
+    _audit(db, hospital_id, principal, "letterhead_uploaded")
     return _summary(hospital_id)
 
 

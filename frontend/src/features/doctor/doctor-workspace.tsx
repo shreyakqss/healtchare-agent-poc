@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useState, type ReactNode } from "react";
-import { casesApi, type CaseListItem, type HospitalConfig, type PastPatientItem, type Roster, type WeeklyHours } from "@/lib/api";
+import { casesApi, type CaseListItem, type HospitalConfig, type PastPatientItem, type Priority, type Roster, type WeeklyHours } from "@/lib/api";
 import { DoctorHours } from "@/features/scheduling/doctor-hours";
 import { Alert, Avatar, Button, EmptyState, Icons, PriorityBadge, StatusBadge, Tabs, useToast } from "@/components/ui";
 import { DoctorCalendar } from "@/features/doctor/doctor-calendar";
@@ -12,6 +12,7 @@ import { isMine } from "@/features/doctor/worklist";
 
 type TabId = "today" | "action" | "upcoming" | "past" | "calendar";
 const CLOSED = new Set(["COMPLETED", "REJECTED"]);
+const PRIORITY_RANK: Record<Priority, number> = { high: 0, medium: 1, low: 2 };
 const TIME = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" });
 const DAY_TIME = new Intl.DateTimeFormat(undefined, { weekday: "short", day: "numeric", month: "short", hour: "numeric", minute: "2-digit" });
 
@@ -56,9 +57,12 @@ export function DoctorWorkspace({ initialCases, initialPast, initialConfig, init
 
   const mine = cases.filter((c) => isMine(c, me));
   // Red-flag cases are never booked (the patient was told to call an ambulance): always on top, oldest first.
-  const emergencies = mine.filter((c) => c.emergency && c.status === "NEEDS_REVIEW")
+  // Any open state, not only NEEDS_REVIEW: an approved or re-analysing red-flag case must not vanish.
+  const emergencies = mine.filter((c) => c.emergency && !CLOSED.has(c.status))
     .sort((a, b) => a.created_at.localeCompare(b.created_at));
-  const toReview = mine.filter((c) => !c.emergency && c.status === "NEEDS_REVIEW").sort(byTime);
+  // Most urgent first; the appointment time orders cases of equal priority.
+  const toReview = mine.filter((c) => !c.emergency && c.status === "NEEDS_REVIEW")
+    .sort((a, b) => PRIORITY_RANK[a.priority ?? "low"] - PRIORITY_RANK[b.priority ?? "low"] || byTime(a, b));
   const unscheduled = mine.filter((c) => !c.appointment_start && !c.emergency && !CLOSED.has(c.status));
   const today = mine.filter((c) => { const t = at(c); return t !== null && t >= startOfToday.getTime() && t <= endOfToday.getTime(); }).sort(byTime);
   const upcoming = mine.filter((c) => { const t = at(c); return t !== null && t > endOfToday.getTime() && !CLOSED.has(c.status); }).sort(byTime);

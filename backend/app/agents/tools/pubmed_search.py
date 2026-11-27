@@ -7,6 +7,8 @@ import logging
 
 import httpx
 
+from app.agents.tools.web_search import scrub_query
+
 logger = logging.getLogger(__name__)
 
 BASE = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
@@ -21,7 +23,7 @@ async def search_pubmed(query: str) -> str:
     a link to the article on pubmed.ncbi.nlm.nih.gov. Use this for evidence, guidelines or
     research questions - cite the returned titles/PMIDs rather than inventing a citation.
     """
-    query = (query or "").strip()
+    query = scrub_query(query or "")
     if not query:
         return json.dumps({"query": query, "results": []})
     try:

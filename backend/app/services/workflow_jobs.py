@@ -38,6 +38,12 @@ def enqueue(
 ) -> WorkflowJob:
     key = _operation_key(workflow, case_id)
     job = db.query(WorkflowJob).filter(WorkflowJob.operation_key == key).first()
+    if job is not None and job.status == "failed":
+        # An explicit retry: re-queue with a fresh attempt budget and the caller's payload
+        # (e.g. the doctor now pressing Release). Completed steps stay cached, so it resumes.
+        job.status, job.attempt_count, job.available_at, job.last_error_code = "queued", 0, utcnow(), None
+        job.payload = payload or job.payload
+        audit.record(db, case_id, "system:workflow", "workflow.requeued", {"workflow": workflow})
     if job is not None:
         return job
     job = WorkflowJob(
@@ -100,6 +106,9 @@ def _mark_failed_case(case_id: uuid.UUID, workflow: str, error_code: str) -> Non
             "workflow.failed",
             {"workflow": workflow, "error_type": error_code, "attempts_exhausted": True},
         )
+        if workflow == "finalize":
+            # A signed case stays APPROVED (and keeps its slot) so the doctor can release again.
+            return
         try:
             lifecycle.transition(db, session, CaseStatus.FAILED, "system:workflow", case_id, commit=False)
         except IllegalTransition:
@@ -132,7 +141,9 @@ def _finish(job_id: uuid.UUID, worker_id: str, error_code: str | None) -> bool:
             exhausted = True
         else:
             job.status = "queued"
-            job.available_at = utcnow() + timedelta(seconds=min(2 ** job.attempt_count, 30))
+            # 30s, 60s, 120s... capped at 10 min: rides out a short HMS/LLM outage. Retries run
+            # in the background worker, so this never adds latency to the request that failed.
+            job.available_at = utcnow() + timedelta(seconds=min(30 * 2 ** (job.attempt_count - 1), 600))
             audit.record(
                 db,
                 job.case_id,
@@ -199,6 +210,8 @@ async def run_now(
         job = enqueue(db, case_id, workflow, payload=payload, max_attempts=max_attempts)
         if job.status == "succeeded":
             return
+        if job.status == "queued":
+            job.available_at = utcnow()  # an explicit request runs a backed-off retry now
         claimed = _claim(db, worker_id, job.id)
         if claimed is None:
             raise Conflict(f"{workflow.title()} is already in progress.")

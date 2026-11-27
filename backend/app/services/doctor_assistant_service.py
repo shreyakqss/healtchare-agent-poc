@@ -110,8 +110,8 @@ def case_context(db: Session, case_id: uuid.UUID, *, with_diagnosis: bool = True
                     + (f" (caution: {m['caution']})" if m.get("caution") else "") for m in meds))
         if alerts := diagnosis.sections.get("safety_alerts"):
             lines.append("Prescribing safety alerts: " + "; ".join(alerts))
-    for n, note in enumerate(notes, 1):
-        lines.append(f"Consultation note {n}: {note.notes}")
+    if notes:  # the latest version is the whole report; earlier ones are superseded
+        lines.append(f"Consultation note (version {len(notes)}): {notes[-1].notes}")
     if transcript := _intake_transcript(db, history_case):
         lines.append(f"Intake conversation (patient's own words):\n{transcript}")
     return "\n".join(lines) or "No case details recorded yet."

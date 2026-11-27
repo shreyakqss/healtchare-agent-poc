@@ -31,7 +31,8 @@ def _clean(text: str, limit: int) -> str:
     return " ".join((text or "").split())[:limit]
 
 
-def _query(raw: str) -> str:
+def scrub_query(raw: str) -> str:
+    """An identifier-free topic for any external search: emails, MRNs, phone numbers, dates removed."""
     return _clean(_IDENTIFIERS.sub("", raw), 200)
 
 
@@ -43,7 +44,7 @@ async def search_health_information(query: str) -> str:
     """Return health-authority search results for an identifier-free topic."""
     from tavily import AsyncTavilyClient
 
-    cleaned = _query(query)
+    cleaned = scrub_query(query)
     if not cleaned:
         return _result("", [])
     try:
