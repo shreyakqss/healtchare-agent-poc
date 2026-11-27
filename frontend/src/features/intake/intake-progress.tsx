@@ -9,7 +9,14 @@ export function IntakeProgress({ requiredFields, missingFields, capturedFields, 
 }) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const started = missingFields !== null;
-  const done = requiredFields.filter((f) => started && !missingFields.includes(f)).length;
+  const fieldsDone = requiredFields.filter((f) => started && !missingFields.includes(f)).length;
+  // After the required fields the assistant asks a few follow-up questions for the doctor
+  // (backend clinical_interviewer), so the checklist counts that as one more step: it is only
+  // ticked when intake actually closes, never "10/10" while questions are still coming.
+  const fieldsComplete = requiredFields.length > 0 && fieldsDone === requiredFields.length;
+  const followUpActive = fieldsComplete && !complete;
+  const total = requiredFields.length ? requiredFields.length + 1 : 0;
+  const done = fieldsDone + (complete ? 1 : 0);
   const anyCaptured = Object.keys(capturedFields).length > 0;
 
   function toggle(field: string) {
@@ -25,11 +32,11 @@ export function IntakeProgress({ requiredFields, missingFields, capturedFields, 
       <section aria-labelledby="progress-title">
         <div className="flex items-baseline justify-between">
           <h2 id="progress-title" className="text-sm font-semibold">Your intake</h2>
-          {requiredFields.length ? <span className="tabular text-xs text-fg-muted">{done}/{requiredFields.length}</span> : null}
+          {total ? <span className="tabular text-xs text-fg-muted">{done}/{total}</span> : null}
         </div>
         {requiredFields.length ? (
           <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-sunken" aria-hidden="true">
-            <div className={cn("h-full rounded-full bg-brand transition-[width] duration-300", progressWidth(done, requiredFields.length))} />
+            <div className={cn("h-full rounded-full bg-brand transition-[width] duration-300", progressWidth(done, total))} />
           </div>
         ) : null}
         <ul className="mt-3 space-y-1.5">
@@ -72,7 +79,22 @@ export function IntakeProgress({ requiredFields, missingFields, capturedFields, 
               </li>
             );
           })}
-          {!requiredFields.length ? <li className="text-sm text-fg-muted">Checklist unavailable.</li> : null}
+          {requiredFields.length ? (
+            <li className="flex items-start gap-2.5 text-sm">
+              <span className={cn(
+                "mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border",
+                complete ? "border-brand bg-brand text-brand-fg"
+                  : followUpActive ? "border-brand text-brand" : "border-line-strong text-transparent",
+              )} aria-hidden="true">
+                {complete ? <Icons.check size={12} /> : followUpActive ? <span className="h-2 w-2 animate-pulse rounded-full bg-brand" /> : <Icons.check size={12} />}
+              </span>
+              <span className="min-w-0">
+                <span className={complete || followUpActive ? "text-fg" : "text-fg-muted"}>A few details for your doctor</span>
+                {followUpActive ? <span className="block text-xs text-fg-subtle">A few short questions about your symptoms</span> : null}
+                <span className="sr-only">{complete ? ", done" : followUpActive ? ", in progress" : ", still needed"}</span>
+              </span>
+            </li>
+          ) : <li className="text-sm text-fg-muted">Checklist unavailable.</li>}
         </ul>
         {/* The case reaches the care team only once required documents are added or skipped too. */}
         {complete && documentsPending > 0 ? (
