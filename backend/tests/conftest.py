@@ -92,21 +92,46 @@ def cleanup_synthetic_application_users():
         db.close()
 
 
+# Every patient a run registers is written here the moment it exists, so a run that never reaches
+# its cleanup (Ctrl-C, a crash) has its patients removed at the start of the next one.
+_PATIENT_LEDGER = Path(__file__).resolve().parent / ".openemr-test-patients"
+
+
+def _delete_ledger_patients() -> None:
+    from tests.openemr_cleanup import delete_patients
+
+    mrns = _PATIENT_LEDGER.read_text().split() if _PATIENT_LEDGER.exists() else []
+    if not mrns:
+        return
+    try:
+        delete_patients(mrns)
+    except Exception as exc:  # noqa: BLE001 - the ledger stays, so the next run retries
+        import warnings
+
+        warnings.warn(f"Test patients were left in OpenEMR ({type(exc).__name__}: {exc}); "
+                      f"the next run retries from {_PATIENT_LEDGER.name}.", stacklevel=1)
+        return
+    _PATIENT_LEDGER.unlink(missing_ok=True)
+
+
 @pytest.fixture(scope="session", autouse=True)
 def cleanup_openemr_test_patients():
     """The integration suite registers real patients in the test OpenEMR (see module docstring).
-    Track every MRN a fresh (non-linking) registration returns during the run, then delete exactly
-    those from OpenEMR once it ends - independent of Postgres, whose own test rows the
-    cleanup_synthetic_application_users fixture above already cleans up on its own schedule."""
+    Every MRN a fresh (non-linking) registration returns is recorded in the ledger as it happens,
+    and once the run ends those patients - and their CareFlow cases - are deleted, so OpenEMR
+    holds only real patients (the admin dashboard counts them). Leftovers of an interrupted
+    run are deleted first."""
     from app.integrations.hms.openemr.client import FhirHMS
 
-    created_mrns: list[str] = []
+    if _hospital_system_unavailable() is None:
+        _delete_ledger_patients()
     original_register_patient = FhirHMS.register_patient
 
     def tracking_register_patient(self, existing_mrn, registration):
         patient = original_register_patient(self, existing_mrn, registration)
-        if existing_mrn is None and patient.mrn:
-            created_mrns.append(patient.mrn)
+        if patient.mrn and patient.mrn != existing_mrn:
+            with _PATIENT_LEDGER.open("a") as ledger:
+                ledger.write(f"{patient.mrn}\n")
         return patient
 
     FhirHMS.register_patient = tracking_register_patient
@@ -114,30 +139,7 @@ def cleanup_openemr_test_patients():
         yield
     finally:
         FhirHMS.register_patient = original_register_patient
-
-    from app.core.config import settings
-
-    pids = sorted({mrn for mrn in created_mrns if mrn.isdigit()})
-    if not pids or not (settings.OPENEMR_MYSQL_USER and settings.OPENEMR_MYSQL_PASSWORD):
-        return
-
-    import pymysql
-
-    conn = pymysql.connect(
-        host=settings.OPENEMR_MYSQL_HOST,
-        port=settings.OPENEMR_MYSQL_PORT,
-        user=settings.OPENEMR_MYSQL_USER,
-        password=settings.OPENEMR_MYSQL_PASSWORD,
-        database=settings.OPENEMR_MYSQL_DB,
-    )
-    try:
-        placeholders = ",".join(["%s"] * len(pids))
-        with conn.cursor() as cursor:
-            for table in ("forms", "form_encounter", "form_soap", "patient_data"):
-                cursor.execute(f"DELETE FROM {table} WHERE pid IN ({placeholders})", pids)
-        conn.commit()
-    finally:
-        conn.close()
+        _delete_ledger_patients()
 
 
 def _hospital_system_unavailable() -> str | None:

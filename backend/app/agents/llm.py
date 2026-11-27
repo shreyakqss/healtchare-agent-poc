@@ -12,6 +12,8 @@ from functools import lru_cache
 from typing import Any, TypeVar
 
 from agno.agent import Agent
+from agno.models.anthropic import Claude
+from agno.models.base import Model
 from agno.models.openai import OpenAIChat
 from agno.run.agent import RunEvent
 from pydantic import BaseModel
@@ -31,7 +33,19 @@ def llm_available() -> bool:
 
 
 @lru_cache(maxsize=1)
-def build_model() -> OpenAIChat:
+def build_model() -> Model:
+    if settings.LLM_PROVIDER == "anthropic":
+        return Claude(
+            id=settings.LLM_MODEL,
+            api_key=settings.ANTHROPIC_API_KEY,
+            max_tokens=settings.LLM_MAX_TOKENS,
+            # No temperature: current Claude models and SDK reject it.
+            timeout=settings.LLM_TIMEOUT_SECONDS,
+        )
+    return _openai_model()
+
+
+def _openai_model() -> OpenAIChat:
     kwargs: dict[str, Any] = {
         "id": settings.LLM_MODEL,
         "api_key": settings.OPENAI_API_KEY,
@@ -110,17 +124,17 @@ async def stream_text(agent: Agent, prompt: str, on_token: Callable[[str], None]
     return text
 
 
-async def run_structured(agent: Agent, prompt: str, schema: type[T]) -> T:
+async def run_structured(agent: Agent, prompt: str, schema: type[T], **media: Any) -> T:
     """Run an agent whose output_schema is `schema`; always returns an instance or raises AgentUnavailable.
 
     A provider can fail without raising - a WAF block or an error page comes back as
     ordinary response content, not an exception - so parsing it into `schema` is inside
-    this same try/except rather than after it.
+    this same try/except rather than after it. `media` (images=/files=) is passed to the run.
     """
     if not llm_available():
         raise AgentUnavailable("No LLM API key configured.")
     try:
-        content = (await _within_timeout(agent.arun(prompt), agent.name)).content
+        content = (await _within_timeout(agent.arun(prompt, **media), agent.name)).content
         if isinstance(content, schema):
             return content
         if isinstance(content, dict):

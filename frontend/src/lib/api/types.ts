@@ -43,6 +43,42 @@ export interface SessionResponse {
   required_attachment_kinds: string[];
   pending_attachment_kinds: string[];
   past_attachments: Attachment[];
+  /** Step 1 done: by the form, or filled from a registered patient's profile. */
+  identity_complete: boolean;
+  visit_type: VisitType;
+  previous_visit: PreviousVisit | null;
+}
+
+export type VisitType = "new" | "follow_up" | "referral";
+
+/** A doctor-to-doctor referral (backend services/referral_service). Clinician-facing only. */
+export type ReferralUrgency = "routine" | "soon" | "urgent";
+export interface Referral {
+  id: string; source_case_id: string; case_id: string;
+  from_doctor_name: string; from_department_name: string | null;
+  to_department_id: string; to_department_name: string; to_doctor_name: string | null;
+  reason: string; question: string | null; urgency: ReferralUrgency;
+  /** Read from the visit it opened. */
+  status: "awaiting_time" | "booked" | "seen" | "completed" | "cancelled";
+  doctor_name: string | null; appointment_start: string | null;
+  outcome_diagnosis: string | null; outcome_advice: string | null; outcome_by: string | null;
+  hms_recorded: boolean; created_at: string;
+  /** On the referred visit only: the referring doctor's latest signed report. */
+  source_report?: {
+    doctor_name: string | null; signed_at: string; notes: string; diagnosis: string | null; prescription: string | null;
+    tests_ordered: string | null; advice: string | null; notes_for_doctors: string | null;
+  } | null;
+}
+export interface ReferralRequest {
+  doctor_username: string; doctor_password: string;
+  to_department_id: string; to_doctor_id?: string | null;
+  reason: string; question?: string | null; urgency: ReferralUrgency;
+}
+
+/** A completed visit as a follow-up carries it over: what the doctor signed and released. */
+export interface PreviousVisit {
+  case_id: string; visit_at: string; department_name: string | null; doctor_id: string | null; doctor_name: string | null;
+  complaint: string | null; diagnosis: string | null; prescription: string | null; tests: string | null; advice: string | null;
 }
 
 export interface TranscriptMessage { role: "patient" | "assistant"; content: string; turn_index: number }
@@ -94,7 +130,14 @@ export interface ConsultationNoteRequest {
   doctor_username: string; doctor_password: string; consultation_mode: "in_person" | "virtual";
   notes: string; prescription?: string; follow_up_instructions?: string;
   tests_ordered?: string; referral_notes?: string; patient_report?: string;
+  diagnosis?: string; ai_drafted_sections?: string[];
 }
+/** The consultation report template (backend report_service.SECTIONS). */
+export type ReportSection =
+  | "complaints" | "history" | "past_history" | "allergies" | "medications" | "examination"
+  | "diagnosis" | "investigations" | "prescription" | "advice" | "follow_up" | "referral";
+export interface ReportEdit { section: ReportSection; text: string; reason: string }
+export interface ReportEditProposal { reply: string; edits: ReportEdit[] }
 export interface FinalizeRequest { finalizer_username: string; finalizer_password: string }
 
 export interface Fact { id: string; kind: string; value: string; source: "patient" | "hms"; source_turn: number; confidence: number }
@@ -102,6 +145,8 @@ export interface Entry { id: string; kind: "allergy" | "medication"; name: strin
 export interface Attachment {
   id: string; case_id: string; kind: string; filename: string; mime_type: string; size_bytes: number;
   has_text: boolean; extracted_text: string | null; uploaded_by: string; created_at: string;
+  /** Medicine names read off an uploaded prescription (text or photo), asked about at intake. */
+  extracted_medications?: string[];
 }
 export interface TriageRuleRef { code: string; priority: Priority; action: string; explanation: string; version: string }
 export interface Triage {
@@ -110,7 +155,15 @@ export interface Triage {
   evidence: Array<{ rule_code: string; matched_on: string; keyword?: string; text: string; fact_kind: string; days?: number; threshold_days?: number }>;
   created_at: string;
 }
-export interface Slot { id: string; practitioner_id: string; department_id: string; start: string; end: string }
+export interface Slot {
+  id: string; practitioner_id: string; department_id: string; start: string; end: string;
+  /** Another patient holds this time: shown greyed out, not pickable. Patient view only. */
+  taken?: boolean;
+  /** Whose time this is: the options span every doctor in the department. */
+  doctor_name?: string | null;
+  /** On a follow-up: the doctor who saw the patient at the visit it follows up (listed first). */
+  previous_doctor?: boolean;
+}
 export interface Routing {
   department_id: string; department_name: string; doctor_id: string | null; doctor_name: string | null;
   appointment_type_id: string; appointment_type_label: string; rationale: string; matched_keywords: string[];
@@ -120,17 +173,28 @@ export interface PatientRouting {
   department_id: string; department_name: string; doctor_id: string | null; doctor_name: string | null;
   appointment_type_id: string; appointment_type_label: string;
   suggested_slot: Slot | null; slot_options: Slot[]; selected_slot_id: string | null;
+  /** The patient may pick which of the department's doctors to see. Off for urgent or approved
+   * cases: then slot_options are already only the times they may pick. */
+  doctor_choice?: boolean;
+  /** The patient confirmed a doctor and time; until then the earliest is only suggested. */
+  slot_confirmed?: boolean;
+  slot_passed?: boolean;
+  /** The doctor's weekly consulting hours, clinic-local; empty when the hospital publishes none. */
+  doctor_hours?: WeeklyHours[];
+  hours_by_doctor?: Record<string, WeeklyHours[]>;
 }
+/** Days (mon, tue, ...) sharing the same hours, e.g. times [["10:00", "13:00"], ["16:00", "19:00"]]. */
+export interface WeeklyHours { days: string[]; times: [string, string][] }
 export interface Summary {
-  id: string; kind: "prescreening" | "final_visit"; sections: Record<string, unknown>;
-  evidence: unknown[]; missing_information: string[]; generated_by: "llm" | "fallback"; created_at: string;
+  id: string; kind: "prescreening" | "final_visit" | "ai_diagnosis" | "report_draft" | "file_reads"; sections: Record<string, unknown>;
+  evidence: unknown[]; missing_information: string[]; generated_by: "llm" | "fallback" | "doctor"; created_at: string;
 }
 export interface Review { id: string; decision: ReviewDecision; reviewer_id: string; reviewer_role: string; edits: Record<string, string>; comment: string | null; created_at: string }
 export interface ConsultationNote {
   id: string; doctor_id: string; doctor_name: string | null; consultation_mode: "in_person" | "virtual";
   notes: string; prescription: string | null; follow_up_instructions: string | null;
   tests_ordered: string | null; referral_notes: string | null;
-  patient_report: string | null; created_at: string;
+  patient_report: string | null; diagnosis?: string | null; created_at: string;
 }
 export interface CareTask { id: string; task_type: string; status: string; priority: Priority; payload: Record<string, unknown>; hms_reference: string | null; notes: string | null; created_at: string }
 export interface Discrepancy {
@@ -141,42 +205,125 @@ export interface Discrepancy {
 export interface AuditEvent { id: string; actor: string; action: string; payload: Record<string, unknown>; created_at: string }
 
 export interface CaseListItem {
+  visit_type?: VisitType;
   case_id: string; session_id: string; status: CaseStatus; priority: Priority | null;
   department_id: string | null; department_name: string | null; doctor_id: string | null; doctor_name: string | null;
   chief_complaint: string | null; demographics: Record<string, string>; hms_patient_id: string | null;
   review_decision: ReviewDecision | null; missing_count: number; appointment_start: string | null;
   created_at: string; updated_at: string | null;
+  /** A red-flag rule matched: the patient was told to seek emergency care now. */
+  emergency?: boolean;
+  /** A referred visit: "Dr X, General Medicine". */
+  referred_by?: string | null;
 }
 export interface ActiveIntake extends SessionResponse {
-  identity_complete: boolean;
   intake_complete: boolean;
   transcript: TranscriptMessage[];
   attachments: Attachment[];
   skipped_attachment_kinds: string[];
 }
 
+export interface PastVisitItem {
+  case_id: string;
+  visit_at: string;
+  status: CaseStatus;
+  review_decision: string | null;
+  chief_complaint: string | null;
+  department_name: string | null;
+  doctor_id: string | null;
+  doctor_name: string | null;
+}
+
+/** One patient on the doctor's "Past patients" list, their visits newest first. */
+export interface PastPatientItem {
+  patient_key: string;
+  hms_patient_id: string | null;
+  name: string | null;
+  age: string | null;
+  sex: string | null;
+  last_visit_at: string;
+  visit_count: number;
+  visits: PastVisitItem[];
+}
+
+/** Admin > Patients: administrative facts only - no clinical field, never opens a case. */
+export interface AdminPatientVisit {
+  status: CaseStatus;
+  department_name: string | null;
+  doctor_name: string | null;
+  appointment_start: string | null;
+  appointment_booked: boolean;
+  created_at: string;
+}
+
+export interface AdminPatientItem {
+  hms_patient_id: string;
+  name: string | null;
+  age: string | null;
+  sex: string | null;
+  visit_count: number;
+  visits: AdminPatientVisit[];
+}
+
 export interface PatientVisitItem {
-  case_id: string; status: CaseStatus; review_decision: ReviewDecision | null;
+  case_id: string; status: CaseStatus; review_decision: ReviewDecision | null; visit_type?: VisitType;
+  complaint?: string | null;
+  follow_up_of?: string | null; follow_up_title?: string | null; follow_up_at?: string | null;
+  /** A referred visit: who referred the patient - never why. */
+  referred_by?: string | null;
   department_name: string | null; doctor_name: string | null;
   created_at: string; updated_at: string | null;
 }
 
 export interface AssistantTurn { role: "doctor" | "assistant"; content: string }
+export interface AssistantMessage extends AssistantTurn { author_id: string; created_at: string }
+
+/** One suggestion of the AI differential (agents/schemas.py AIDiagnosis). */
+/** A guideline first-line medicine for a differential, already checked against allergies. */
+export interface MedicationSuggestion {
+  name: string; dose: string; route: string; frequency: string; duration: string; purpose: string; caution?: string;
+}
+export interface DiagnosisSuggestion {
+  condition: string; likelihood: "high" | "medium" | "low";
+  supporting: string[]; against: string[]; tests: string[]; management: string[];
+  medications?: MedicationSuggestion[]; allergy_check?: string;
+  /** Added by the doctor from the assistant chat, not ranked by the model. */
+  added_by?: "doctor";
+}
+/** A diagnosis an assistant reply puts forward, for the doctor to add. */
+export interface ProposedDiagnosis { condition: string; likelihood: DiagnosisSuggestion["likelihood"]; supporting: string[] }
+export interface DiagnosisDecision { decision: "accept" | "edit" | "dismiss"; text?: string; by: string; at: string }
+export interface AIDiagnosisSections {
+  differentials: DiagnosisSuggestion[]; red_flags: string[]; missing_information: string[]; reasoning: string;
+  /** Allergy cross-reactions, interactions, contraindications to see before prescribing. */
+  safety_alerts?: string[];
+  decisions: Record<string, DiagnosisDecision>;
+}
 export interface AssistantReply { reply: string }
 
+/** For a patient whose answers matched a red-flag rule: call an ambulance now. */
+export interface EmergencyAdvice { ambulance_number: string; emergency_number: string; flagged_at: string }
 export interface PatientCase {
   case_id: string; status: CaseStatus; review_decision: ReviewDecision | null;
+  emergency?: EmergencyAdvice | null;
   routing: PatientRouting | null; final_summary: Record<string, unknown> | null;
   consultation_mode: "in_person" | "virtual" | null;
-  appointment_reference: string | null; created_at: string;
+  appointment_reference: string | null; has_letterhead?: boolean; referred_by?: string | null; created_at: string;
 }
 
 export interface CaseDetail {
   case_id: string; session_id: string; status: CaseStatus; consent_status: string; channel: string; hospital_id: string;
   demographics: Record<string, string>; hms_patient_id: string | null; transcript: TranscriptMessage[];
+  emergency_flagged_at?: string | null;
   facts: Fact[]; allergies_medications: Entry[]; attachments: Attachment[]; missing_fields: string[];
   required_attachment_kinds: string[]; pending_attachment_kinds: string[];
   triage: Triage | null; routing: Routing | null; discrepancies: Discrepancy[]; prescreening_summary: Summary | null; review: Review | null;
+  ai_diagnosis?: Summary | null; file_reads?: Summary | null; report_draft?: Summary | null; assistant_messages?: AssistantMessage[];
+  visit_type?: VisitType; previous_visit?: PreviousVisit | null;
+  /** A referred visit: the referral that opened it. */
+  referral?: Referral | null;
+  /** Referrals this visit's doctor made, with where each stands. */
+  referrals_made?: Referral[];
   consultation_notes: ConsultationNote[]; final_summary: Summary | null; care_tasks: CareTask[]; created_at: string;
 }
 
@@ -243,3 +390,57 @@ export interface HMSDocument { reference: string; title: string; content_type: s
 export interface AppointmentRequestResult { reference: string; status: string; slot: Slot | null }
 
 export interface Health { status: string; version: string }
+
+/* ---------- Admin > Doctors ---------- */
+export interface AdminDoctor {
+  id: number; practitioner_id: string; name: string; username: string; npi: string;
+  specialty_code: string; specialty: string; department_id: string | null; active: boolean;
+  /** null when the login system could not be asked. */
+  has_login: boolean | null;
+  hours: WeeklyHours[]; hours_until: string | null;
+  /** Active and has hours to continue. */
+  can_extend: boolean;
+}
+export interface DoctorRemovalCheck {
+  doctor: { id: number; name: string; username: string; active: boolean };
+  /** "delete" when the doctor was never used, else "deactivate" (history is kept). */
+  mode: "delete" | "deactivate";
+  blocked_by_open_cases: number;
+  last_in_department: boolean;
+  history: { encounters: number; forms: number; appointments: number; cases: number; notes: number };
+}
+export interface DoctorRemoval { result: "deleted" | "deactivated"; doctor: AdminDoctor | null }
+export interface DoctorDepartmentOption {
+  department_id: string; department_name: string; specialties: { code: string; title: string }[];
+}
+export interface AdminDoctors {
+  clinic: { id: string; name: string; today: string }; doctors: AdminDoctor[]; departments: DoctorDepartmentOption[];
+}
+export interface NewDoctorRequest {
+  title: string; first_name: string; last_name: string; email: string; phone: string;
+  username: string; password: string; department_id: string; specialty_code: string; licence: string;
+  days: string[]; ranges: [string, string][]; start_date: string; weeks: number;
+}
+/** Admin > Doctors > Edit. Name, NPI, username and department are fixed at onboarding and not part of it. */
+export interface DoctorDetails {
+  title: string; email: string; phone: string; licence: string; department_id: string | null; specialty_code: string;
+}
+export interface UpdateDoctorRequest { title: string; email: string; phone: string; licence: string; specialty_code: string }
+export interface ChangeHoursRequest { days: string[]; ranges: [string, string][]; start_date: string; weeks: number }
+export interface HoursChangePreview {
+  problems: string[]; hours: WeeklyHours[]; hours_until: string | null;
+  /** Clinic-local times patients already hold that the new hours leave out (their holds are kept). */
+  held_outside: string[];
+}
+export interface DoctorPreview {
+  problems: string[]; clinic: { id: string; name: string }; hours: WeeklyHours[]; blocks: number; hours_until: string | null;
+}
+
+/** One AI read of an uploaded image or scanned PDF (`file_reads` summary sections.reads[]). Clinician only. */
+export interface FileRead {
+  attachment_id: string; filename: string; kind: string; status: "read" | "unavailable" | "skipped";
+  /** "file": the model looked at the image/scan; "text": summarised from the extracted text. */
+  source?: "file" | "text"; label?: string;
+  note?: string; pages_read?: number; pages_total?: number;
+  what_it_is?: string; findings?: string[]; impression?: string; limitations?: string;
+}

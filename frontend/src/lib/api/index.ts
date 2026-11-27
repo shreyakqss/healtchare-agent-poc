@@ -1,9 +1,9 @@
-import { API_ROOT, http, readCookie, readSse } from "@/lib/api/client";
+import { API_ROOT, http, readCookie, readSse, WORKSPACE_CASES } from "@/lib/api/client";
 import type {
-  AppointmentRequestResult, AssistantReply, AssistantTurn, Attachment, AttachmentSkipResponse, AuditEvent, CaseDetail,
-  CaseListItem, ConsultationNote, ConsultationNoteRequest, FinalizeRequest, HMSPractitioner, HMSStatus, HospitalConfig,
-  HospitalSummary, IdentityFormRequest, IntakeConfig, LinkedPatientRecord, MessageResponse, PatientCase, PatientVisitItem,
-  Review, ReviewRequest, Roster, SessionResponse, Slot, TurnEvent,
+  AdminDoctor, AdminDoctors, ChangeHoursRequest, DoctorDetails, UpdateDoctorRequest, DoctorPreview, HoursChangePreview, DoctorRemoval, DoctorRemovalCheck, NewDoctorRequest, AppointmentRequestResult, AssistantReply, Attachment, AttachmentSkipResponse, AuditEvent, CaseDetail,
+  CaseListItem, ConsultationNote, ConsultationNoteRequest, FinalizeRequest, ReferralRequest, HMSPractitioner, HMSStatus, HospitalConfig,
+  HospitalSummary, IdentityFormRequest, IntakeConfig, LinkedPatientRecord, MessageResponse, PastPatientItem, PatientCase, PatientVisitItem, PreviousVisit, VisitType,
+  ProposedDiagnosis, ReportEditProposal, ReportSection, Review, ReviewRequest, Roster, SessionResponse, Slot, Summary, TurnEvent,
 } from "@/lib/api/types";
 
 export { ApiError } from "@/lib/api/client";
@@ -12,8 +12,10 @@ export type * from "@/lib/api/types";
 export const intakeApi = {
   greeting: () => http.get<{ text: string }>("/intake-sessions/greeting"),
   linkedRecord: () => http.get<LinkedPatientRecord | null>("/intake-sessions/linked-record"),
-  start: (body: Record<string, never> = {}) =>
+  start: (body: { visit_type?: VisitType; follow_up_of?: string | null } = {}) =>
     http.post<SessionResponse>("/intake-sessions", body),
+  followUpOptions: () => http.get<PreviousVisit[]>("/intake-sessions/follow-up-options"),
+  saveProfile: (payload: IdentityFormRequest) => http.put<LinkedPatientRecord>("/intake-sessions/profile", payload),
   get: (sessionId: string) => http.get<SessionResponse>(`/intake-sessions/${sessionId}`),
   consent: (sessionId: string, granted: boolean) => http.post<SessionResponse>(`/intake-sessions/${sessionId}/consent`, { granted }),
   submitIdentity: (sessionId: string, payload: IdentityFormRequest) =>
@@ -33,7 +35,8 @@ export const intakeApi = {
 };
 
 export const casesApi = {
-  list: () => http.get<CaseListItem[]>("/cases"),
+  list: () => http.get<CaseListItem[]>(`/cases?limit=${WORKSPACE_CASES}`),
+  pastPatients: () => http.get<PastPatientItem[]>("/cases/past-patients"),
   get: (caseId: string) => http.get<CaseDetail>(`/cases/${caseId}`),
   patientList: () => http.get<PatientVisitItem[]>("/cases/my-visits"),
   patientGet: (caseId: string) => http.get<PatientCase>(`/cases/${caseId}/patient-view`),
@@ -47,14 +50,26 @@ export const casesApi = {
     return http.form<Attachment>(`/cases/${caseId}/attachments`, form);
   },
   fileUrl: (caseId: string, attachmentId: string) => `${API_ROOT}/cases/${caseId}/attachments/${attachmentId}/file`,
+  letterheadUrl: (caseId: string) => `${API_ROOT}/cases/${caseId}/letterhead`,
   skipAttachment: (caseId: string, kind: string, reason?: string) =>
     http.post<AttachmentSkipResponse>(`/cases/${caseId}/attachments/skip`, { kind, reason }),
   prescreen: (caseId: string) => http.post<CaseDetail>(`/cases/${caseId}/prescreen`),
   review: (caseId: string, body: ReviewRequest) => http.post<Review>(`/cases/${caseId}/review`, body),
   addNote: (caseId: string, body: ConsultationNoteRequest) => http.post<ConsultationNote>(`/cases/${caseId}/consultation-notes`, body),
   finalize: (caseId: string, body: FinalizeRequest) => http.post<CaseDetail>(`/cases/${caseId}/finalize`, body),
-  assistantChat: (caseId: string, message: string, doctorContext: string, transcript: AssistantTurn[]) =>
-    http.post<AssistantReply>(`/cases/${caseId}/assistant`, { message, doctor_context: doctorContext, transcript }),
+  refer: (caseId: string, body: ReferralRequest) => http.post<CaseDetail>(`/cases/${caseId}/referrals`, body),
+  assistantChat: (caseId: string, message: string, doctorContext: string) =>
+    http.post<AssistantReply>(`/cases/${caseId}/assistant`, { message, doctor_context: doctorContext }),
+  regenerateDiagnosis: (caseId: string) => http.post<Summary>(`/cases/${caseId}/ai-diagnosis`),
+  draftReport: (caseId: string) => http.post<Record<ReportSection, string>>(`/cases/${caseId}/report/draft`),
+  reportAssistant: (caseId: string, instruction: string, sections: Record<ReportSection, string>) =>
+    http.post<ReportEditProposal>(`/cases/${caseId}/report/assistant`, { instruction, sections }),
+  proposedDiagnoses: (caseId: string, reply: string) =>
+    http.post<ProposedDiagnosis[]>(`/cases/${caseId}/ai-diagnosis/proposed`, { reply }),
+  addDiagnosis: (caseId: string, d: ProposedDiagnosis) =>
+    http.post<Summary>(`/cases/${caseId}/ai-diagnosis/differentials`, d),
+  decideDiagnosis: (caseId: string, index: number, decision: "accept" | "edit" | "dismiss", text?: string) =>
+    http.post<Summary>(`/cases/${caseId}/ai-diagnosis/decisions`, { index, decision, text }),
 };
 
 export const hospitalApi = {
@@ -83,4 +98,18 @@ export const hmsApi = {
   slots: (departmentId: string, practitionerId?: string, limit = 5) =>
     http.get<Slot[]>(`/hms/slots?department_id=${departmentId}${practitionerId ? `&practitioner_id=${practitionerId}` : ""}&limit=${limit}`),
   requests: () => http.get<AppointmentRequestResult[]>("/hms/appointment-requests"),
+};
+
+export const adminDoctorsApi = {
+  list: () => http.get<AdminDoctors>("/admin/doctors"),
+  preview: (body: NewDoctorRequest) => http.post<DoctorPreview>("/admin/doctors/preview", body),
+  create: (body: NewDoctorRequest) => http.post<AdminDoctor>("/admin/doctors", body),
+  details: (id: number) => http.get<DoctorDetails>(`/admin/doctors/${id}`),
+  update: (id: number, body: UpdateDoctorRequest) => http.put<AdminDoctor>(`/admin/doctors/${id}`, body),
+  extendHours: (id: number, weeks: number) => http.post<AdminDoctor>(`/admin/doctors/${id}/extend-hours`, { weeks }),
+  previewHours: (id: number, body: ChangeHoursRequest) => http.post<HoursChangePreview>(`/admin/doctors/${id}/hours/preview`, body),
+  changeHours: (id: number, body: ChangeHoursRequest) => http.put<AdminDoctor>(`/admin/doctors/${id}/hours`, body),
+  removalCheck: (id: number) => http.get<DoctorRemovalCheck>(`/admin/doctors/${id}/removal`),
+  remove: (id: number) => http.del<DoctorRemoval>(`/admin/doctors/${id}`),
+  reactivate: (id: number) => http.post<AdminDoctor>(`/admin/doctors/${id}/reactivate`),
 };

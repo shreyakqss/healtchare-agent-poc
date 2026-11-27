@@ -21,11 +21,16 @@ from app.core.errors import Conflict, Forbidden, NotFound, ServiceUnavailable
 from app.domain.lifecycle import CaseStatus
 from app.models import MedicalAttachment
 from app.schemas.requests import (
+    AIDiagnosisAddRequest,
+    AIDiagnosisDecisionRequest,
+    AIDiagnosisExtractRequest,
     AppointmentSlotRequest,
     AttachmentSkipRequest,
     ConsultationNoteRequest,
     DoctorAssistantRequest,
     FinalizeRequest,
+    ReferralRequest,
+    ReportAssistantRequest,
 )
 from app.schemas.responses import (
     AttachmentResponse,
@@ -34,8 +39,10 @@ from app.schemas.responses import (
     CaseListItem,
     ConsultationNoteResponse,
     DoctorAssistantResponse,
+    PastPatientItem,
     PatientCaseResponse,
     PatientVisitItem,
+    SummaryResponse,
 )
 from app.security import (
     CurrentPrincipal,
@@ -46,16 +53,21 @@ from app.security import (
     require_roles,
 )
 from app.services import (
+    ai_diagnosis_service,
     appointment_service,
     attachment_service,
     attachments,
     case_repo,
     consultation_service,
     doctor_assistant_service,
+    letterhead,
+    past_patients,
     prescreen_trigger,
+    referral_service,
+    report_service,
     workflow_jobs,
 )
-from app.services.clinician_identity import verify_clinician_async
+from app.services.clinician_identity import verify_clinician, verify_clinician_async
 
 router = APIRouter(prefix="/cases", tags=["cases"])
 PatientPrincipal = Annotated[CurrentPrincipal, Depends(require_roles("patient"))]
@@ -68,14 +80,31 @@ PRESCREENABLE = {CaseStatus.INGESTING, CaseStatus.ANALYZING, CaseStatus.FAILED}
 def list_cases(
     principal: ClinicianPrincipal,
     response: Response,
-    limit: int = Query(50, ge=1, le=100),
+    # Up to 1000 so the doctor workspace (worklist + calendar) sees the whole clinic in one call.
+    limit: int = Query(50, ge=1, le=1000),
     cursor: str | None = Query(None, max_length=256),
     db: Session = Depends(get_db),
 ):
     page = cases_for_principal(db, principal, "clinician", limit=limit, cursor=cursor)
     if page.next_cursor:
         response.headers["X-Next-Cursor"] = page.next_cursor
-    return serializers.case_list(db, page.items)
+    return serializers.listed(serializers.case_list(db, page.items))
+
+
+@router.get("/past-patients", response_model=list[PastPatientItem])
+def list_past_patients(
+    principal: ClinicianPrincipal,
+    q: str | None = Query(None, max_length=100),
+    days: int | None = Query(None, ge=1, le=3650),
+    db: Session = Depends(get_db),
+):
+    """The signed-in doctor's own past patients only, grouped per patient - never the whole
+    clinic's. A clinician not linked to a rostered practitioner gets an empty list."""
+    me = past_patients.practitioner_id_for(principal.hms_username)
+    if me is None:
+        return []
+    page = cases_for_principal(db, principal, "clinician", limit=past_patients.MAX_CASES_SCANNED)
+    return past_patients.group(serializers.listed(serializers.case_list(db, page.items)), doctor_id=me, query=q, days=days)
 
 
 @router.get("/my-visits", response_model=list[PatientVisitItem])
@@ -89,7 +118,7 @@ def list_patient_visits(
     page = cases_for_principal(db, principal, "patient", limit=limit, cursor=cursor)
     if page.next_cursor:
         response.headers["X-Next-Cursor"] = page.next_cursor
-    return serializers.patient_case_list(db, page.items)
+    return serializers.listed(serializers.patient_case_list(db, page.items))
 
 
 @router.get("/{case_id}/patient-view", response_model=PatientCaseResponse)
@@ -97,6 +126,18 @@ def get_patient_case(case_id: uuid.UUID, principal: PatientPrincipal, db: Sessio
     rate_limits.enforce("attachment.upload", principal.user_id)
     case = case_for_principal(db, case_id, principal, allow_clinician=False)
     return serializers.patient_case_detail(db, case)
+
+
+@router.get("/{case_id}/letterhead")
+def get_case_letterhead(case_id: uuid.UUID, principal: PatientPrincipal, db: Session = Depends(get_db)):
+    """The letterhead of the clinic that owns this case, for the patient's visit summary.
+    Scoped to the case owner, unlike the staff-only /hospital letterhead route."""
+    case = case_for_principal(db, case_id, principal, allow_clinician=False)
+    try:
+        path = letterhead.path_for(case.hospital_id)
+    except FileNotFoundError:
+        raise NotFound("No letterhead uploaded for this clinic.") from None
+    return FileResponse(path, content_disposition_type="inline")
 
 
 @router.post("/{case_id}/appointment-slot", response_model=PatientCaseResponse)
@@ -204,6 +245,26 @@ def add_consultation_note(
     return serializers.note_out(note)
 
 
+@router.post("/{case_id}/referrals", response_model=CaseDetailResponse, status_code=201)
+def refer_patient(
+    case_id: uuid.UUID,
+    payload: ReferralRequest,
+    principal: ClinicianPrincipal,
+    db: Session = Depends(get_db),
+):
+    """Refer the patient on to another department: opens a linked visit there, booked with the
+    asked-for (or earliest free) doctor. Signed with the referring doctor's HMS login."""
+    rate_limits.enforce("clinician.verify", principal.user_id)
+    require_hms_identity(principal, payload.doctor_username)
+    case = case_for_principal(db, case_id, principal, allow_patient=False)
+    identity = verify_clinician(payload.doctor_username, payload.doctor_password)
+    referral_service.create(db, case, referral_service.ReferralInput(
+        to_department_id=payload.to_department_id, to_doctor_id=payload.to_doctor_id,
+        reason=payload.reason, question=payload.question, urgency=payload.urgency,
+    ), identity)
+    return serializers.case_detail(db, case_repo.case_or_404(db, case_id))
+
+
 @router.post("/{case_id}/finalize", response_model=CaseDetailResponse)
 async def finalize(
     case_id: uuid.UUID,
@@ -240,9 +301,89 @@ async def doctor_assistant_chat(
     case = case_for_principal(db, case_id, principal, allow_patient=False)
     try:
         reply = await doctor_assistant_service.chat(
-            db, case.id, payload.doctor_context, payload.message,
-            [t.model_dump() for t in payload.transcript],
+            db, case.id, _clinician_actor(principal), payload.doctor_context, payload.message,
         )
     except AgentUnavailable as exc:
         raise ServiceUnavailable("The assistant is unavailable right now.") from exc
     return DoctorAssistantResponse(reply=reply)
+
+
+def _clinician_actor(principal: CurrentPrincipal) -> str:
+    return f"clinician:{principal.hms_username or principal.user_id}"
+
+
+@router.post("/{case_id}/ai-diagnosis", response_model=SummaryResponse)
+async def regenerate_ai_diagnosis(case_id: uuid.UUID, principal: ClinicianPrincipal, db: Session = Depends(get_db)):
+    """Draft a fresh AI differential from everything on the case now (new notes, reports).
+    Decision support only: it never changes priority, routing or anything the patient sees."""
+    rate_limits.enforce("doctor.ai_diagnosis", principal.user_id)
+    case = case_for_principal(db, case_id, principal, allow_patient=False)
+    try:
+        summary = await ai_diagnosis_service.generate(db, case.id, _clinician_actor(principal))
+    except AgentUnavailable as exc:
+        raise ServiceUnavailable("The AI diagnosis is unavailable right now.") from exc
+    return serializers.summary_out(summary)
+
+
+@router.post("/{case_id}/report/draft")
+async def draft_report(case_id: uuid.UUID, principal: ClinicianPrincipal, db: Session = Depends(get_db)) -> dict[str, str]:
+    """An AI first draft of the consultation report template, returned to the doctor's form.
+    Nothing is saved until the doctor signs the consultation."""
+    rate_limits.enforce("doctor.ai_diagnosis", principal.user_id)
+    case = case_for_principal(db, case_id, principal, allow_patient=False)
+    try:
+        return await report_service.draft(db, case.id, _clinician_actor(principal))
+    except AgentUnavailable as exc:
+        raise ServiceUnavailable("The report draft is unavailable right now.") from exc
+
+
+@router.post("/{case_id}/report/assistant")
+async def report_assistant(
+    case_id: uuid.UUID, payload: ReportAssistantRequest, principal: ClinicianPrincipal, db: Session = Depends(get_db),
+) -> dict:
+    """Proposed edits to the report the doctor is writing; the doctor applies or discards each."""
+    rate_limits.enforce("doctor.assistant", principal.user_id)
+    case = case_for_principal(db, case_id, principal, allow_patient=False)
+    try:
+        return await report_service.propose_edit(db, case.id, payload.sections, payload.instruction, _clinician_actor(principal))
+    except AgentUnavailable as exc:
+        raise ServiceUnavailable("The report assistant is unavailable right now.") from exc
+
+
+@router.post("/{case_id}/ai-diagnosis/differentials", response_model=SummaryResponse)
+def add_ai_diagnosis(
+    case_id: uuid.UUID, payload: AIDiagnosisAddRequest, principal: ClinicianPrincipal, db: Session = Depends(get_db),
+):
+    """The doctor adds a diagnosis they picked from an assistant reply to the differential."""
+    case = case_for_principal(db, case_id, principal, allow_patient=False)
+    summary = ai_diagnosis_service.add(
+        db, case.id, payload.condition, payload.likelihood, payload.supporting, _clinician_actor(principal),
+    )
+    return serializers.summary_out(summary)
+
+
+@router.post("/{case_id}/ai-diagnosis/proposed")
+async def proposed_diagnoses(
+    case_id: uuid.UUID, payload: AIDiagnosisExtractRequest, principal: ClinicianPrincipal, db: Session = Depends(get_db),
+) -> list[dict]:
+    """The diagnoses an assistant reply puts forward, so the doctor picks real conditions rather
+    than copying advice into the differential. Nothing is saved here."""
+    rate_limits.enforce("doctor.assistant", principal.user_id)
+    case_for_principal(db, case_id, principal, allow_patient=False)
+    try:
+        return await ai_diagnosis_service.proposed_in(payload.reply)
+    except AgentUnavailable as exc:
+        raise ServiceUnavailable("Could not read diagnoses from that reply right now.") from exc
+
+
+@router.post("/{case_id}/ai-diagnosis/decisions", response_model=SummaryResponse)
+def decide_ai_diagnosis(
+    case_id: uuid.UUID, payload: AIDiagnosisDecisionRequest, principal: ClinicianPrincipal, db: Session = Depends(get_db),
+):
+    """The doctor accepts, rewords or dismisses one suggestion. Audited; only accepted or
+    edited ones are offered for the consultation form."""
+    case = case_for_principal(db, case_id, principal, allow_patient=False)
+    summary = ai_diagnosis_service.decide(
+        db, case.id, payload.index, payload.decision, payload.text, _clinician_actor(principal),
+    )
+    return serializers.summary_out(summary)

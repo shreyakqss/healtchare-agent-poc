@@ -14,14 +14,18 @@ import { PatientResults } from "@/features/intake/patient-results";
 import { Composer } from "@/features/intake/composer";
 import { DocumentPrompt } from "@/features/intake/document-prompt";
 import { MessageList } from "@/features/intake/message-list";
-import { useIntakeSession } from "@/features/intake/use-intake-session";
-import type { ActiveIntake, Attachment, LinkedPatientRecord, PatientVisitItem } from "@/lib/api";
+import { openingFor, useIntakeSession } from "@/features/intake/use-intake-session";
+import { VisitStart } from "@/features/intake/visit-start";
+import { ProfilePanel } from "@/features/intake/profile-panel";
+import { formatDate } from "@/lib/utils";
+import type { ActiveIntake, Attachment, LinkedPatientRecord, PatientVisitItem, PreviousVisit } from "@/lib/api";
 
-type Tab = "chat" | "documents" | "visits";
+type Tab = "chat" | "documents" | "visits" | "profile";
 
 export function PatientPortal({
   initialRequiredFields, initialRequiredAttachmentKinds, initialApiOnline, initialLlmConfigured, initialGreeting,
   initialVisits, initialActiveIntake, initialPastAttachments, prefillName, prefillEmail, linkedRecord,
+  followUpOptions = [],
 }: {
   initialRequiredFields: string[]; initialRequiredAttachmentKinds: string[];
   initialApiOnline: boolean; initialLlmConfigured: boolean; initialGreeting: string; initialVisits: PatientVisitItem[];
@@ -30,17 +34,22 @@ export function PatientPortal({
   prefillName?: string | null;
   prefillEmail?: string | null;
   linkedRecord?: LinkedPatientRecord | null;
+  followUpOptions?: PreviousVisit[];
 }) {
   const [tab, setTab] = useState<Tab>("chat");
+  const [profile, setProfile] = useState<LinkedPatientRecord | null>(linkedRecord ?? null);
   const [checking, setChecking] = useState(false);
   const [documentsDismissed, setDocumentsDismissed] = useState(false);
-  const { state, submitIdentity, send, retry, refreshCase, clearError, uploadDocument, skipDocument } =
+  const { state, startVisit, submitIdentity, send, retry, refreshCase, clearError, uploadDocument, skipDocument } =
     useIntakeSession(initialGreeting, initialActiveIntake, initialPastAttachments);
   // A required kind is resolved by a file or by a logged skip - same rule the backend applies.
   const uploadedKinds = new Set(state.attachments.map((a) => a.kind));
   const pendingKinds = initialRequiredAttachmentKinds.filter(
     (k) => !uploadedKinds.has(k) && !(k in state.skippedKinds),
   );
+  // The checklist is only useful while answers are being collected: not before a visit is
+  // started, not once intake is done, and not on the other tabs.
+  const showProgress = tab === "chat" && state.sessionId !== null && !state.complete;
   const showDocumentPrompt = !documentsDismissed && pendingKinds.length > 0;
 
   async function checkUpdates() {
@@ -57,9 +66,9 @@ export function PatientPortal({
       ) : null}
 
       <Tabs<Tab> idPrefix="patient-portal" className="sticky top-14 z-20 mb-6 bg-canvas" value={tab} onChange={setTab}
-        tabs={[{ id: "chat", label: "Intake form" }, { id: "documents", label: "Documents" }, { id: "visits", label: "My visits" }]} />
+        tabs={[{ id: "chat", label: profile ? "Book a visit" : "Intake form" }, { id: "documents", label: "Documents" }, { id: "visits", label: "My visits" }, { id: "profile", label: "Profile" }]} />
 
-      <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_260px]">
+      <div className={cn("grid gap-8", showProgress && "lg:grid-cols-[minmax(0,1fr)_260px]")}>
         <section
           id="patient-portal-panel-chat"
           role="tabpanel"
@@ -67,6 +76,7 @@ export function PatientPortal({
           className={cn("min-w-0", tab !== "chat" && "hidden")}
         >
           <div className="mx-auto flex max-w-2xl flex-col gap-5">
+            {state.previousVisit && state.identityComplete ? <FollowUpBanner visit={state.previousVisit} /> : null}
             {!state.identityComplete ? null : (
               <div className="flex h-[min(42rem,calc(100dvh-10rem))] min-h-96 flex-col overflow-hidden rounded-lg border border-line bg-sunken shadow-card">
                 <div className="border-b border-line bg-surface px-4 py-3 sm:px-5">
@@ -144,6 +154,17 @@ export function PatientPortal({
                   />
                 ) : null}
               </div>
+            ) : !state.sessionId ? (
+              <VisitStart
+                followUpOptions={followUpOptions}
+                registered={profile !== null}
+                busy={state.startingVisit}
+                disabled={!initialApiOnline}
+                onStart={(type, followUpOf) => void startVisit(
+                  type, followUpOf,
+                  openingFor(initialGreeting, followUpOptions.find((v) => v.case_id === followUpOf) ?? null),
+                )}
+              />
             ) : !state.identityComplete ? (
               <IntakeForm
                 onSubmit={(values) => void submitIdentity(values)}
@@ -151,7 +172,7 @@ export function PatientPortal({
                 disabled={!initialApiOnline}
                 prefillName={prefillName}
                 prefillEmail={prefillEmail}
-                linkedRecord={linkedRecord}
+                linkedRecord={profile}
               />
             ) : null}
           </div>
@@ -187,19 +208,48 @@ export function PatientPortal({
           <div className="mx-auto max-w-2xl space-y-5">
             <header>
               <h2 className="text-xl font-semibold tracking-tight">My visits</h2>
-              <p className="mt-1 text-sm text-fg-muted">Your approved plan and visit summary appear here once the care team has signed off.</p>
+              <p className="mt-1 text-sm text-fg-muted">Your appointments and visit summaries appear here.</p>
             </header>
-            <VisitsPanel currentCaseId={state.caseId} initialVisits={initialVisits} />
+            <VisitsPanel currentCaseId={state.caseId} currentVisitType={state.visitType} currentPrevious={state.previousVisit} initialVisits={initialVisits} />
           </div>
         </section>
 
-        <aside className="lg:sticky lg:top-20 lg:self-start" aria-label="Intake progress">
+        <section
+          id="patient-portal-panel-profile"
+          role="tabpanel"
+          aria-labelledby="patient-portal-tab-profile"
+          className={cn("min-w-0", tab !== "profile" && "hidden")}
+        >
+          <div className="mx-auto max-w-2xl">
+            <ProfilePanel record={profile} disabled={!initialApiOnline} onSaved={setProfile} />
+          </div>
+        </section>
+
+        {showProgress ? <aside className="lg:sticky lg:top-20 lg:self-start" aria-label="Intake progress">
           <div className="rounded-lg border border-line bg-surface p-5 shadow-card">
             <IntakeProgress requiredFields={initialRequiredFields} missingFields={state.missingFields} capturedFields={state.capturedFields}
-              complete={state.complete} fallbackMode={initialApiOnline && !initialLlmConfigured} />
+              complete={state.complete} documentsPending={pendingKinds.length} fallbackMode={initialApiOnline && !initialLlmConfigured} />
           </div>
-        </aside>
+        </aside> : null}
       </div>
+    </div>
+  );
+}
+
+function FollowUpBanner({ visit }: { visit: PreviousVisit }) {
+  const diagnosis = visit.diagnosis?.split("\n").map((l) => l.trim()).filter(Boolean) ?? [];
+  return (
+    <div className="rounded-lg border border-line bg-surface p-4 shadow-card">
+      <div className="flex items-center gap-2 text-sm font-semibold">
+        <Icons.refresh size={16} className="text-brand" />
+        Follow-up visit
+      </div>
+      <p className="mt-1 text-xs text-fg-muted">
+        About your visit on {formatDate(visit.visit_at)}
+        {visit.doctor_name ? ` with ${visit.doctor_name}` : ""}
+        {visit.department_name ? ` (${visit.department_name})` : ""}.
+      </p>
+      {diagnosis.length ? <p className="mt-2 text-sm"><span className="text-fg-muted">Diagnosis: </span>{diagnosis.join(", ")}</p> : null}
     </div>
   );
 }

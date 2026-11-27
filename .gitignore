@@ -6,3 +6,11 @@ data/
 # docker compose reads this automatically for credential overrides; never commit real values.
 .env
 !.env.example
+# macOS Finder metadata
+.DS_Store
+.claude
+.creds
+/features
+.openemr-test-patients
+# Synthetic upload samples for demos (X-ray, scanned PDFs) - local only
+/test-files

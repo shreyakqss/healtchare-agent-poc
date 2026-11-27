@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 
 import app.services.intake_service as intake_service_module
 from app.agents import AgentUnavailable
-from app.agents.schemas import ExtractedFact, ExtractionResult, PatientAnswerReview
+from app.agents.schemas import ExtractedFact, ExtractionResult, FocusedQuestion, PatientAnswerReview
 from app.main import app
 from tests.helpers import (
     BASE,
@@ -78,6 +78,43 @@ def test_chat_max_assistant_questions_backstop(client, monkeypatch):
     assert r1["intake_complete"] is True
     assert r1["reply"] == intake_service_module.CLOSING_WITH_GAPS
     assert r1["missing_fields"] != []
+
+
+def test_backstop_with_open_fields_still_reaches_a_clinician(client, monkeypatch):
+    """The P0: hitting the question cap with fields open used to leave the case short of the
+    completeness gate forever. The open fields close as "Not asked" and pre-screening fires."""
+    fired: list[str] = []
+
+    async def fake_run_prescreen(case_id, **_) -> None:
+        fired.append(str(case_id))
+
+    monkeypatch.setattr("app.services.workflow_jobs.run_prescreen", fake_run_prescreen)
+    monkeypatch.setattr(intake_service_module, "MAX_ASSISTANT_QUESTIONS", 1)
+    require_attachments(monkeypatch)
+    sid, cid = new_identified_session(client)
+    client.post(f"{BASE}/intake-sessions/{sid}/messages", json={"content": "chest pain"})
+    r1 = client.post(f"{BASE}/intake-sessions/{sid}/messages", json={"content": "no"}).json()
+    assert r1["intake_complete"] is True and "duration" in r1["missing_fields"]  # still shown as not collected
+    assert r1["captured_fields"]["duration"] == ["Not asked"]
+
+    detail = client.get(f"{BASE}/cases/{cid}").json()
+    assert detail["status"] != "INGESTING"  # claimed for pre-screening
+    assert "duration" in detail["missing_fields"]
+
+
+def test_model_down_closes_intake_after_repeated_failures(client, monkeypatch):
+    async def down(*_a, **_k):
+        raise AgentUnavailable("down")
+
+    sid, _ = new_identified_session(client)
+    client.post(f"{BASE}/intake-sessions/{sid}/messages", json={"content": "cough"})
+    monkeypatch.setattr(intake_service_module.fact_extractor, "extract", down)
+    replies = [client.post(f"{BASE}/intake-sessions/{sid}/messages", json={"content": "hello"}).json()
+               for _ in range(intake_service_module.MAX_FAILED_TURNS)]
+    assert all(r["reply"] == intake_service_module.UNDERSTANDING_UNAVAILABLE and not r["intake_complete"]
+               for r in replies[:-1])
+    assert replies[-1]["intake_complete"] is True
+    assert replies[-1]["reply"] == intake_service_module.CLOSING_ASSISTANT_DOWN
 
 
 def test_chat_completion_fires_prescreen(client, monkeypatch):
@@ -370,3 +407,39 @@ def test_only_a_configured_clinic_term_is_stored_as_normalized():
 def test_patient_cannot_link_an_arbitrary_hospital_record(client):
     response = client.post(f"{BASE}/intake-sessions", json={"mrn": "someone-elses-record"})
     assert response.status_code == 422
+
+
+def test_focused_history_follows_the_required_fields_then_closes(client, monkeypatch):
+    """After the required fields, the clinical interviewer asks complaint-specific questions
+    (asks_field clinical_detail) until it says the doctor has enough."""
+    asked: list[int] = []
+
+    async def interviewer(transcript, on_file, n, limit, previous_visit=None):
+        asked.append(n)
+        return FocusedQuestion(done=n >= 2, question="Any **cough** or runny nose?", topic="cough")
+
+    monkeypatch.setattr(intake_service_module.clinical_interviewer, "next_question", interviewer)
+    sid, _ = new_identified_session(client)
+    client.post(f"{BASE}/intake-sessions/{sid}/messages", json={"content": "fever and throat pain"})
+    for _ in ["symptom", "duration", "history", "medication", "allergy"]:
+        r = client.post(f"{BASE}/intake-sessions/{sid}/messages", json={"content": "no"}).json()
+    assert r["asks_field"] == "clinical_detail" and r["intake_complete"] is False
+    assert r["reply"] == "Any **cough** or runny nose?"
+    r = client.post(f"{BASE}/intake-sessions/{sid}/messages", json={"content": "no cough"}).json()
+    assert r["asks_field"] == "clinical_detail"
+    last = client.post(f"{BASE}/intake-sessions/{sid}/messages", json={"content": "no"}).json()
+    assert last["intake_complete"] is True
+    assert asked == [0, 1, 2]
+
+
+def test_interviewer_outage_closes_intake_instead_of_blocking(client, monkeypatch):
+    async def down(*_, **__):
+        raise AgentUnavailable("down")
+
+    monkeypatch.setattr(intake_service_module.clinical_interviewer, "next_question", down)
+    sid, _ = new_identified_session(client)
+    client.post(f"{BASE}/intake-sessions/{sid}/messages", json={"content": "fever"})
+    for _ in range(4):
+        client.post(f"{BASE}/intake-sessions/{sid}/messages", json={"content": "no"})
+    last = client.post(f"{BASE}/intake-sessions/{sid}/messages", json={"content": "no"}).json()
+    assert last["intake_complete"] is True

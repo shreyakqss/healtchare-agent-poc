@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from app.db import utcnow
 from app.domain.lifecycle import TERMINAL, CaseStatus, assert_transition
 from app.models import IntakeSession
-from app.services import audit
+from app.services import audit, slot_hold_service
 
 
 def transition(
@@ -29,6 +29,9 @@ def transition(
         if target in TERMINAL:
             session.completed_at = utcnow()
         audit.record(db, case_id, actor, "status.changed", {"from": previous, "to": target})
+        if target in {CaseStatus.REJECTED, CaseStatus.FAILED}:
+            # A completed case keeps its time; a failed one re-holds when a retry re-routes it.
+            slot_hold_service.release(db, case_id, actor)
     if commit:
         db.commit()
     return session

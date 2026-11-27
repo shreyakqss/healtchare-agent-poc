@@ -8,7 +8,9 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import Response
+from sqlalchemy.orm import Session
 
+from app.api.deps import get_db
 from app.core.errors import NotFound
 from app.integrations.hms import get_hms
 from app.integrations.hms.schemas import (
@@ -20,6 +22,7 @@ from app.integrations.hms.schemas import (
     HMSStatus,
 )
 from app.security import CurrentPrincipal, require_active_clinic, require_roles
+from app.services import slot_hold_service
 
 router = APIRouter(prefix="/hms", tags=["hms"])
 StaffPrincipal = Annotated[CurrentPrincipal, Depends(require_roles("clinician", "admin"))]
@@ -86,11 +89,12 @@ def practitioners(principal: ClinicianPrincipal, limit: int = Query(50, ge=1, le
 def slots(
     department_id: str,
     principal: ClinicianPrincipal,
+    db: Annotated[Session, Depends(get_db)],
     practitioner_id: str | None = None,
     limit: int = Query(5, le=50),
 ):
     _require_clinician_clinic(principal)
-    return get_hms().available_slots(department_id, practitioner_id, limit)
+    return slot_hold_service.open_slots(db, get_hms(), department_id, practitioner_id, limit)
 
 
 @router.get("/appointment-requests", response_model=list[AppointmentRequestResult])

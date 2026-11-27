@@ -24,13 +24,15 @@ import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import urlsplit
+from zoneinfo import ZoneInfo
 
 import httpx
 
 from app.core.errors import HMSRejected
+from app.domain import scheduling
 from app.integrations.hms.openemr import fhir
 from app.integrations.hms.openemr.auth import (
     TIMEOUT_SECONDS,
@@ -55,7 +57,9 @@ from app.integrations.hms.schemas import (
     HMSPractitioner,
     HMSSlot,
     HMSStatus,
+    HMSWeeklyHours,
     PatientRegistration,
+    ReferralRecord,
     VerifiedIdentity,
 )
 
@@ -65,10 +69,46 @@ logger = logging.getLogger(__name__)
 # a 3-request round-trip against OpenEMR, so the answer is cached briefly.
 STATUS_CACHE_SECONDS = 30.0
 # `_summary=count` and `bundle.total` are both unreliable on OpenEMR 8.3 (confirmed live:
-# `total` echoes `_count`), so status() fetches a real page and counts entries.
-_COUNT_PAGE_SIZE = 500
+# `total` echoes `_count`), so status() fetches real pages and counts entries. A page holds at
+# most 200 whatever `_count` asks for, and there is no `next` link, so counting walks `_offset`.
+_COUNT_PAGE_SIZE = 200
+_COUNT_MAX_PAGES = 100
 _MIME_EXTENSIONS = {"text/plain": "txt", "application/json": "json", "application/pdf": "pdf", "text/markdown": "md"}
 APPOINTMENT_REQUEST_TITLE = "CareFlow appointment request"
+# OpenEMR calendar: category 2 is a provider's "In Office" block; a status of "x"/"%" is a
+# cancellation, so that appointment no longer occupies the provider's time.
+IN_OFFICE_CATEGORY_ID = "2"
+_CANCELLED_STATUSES = {"x", "%"}
+
+
+def _event_interval(event: dict[str, Any], tz: ZoneInfo) -> tuple[datetime, datetime] | None:
+    """`(start, end)` of a calendar row in the clinic's timezone - OpenEMR stores bare local times."""
+    try:
+        day = event["pc_eventDate"]
+        start = datetime.fromisoformat(f"{day}T{event['pc_startTime']}").replace(tzinfo=tz)
+        end = datetime.fromisoformat(f"{day}T{event['pc_endTime']}").replace(tzinfo=tz)
+    except (KeyError, TypeError, ValueError):
+        return None
+    return (start, end) if end > start else None
+
+
+def _office_hours_and_busy(
+    events: list[dict[str, Any]], practitioner_id: str, tz: ZoneInfo
+) -> tuple[list[tuple[datetime, datetime]], list[tuple[datetime, datetime]]]:
+    """Split one practitioner's calendar rows into published office hours and booked time."""
+    hours: list[tuple[datetime, datetime]] = []
+    busy: list[tuple[datetime, datetime]] = []
+    for event in events:
+        if event.get("pce_aid_uuid") != practitioner_id:
+            continue
+        interval = _event_interval(event, tz)
+        if interval is None:
+            continue
+        if str(event.get("pc_catid")) == IN_OFFICE_CATEGORY_ID:
+            hours.append(interval)
+        elif event.get("pc_pid") and event.get("pc_apptstatus") not in _CANCELLED_STATUSES:
+            busy.append(interval)
+    return hours, busy
 
 
 def _document_filename(title: str, content_type: str) -> str:
@@ -182,6 +222,17 @@ class FhirHMS:
     def _search(self, resource_type: str, **params: Any) -> list[fhir.Resource]:
         return fhir.bundle_entries(self._request("GET", resource_type, params=params).json())
 
+    def _count(self, resource_type: str, **params: Any) -> int:
+        """Every matching resource, page by page (distinct ids, so a page that shifts while
+        it is read cannot double-count). Stops at `_COUNT_MAX_PAGES` pages."""
+        seen: set[str] = set()
+        for page in range(_COUNT_MAX_PAGES):
+            entries = self._search(resource_type, _count=_COUNT_PAGE_SIZE, _offset=page * _COUNT_PAGE_SIZE, **params)
+            seen.update(str(e.get("id")) for e in entries)
+            if len(entries) < _COUNT_PAGE_SIZE:
+                break
+        return len(seen)
+
     def _search_or_empty(self, resource_type: str, **params: Any) -> list[fhir.Resource]:
         """Best-effort search: a resource the install does not expose is an empty list."""
         try:
@@ -247,7 +298,7 @@ class FhirHMS:
 
     def _probe_status(self) -> HMSStatus:
         try:
-            patients = self._search("Patient", _count=_COUNT_PAGE_SIZE)
+            patients = self._count("Patient")
             practitioners = self.list_practitioners(limit=_COUNT_PAGE_SIZE, include_usernames=False)
             pending = self._search_or_empty("Appointment", status="proposed", _count=_COUNT_PAGE_SIZE)
         except Exception as exc:  # noqa: BLE001 - status must never raise
@@ -255,7 +306,7 @@ class FhirHMS:
             return HMSStatus(provider=self.provider, connected=False, patients=0, practitioners=0, pending_requests=0)
         return HMSStatus(
             provider=self.provider, connected=True,
-            patients=len(patients), practitioners=len(practitioners), pending_requests=len(pending),
+            patients=patients, practitioners=len(practitioners), pending_requests=len(pending),
         )
 
     def get_facility(self) -> HMSFacility | None:
@@ -449,11 +500,24 @@ class FhirHMS:
                 if pid in seen:
                     continue
                 seen.add(pid)
+            if res.get("active") is False:  # deactivated in Admin > Doctors: never routed to again
+                continue
             out.append(fhir.practitioner_from_resource(res, roles.get(pid or ""), usernames.get(pid or "")))
         return out
 
     def available_slots(self, department_id: str, practitioner_id: str | None = None, limit: int = 5) -> list[HMSSlot]:
-        """Advisory only - an install without a Slot endpoint (404 on 8.3) simply offers no slot."""
+        """Advisory only. A practitioner's "In Office" calendar blocks come first: OpenEMR 8.3
+        has no Slot endpoint (404), so those published hours are the real schedule. Without
+        blocks, a FHIR Slot search; an install with neither simply offers no slot."""
+        if practitioner_id:
+            from app.services import hospital_config  # the clinic's timezone for OpenEMR's bare times
+
+            tz = ZoneInfo(hospital_config.hospital().get("timezone") or "UTC")
+            hours, busy = _office_hours_and_busy(self._rest.calendar_events(), practitioner_id, tz)
+            if hours:
+                return scheduling.slots_within_hours(
+                    hours, busy, department_id, practitioner_id, datetime.now(UTC), count=limit
+                )
         params: dict[str, Any] = {"status": "free", "_count": limit}
         if practitioner_id:
             params["schedule.actor"] = f"Practitioner/{practitioner_id}"
@@ -461,6 +525,43 @@ class FhirHMS:
             fhir.slot_from_resource(res, department_id=department_id, practitioner_id=practitioner_id)
             for res in self._search_or_empty("Slot", **params)
         ]
+
+    def office_hours(self, practitioner_id: str) -> list[HMSWeeklyHours]:
+        """The weekly pattern of the practitioner's "In Office" blocks over the next two weeks
+        (two, so a day off this week or a one-off block cannot hide a regular working day)."""
+        from app.services import hospital_config  # the clinic's timezone for OpenEMR's bare times
+
+        tz = ZoneInfo(hospital_config.hospital().get("timezone") or "UTC")
+        hours, _ = _office_hours_and_busy(self._rest.calendar_events(), practitioner_id, tz)
+        today = datetime.now(tz).replace(hour=0, minute=0, second=0, microsecond=0)
+        window = [(start, end) for start, end in hours if today <= start < today + timedelta(days=14)]
+        return scheduling.weekly_hours(window)
+
+    # --- bookings (the patient's confirmed time, written to the calendar) ---------------
+
+    def book_appointment(self, mrn: str, practitioner_id: str, start: datetime, end: datetime, note: str) -> str:
+        """OpenEMR's appointment API needs a write scope this client is not registered for, so
+        the calendar row is written the way Admin > Doctors writes office hours (provisioning)."""
+        from app.integrations.hms.openemr import provisioning
+        from app.services import hospital_config
+
+        hospital = hospital_config.hospital()
+        tz = ZoneInfo(hospital.get("timezone") or "UTC")
+        user_id = provisioning.user_id_for(practitioner_id)
+        if user_id is None:
+            raise httpx.HTTPError("That doctor is not in the hospital system")
+        pid = self._pid(self._require_patient(mrn))
+        local_start, local_end = start.astimezone(tz), end.astimezone(tz)
+        event_id = provisioning.book_appointment(
+            user_id, pid, int(hospital.get("hms_facility_id") or 3), local_start.date(),
+            local_start.time().replace(tzinfo=None), local_end.time().replace(tzinfo=None), "Office Visit", note,
+        )
+        return str(event_id)
+
+    def cancel_appointment(self, reference: str) -> None:
+        from app.integrations.hms.openemr import provisioning
+
+        provisioning.cancel_appointment(int(reference))
 
     # --- write side (standard API; drafts only) --------------------------------------
 
@@ -473,6 +574,30 @@ class FhirHMS:
         if not self._rest.upload_document(pid, filename, content, content_type):
             raise httpx.HTTPError("OpenEMR did not accept the document upload")
         return f"openemr:patient/{pid}/document/{filename}"
+
+    # OpenEMR's referral risk levels for CareFlow's "how soon".
+    REFERRAL_RISK = {"routine": "Low", "soon": "Medium", "urgent": "High"}
+
+    def record_referral(self, referral: ReferralRecord) -> str:
+        """An LBTref transaction on the chart, the record OpenEMR's own Referral form writes:
+        referring and receiving doctor by NPI, reason, diagnosis, risk. Raises httpx.HTTPError."""
+        pid = self._pid(self._require_patient(referral.patient_mrn))
+        npis = self._rest.practitioner_npis()
+        payload = {
+            "type": "LBTref",
+            "groupname": "Default",
+            "title": "Referral",
+            "message": f"Referral to {referral.to_department}",
+            "body": referral.reason,
+            "referDiagnosis": referral.diagnosis or "",
+            "riskLevel": self.REFERRAL_RISK.get(referral.urgency, "Low"),
+            "referralDate": referral.referred_on.isoformat(),
+            "referByNpi": npis.get(referral.from_practitioner_id, ""),
+            "referToNpi": npis.get(referral.to_practitioner_id or "", ""),
+            "includeVitals": "0",
+        }
+        reference = self._rest.create_referral(pid, payload)
+        return f"openemr:patient/{pid}/transaction/{reference or ''}".rstrip("/")
 
     def request_appointment(self, request: AppointmentRequest) -> AppointmentRequestResult:
         """File the request on the chart for scheduling staff. Never creates a calendar
@@ -498,18 +623,26 @@ class FhirHMS:
         """Write clinician-approved intake as chart rows plus a faithful JSON note.
 
         Only ever called from finalisation, after a clinician approved the case and
-        recorded consultation notes. Patient-stated rows only - HMS imports are not
-        echoed back to the HMS.
+        recorded consultation notes. Patient-stated allergies and medicines (HMS imports are
+        not echoed back), and the problems the doctor signed under Past history; anything
+        already on the chart is skipped.
         """
         patient = self._require_patient(mrn)
         patient_uuid = patient["id"]
         pid = self._pid(patient)
         self._record_visit(patient_uuid, pid, payload)
-        for fact in payload.get("facts", []):
-            if fact.get("source") == "patient" and fact.get("kind") in {"history", "condition"}:
-                self._rest.create_medical_problem(patient_uuid, fact["value"])
+        # Already on the chart (an earlier visit, or entered in OpenEMR): not written twice.
+        current = self.get_patient(mrn)
+        on_chart = {
+            kind: {x.strip().lower() for x in (getattr(current, attr, None) or [])}
+            for kind, attr in (("problem", "conditions"), ("allergy", "allergies"), ("medication", "medications"))
+        }
+        # Problems come from the Past history the doctor signed, never raw intake facts.
+        for title in payload.get("problems", []):
+            if title.lower() not in on_chart["problem"]:
+                self._rest.create_medical_problem(patient_uuid, title)
         for entry in payload.get("entries", []):
-            if entry.get("source") != "patient":
+            if entry.get("source") != "patient" or entry["name"].strip().lower() in on_chart.get(entry.get("kind"), set()):
                 continue
             if entry.get("kind") == "allergy":
                 self._rest.create_allergy(patient_uuid, entry["name"], entry.get("reaction_or_dose"))
@@ -578,7 +711,12 @@ class FhirHMS:
         if not sub:
             return VerifiedIdentity(id=username, name=username)
         try:
-            name = fhir.human_name(self._request("GET", f"Practitioner/{sub}").json())
+            practitioner = self._request("GET", f"Practitioner/{sub}").json()
         except Exception:  # noqa: BLE001 - the name is cosmetic; the verified id is what matters
-            name = username
-        return VerifiedIdentity(id=sub, name=name)
+            return VerifiedIdentity(id=sub, name=username)
+        # OpenEMR's password grant still succeeds for a deactivated user (confirmed live), so a
+        # doctor deactivated in Admin > Doctors is refused here.
+        if practitioner.get("active") is False:
+            logger.info("verify_credentials: practitioner is deactivated")
+            return None
+        return VerifiedIdentity(id=sub, name=fhir.human_name(practitioner))

@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import dataclasses
+import logging
 import uuid
 from collections import defaultdict
 
+import httpx
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.domain import intake_fields, scheduling
+from app.integrations.hms import get_hms
 from app.models import (
     AllergyMedication,
     AuditEvent,
@@ -20,12 +24,14 @@ from app.models import (
     MedicalAttachment,
     PatientCase,
     PatientFact,
+    Referral,
     RoutingRecommendation,
     TriageResult,
     TriageRule,
 )
 from app.schemas.responses import (
     ActiveIntakeResponse,
+    AssistantMessageResponse,
     AttachmentResponse,
     AuditEventResponse,
     CareTaskResponse,
@@ -33,11 +39,14 @@ from app.schemas.responses import (
     CaseListItem,
     ConsultationNoteResponse,
     DiscrepancyResponse,
+    EmergencyAdviceResponse,
     EntryResponse,
     FactResponse,
     PatientCaseResponse,
     PatientRoutingResponse,
     PatientVisitItem,
+    PreviousVisitResponse,
+    ReferralResponse,
     ReviewResponse,
     RoutingResponse,
     SessionResponse,
@@ -45,26 +54,50 @@ from app.schemas.responses import (
     SummaryResponse,
     TranscriptMessage,
     TriageResponse,
+    WeeklyHoursResponse,
 )
-from app.services import case_repo, hospital_config
+from app.services import (
+    appointment_service,
+    case_repo,
+    doctor_assistant_service,
+    hospital_config,
+    letterhead,
+    referral_service,
+    slot_hold_service,
+    visit_history,
+)
+
+logger = logging.getLogger(__name__)
 
 
 def session_out(db: Session, session: IntakeSession, case: PatientCase) -> SessionResponse:
     return SessionResponse(
         session_id=str(session.id), case_id=str(case.id), status=session.status,
         consent_status=session.consent_status, demographics=case_repo.demographics(db, case.id),
-        hms_linked=bool(case.hms_patient_id), missing_fields=case_repo.missing_fields(db, case.id),
-        captured_fields=case_repo.captured_fields(db, case.id),
+        hms_linked=bool(case.hms_patient_id),
+        # Fields closed as "Not asked" stay unticked on the patient's checklist.
+        missing_fields=case_repo.missing_fields(db, case.id) + case_repo.unasked_fields(db, case.id),
+        captured_fields=case_repo.captured_for_display(db, case.id),
         required_attachment_kinds=hospital_config.required_attachment_kinds(),
         pending_attachment_kinds=case_repo.pending_attachment_kinds(db, case.id),
         past_attachments=[attachment_out(a) for a in case_repo.past_attachments(db, case.id)],
+        identity_complete=_identity_done(db, case),
+        visit_type=case.visit_type,
+        previous_visit=previous_visit_out(visit_history.previous_visit(db, case)),
     )
+
+
+def _identity_done(db: Session, case: PatientCase) -> bool:
+    return db.query(AuditEvent.id).filter(
+        AuditEvent.case_id == case.id, AuditEvent.action == "intake.identity_submitted"
+    ).first() is not None and not case_repo.missing_identity_fields(db, case.id)
 
 
 def attachment_out(a: MedicalAttachment) -> AttachmentResponse:
     return AttachmentResponse(
         id=str(a.id), case_id=str(a.case_id), kind=a.kind, filename=a.filename, mime_type=a.mime_type, size_bytes=a.size_bytes,
-        has_text=bool(a.extracted_text), extracted_text=a.extracted_text, uploaded_by=a.uploaded_by, created_at=a.created_at,
+        has_text=bool(a.extracted_text), extracted_text=a.extracted_text,
+        extracted_medications=list(a.extracted_medications or []), uploaded_by=a.uploaded_by, created_at=a.created_at,
     )
 
 
@@ -81,8 +114,7 @@ def active_intake_out(db: Session, session: IntakeSession, case: PatientCase) ->
     )
     base = session_out(db, session, case)
     return ActiveIntakeResponse(
-        **base.model_dump(),
-        identity_complete=identity_complete,
+        **{**base.model_dump(), "identity_complete": identity_complete},
         intake_complete=bool(completed_turn and completed_turn.payload.get("intake_complete")),
         transcript=[
             TranscriptMessage(role=message.role, content=message.content, turn_index=message.turn_index)
@@ -91,6 +123,10 @@ def active_intake_out(db: Session, session: IntakeSession, case: PatientCase) ->
         attachments=[attachment_out(attachment) for attachment in case_repo.attachments(db, case.id)],
         skipped_attachment_kinds=sorted(case_repo.skipped_attachment_kinds(db, case.id)),
     )
+
+
+def previous_visit_out(visit: visit_history.PreviousVisit | None) -> PreviousVisitResponse | None:
+    return PreviousVisitResponse(**dataclasses.asdict(visit)) if visit else None
 
 
 def triage_out(db: Session, t: TriageResult | None) -> TriageResponse | None:
@@ -125,16 +161,44 @@ def routing_out(r: RoutingRecommendation | None) -> RoutingResponse | None:
     )
 
 
-def patient_routing_out(r: RoutingRecommendation | None) -> PatientRoutingResponse | None:
+def patient_routing_out(db: Session, case: PatientCase, r: RoutingRecommendation | None) -> PatientRoutingResponse | None:
+    """Times are the live list across the department's doctors (appointment_service.patient_options),
+    times other patients hold included but flagged `taken` so the picker greys them out, and the
+    selection is whichever time the case actually holds - the default included - so the picker
+    never highlights another. `doctor_choice` says whether the patient may pick the doctor; why
+    not (urgency, or an approved case) is not said, as the priority stays off the patient view."""
     if r is None:
         return None
+    slots, doctor_choice = appointment_service.patient_options(db, case, r)
+    passed = appointment_service.passed_booking(case, r) is not None
+    # A routing-time default that has gone by is never offered (slot_hold_service.live_options).
+    suggested = r.suggested_slot if r.suggested_slot and not slot_hold_service.has_passed(r.suggested_slot) else None
     return PatientRoutingResponse(
         department_id=r.department_id, department_name=r.department_name, doctor_id=r.doctor_id, doctor_name=r.doctor_name,
         appointment_type_id=r.appointment_type_id, appointment_type_label=r.appointment_type_label,
-        suggested_slot=SlotResponse(**r.suggested_slot) if r.suggested_slot else None,
-        slot_options=[SlotResponse(**s) for s in (r.slot_options or [])],
-        selected_slot_id=r.selected_slot_id,
+        suggested_slot=SlotResponse(**suggested) if suggested else None,
+        slot_options=[SlotResponse(**s) for s in slots],
+        selected_slot_id=slot_hold_service.current_slot_id(r),
+        doctor_choice=doctor_choice,
+        slot_confirmed=case.hms_appointment_id is not None,
+        slot_passed=passed,
+        doctor_hours=[WeeklyHoursResponse(**h.model_dump()) for h in _doctor_hours(r.doctor_id)],
+        hours_by_doctor={
+            pid: [WeeklyHoursResponse(**h.model_dump()) for h in _doctor_hours(pid)]
+            for pid in dict.fromkeys(s["practitioner_id"] for s in slots if s.get("practitioner_id"))
+        },
     )
+
+
+def _doctor_hours(doctor_id: str | None) -> list:
+    """Display-only, so an HMS that cannot answer just means no hours shown."""
+    if not doctor_id:
+        return []
+    try:
+        return get_hms().office_hours(doctor_id)
+    except httpx.HTTPError as exc:
+        logger.warning("doctor hours unavailable (%s)", type(exc).__name__)
+        return []
 
 
 def summary_out(s: ClinicalSummary | None) -> SummaryResponse | None:
@@ -166,7 +230,7 @@ def note_out(n: ConsultationNote) -> ConsultationNoteResponse:
         id=str(n.id), doctor_id=n.doctor_id, doctor_name=display_name,
         consultation_mode=n.consultation_mode, notes=n.notes, prescription=n.prescription,
         follow_up_instructions=n.follow_up_instructions, tests_ordered=n.tests_ordered, referral_notes=n.referral_notes,
-        patient_report=n.patient_report, created_at=n.created_at,
+        patient_report=n.patient_report, diagnosis=n.diagnosis, created_at=n.created_at,
     )
 
 
@@ -190,25 +254,56 @@ def audit_out(e: AuditEvent) -> AuditEventResponse:
     return AuditEventResponse(id=str(e.id), actor=e.actor, action=e.action, payload=e.payload or {}, created_at=e.created_at)
 
 
+def referral_out(db: Session, r: Referral | None, with_source: bool = False) -> ReferralResponse | None:
+    if r is None:
+        return None
+    return ReferralResponse(
+        source_report=referral_service.source_report(db, r) if with_source else None,
+        id=str(r.id), source_case_id=str(r.source_case_id), case_id=str(r.case_id),
+        from_doctor_name=r.from_doctor_name, from_department_name=r.from_department_name,
+        to_department_id=r.to_department_id, to_department_name=r.to_department_name,
+        to_doctor_name=r.to_doctor_name, reason=r.reason, question=r.question, urgency=r.urgency,
+        hms_recorded=bool(r.hms_reference), created_at=r.created_at, **referral_service.state(db, r),
+    )
+
+
+def _referred_by(db: Session, case_ids: list[uuid.UUID]) -> dict[uuid.UUID, str | None]:
+    """"Dr X, General Medicine" per referred visit - who referred, never why."""
+    if not case_ids:
+        return {}
+    rows = db.query(Referral).filter(Referral.case_id.in_(case_ids)).all()
+    return {r.case_id: referral_service.referred_by(r) for r in rows}
+
+
 def case_detail(db: Session, case: PatientCase) -> CaseDetailResponse:
     session = case_repo.session_for(db, case)
     return CaseDetailResponse(
         case_id=str(case.id), session_id=str(case.session_id), status=session.status,
         consent_status=session.consent_status, channel=session.channel, hospital_id=case.hospital_id,
         demographics=case_repo.demographics(db, case.id), hms_patient_id=case.hms_patient_id,
+        emergency_flagged_at=case.emergency_flagged_at,
         transcript=[TranscriptMessage(role=m.role, content=m.content, turn_index=m.turn_index) for m in case_repo.messages(db, session.id)],
         facts=[FactResponse(id=str(f.id), kind=f.kind, value=f.value, source=f.source, source_turn=f.source_turn, confidence=f.confidence)
                for f in case_repo.facts(db, case.id)],
         allergies_medications=[EntryResponse(id=str(e.id), kind=e.kind, name=e.name, reaction_or_dose=e.reaction_or_dose, source=e.source, source_turn=e.source_turn)
                                for e in case_repo.entries(db, case.id)],
         attachments=[attachment_out(a) for a in case_repo.attachments(db, case.id)],
-        missing_fields=case_repo.missing_fields(db, case.id),
+        missing_fields=case_repo.missing_fields(db, case.id) + case_repo.unasked_fields(db, case.id),
         required_attachment_kinds=hospital_config.required_attachment_kinds(),
         pending_attachment_kinds=case_repo.pending_attachment_kinds(db, case.id),
         triage=triage_out(db, case_repo.latest_triage(db, case.id)),
         routing=routing_out(case_repo.latest_routing(db, case.id)),
         discrepancies=[discrepancy_out(d) for d in case_repo.discrepancies(db, case.id)],
         prescreening_summary=summary_out(case_repo.summary(db, case.id, "prescreening")),
+        ai_diagnosis=summary_out(case_repo.summary(db, case.id, "ai_diagnosis")),
+        file_reads=summary_out(case_repo.summary(db, case.id, "file_reads")),
+        report_draft=summary_out(case_repo.summary(db, case.id, "report_draft")),
+        assistant_messages=[AssistantMessageResponse(role=m.role, content=m.content, author_id=m.author_id, created_at=m.created_at)
+                            for m in doctor_assistant_service.history(db, case.id)],
+        visit_type=case.visit_type,
+        previous_visit=previous_visit_out(visit_history.previous_visit(db, case)),
+        referral=referral_out(db, referral_service.incoming(db, case.id), with_source=True),
+        referrals_made=[referral_out(db, r) for r in referral_service.outgoing(db, case.id)],
         review=review_out(case_repo.latest_review(db, case.id)),
         consultation_notes=[note_out(n) for n in case_repo.notes(db, case.id)],
         final_summary=summary_out(case_repo.summary(db, case.id, "final_visit")),
@@ -227,15 +322,51 @@ def patient_case_detail(db: Session, case: PatientCase) -> PatientCaseResponse:
         case_id=str(case.id),
         status=session.status,
         review_decision=review.decision if review else None,
+        emergency=emergency_advice(case),
         # Shown as soon as it exists (not gated on approval) so the patient can pick a
         # slot from the advisory routing while a clinician still reviews the case.
         # Uses the trimmed patient projection - rationale/matched_keywords are rule evidence.
-        routing=patient_routing_out(case_repo.latest_routing(db, case.id)),
+        routing=patient_routing_out(db, case, case_repo.latest_routing(db, case.id)),
         final_summary=final_summary.sections if final_summary else None,
         consultation_mode=notes[-1].consultation_mode if notes else None,
         appointment_reference=tasks[0].hms_reference if tasks else None,
+        has_letterhead=letterhead.exists(case.hospital_id),
+        referred_by=referral_service.referred_by(referral_service.incoming(db, case.id)),
         created_at=case.created_at,
     )
+
+
+def emergency_advice(case: PatientCase) -> EmergencyAdviceResponse | None:
+    if case.emergency_flagged_at is None:
+        return None
+    return EmergencyAdviceResponse(
+        ambulance_number=hospital_config.ambulance_number(),
+        emergency_number=hospital_config.emergency_number(),
+        flagged_at=case.emergency_flagged_at,
+    )
+
+
+HIDDEN_STATUSES = {"REJECTED"}
+
+
+def listed[T: (CaseListItem, PatientVisitItem)](items: list[T]) -> list[T]:
+    """What the lists (worklist, calendar, past patients, admin directory, My visits) show:
+    rejected cases are closed and kept only for the record and audit, never listed. The case
+    itself stays readable by its id."""
+    return [i for i in items if i.status not in HIDDEN_STATUSES]
+
+
+def _follow_up_fields(db: Session, case: PatientCase, cache: dict) -> dict:
+    if case.visit_type != "follow_up" or case.follow_up_of is None:
+        return {}
+    if case.follow_up_of not in cache:
+        parent = db.get(PatientCase, case.follow_up_of)
+        cache[case.follow_up_of] = visit_history.summarize(db, parent) if parent else None
+    prev = cache[case.follow_up_of]
+    if prev is None:
+        return {}
+    first = next((x.strip() for x in (prev.diagnosis or "").splitlines() if x.strip()), None)
+    return {"follow_up_of": prev.case_id, "follow_up_title": first or prev.complaint, "follow_up_at": prev.visit_at}
 
 
 def patient_case_list(db: Session, cases: list[PatientCase]) -> list[PatientVisitItem]:
@@ -272,19 +403,26 @@ def patient_case_list(db: Session, cases: list[PatientCase]) -> list[PatientVisi
         .group_by(AuditEvent.case_id)
         .all()
     )
+    parents: dict[uuid.UUID, visit_history.PreviousVisit] = {}
+    referred = _referred_by(db, case_ids)
     items = []
     for case in cases:
         session = sessions[case.session_id]
         case_routing = routing.get(case.id)
         review = reviews.get(case.id)
-        approved = review is not None and review.decision in {"approve", "edit"}
+        # Shown as soon as the case is routed: the patient booked this doctor themselves, so
+        # nothing about it waits for the clinician's review.
         items.append(
             PatientVisitItem(
                 case_id=str(case.id),
                 status=session.status,
                 review_decision=review.decision if review else None,
-                department_name=case_routing.department_name if case_routing and approved else None,
-                doctor_name=case_routing.doctor_name if case_routing and approved else None,
+                visit_type=case.visit_type,
+                complaint=visit_history.complaint(db, case.id),
+                **_follow_up_fields(db, case, parents),
+                department_name=case_routing.department_name if case_routing else None,
+                doctor_name=case_routing.doctor_name if case_routing else None,
+                referred_by=referred.get(case.id),
                 created_at=case.created_at,
                 updated_at=updated.get(case.id),
             )
@@ -342,6 +480,7 @@ def case_list(db: Session, cases: list[PatientCase] | None = None) -> list[CaseL
         .all()
     )
     required_fields = hospital_config.required_intake_fields()
+    referred = _referred_by(db, case_ids)
     for case in rows:
         session = sessions.get(case.session_id)
         case_triage = triage.get(case.id)
@@ -356,6 +495,7 @@ def case_list(db: Session, cases: list[PatientCase] | None = None) -> list[CaseL
         reason = ", ".join(dict.fromkeys(reasons)) or None
         items.append(CaseListItem(
             case_id=str(case.id), session_id=str(case.session_id), status=session.status if session else "UNKNOWN",
+            visit_type=case.visit_type,
             priority=case_triage.priority if case_triage else None,
             department_id=case_routing.department_id if case_routing else None,
             department_name=case_routing.department_name if case_routing else None,
@@ -364,7 +504,10 @@ def case_list(db: Session, cases: list[PatientCase] | None = None) -> list[CaseL
             chief_complaint=reason, demographics=case_repo.demographics_from_facts(facts), hms_patient_id=case.hms_patient_id,
             review_decision=review.decision if review else None,
             missing_count=len(intake_fields.missing_fields(required_fields, facts, entries)),
+            emergency=case.emergency_flagged_at is not None,
             appointment_start=_appointment_start(case_routing, task),
+            appointment_booked=case.hms_appointment_id is not None,
+            referred_by=referred.get(case.id),
             created_at=case.created_at, updated_at=updated.get(case.id),
         ))
     return items

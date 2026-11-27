@@ -35,7 +35,9 @@ Never run `next build` while `next dev` is live on the same `.next`.
 Postgres: `docker compose up -d db` or a local instance; this project owns the `healthcare_agent` database only.
 OpenEMR: `docker compose up -d openemr`, then register the OAuth client once
 (`python scripts/openemr_register_client.py`). `backend/.env` holds
-`DATABASE_URL`, the `OPENEMR_*` settings and `OPENAI_API_KEY` for conversational intake. If the model is unavailable,
+`DATABASE_URL`, the `OPENEMR_*` settings and the model settings: `LLM_PROVIDER=anthropic` (default) with
+`ANTHROPIC_API_KEY` and `LLM_MODEL=claude-sonnet-5-5`, or `LLM_PROVIDER=openai` with `OPENAI_API_KEY`/`LLM_BASE_URL`.
+agno 2.9 needs the 0.x `anthropic` SDK (pinned); 1.x+ rejects its arguments. If the model is unavailable,
 the transcript is preserved but no fact or completed field is guessed. Without
 OpenEMR the API still starts and serves existing cases, but intake cannot register or look up a patient.
 
@@ -53,13 +55,73 @@ tokens must never be exposed to browser code or storage.
 - `app/domain/triage_engine.py` is the only thing that sets a priority. Pure: no LLM, no DB, no I/O. Every
   result carries rule codes + evidence; a hospital config must have a fallback rule (empty condition) or
   `hospital_config.validate()` refuses to write it.
-- Human review gates output: `/consultation-notes` and `/finalize` 409 until a `ClinicalReview` with
-  `approve`/`edit` exists. `/review`, `/consultation-notes` and `/finalize` all carry the clinician's HMS
+- Human review gates output: `/finalize` 409 until a `ClinicalReview` with `approve`/`edit` exists. There is no
+  separate review screen: signing the first consultation report on a `NEEDS_REVIEW` case records an `approve`
+  review with the same verified identity (`consultation_service.record_note`), so a signed review always precedes
+  the note; `/consultation-notes` 409s before pre-screening. `/review` remains for declining (`reject`). `/review`, `/consultation-notes` and `/finalize` all carry the clinician's HMS
   password and the immutable username from the Keycloak `hms_username` claim; mismatches are rejected before
   `clinician_identity.verify_clinician()`. The patient endpoint returns a dedicated safe projection that excludes
   priority, rule evidence, notes, internal summaries, audit, and task internals.
 - Every application route is deny-by-default: patient routes require persisted `CaseOwner`, clinician routes require
   the case clinic, and admin alone never grants clinical access. Unsafe cookie-authenticated requests require CSRF.
+  Admin > Patients (`services/patient_directory`) is an administrative directory only - name, MRN, department,
+  doctor, appointment, status; no clinical field, and it never opens a case. A doctor's "Past patients"
+  (`/cases/past-patients`) is that doctor's own patients only, resolved server-side.
+- The AI differential (`services/ai_diagnosis_service`, `ClinicalSummary.kind="ai_diagnosis"`) is clinician-facing
+  decision support: drafted at pre-screening after urgency/routing are decided, never read by triage or routing, never
+  on the patient projection. Only suggestions the doctor accepts/edits are offered to the consultation form, and the
+  patient sees them only in the note the doctor signs. Report text may feed it and the doctor assistant, never facts.
+  Once the case is `COMPLETED` or `REJECTED` it is final: regenerate/decide/add 409 (`ai_diagnosis_service._require_open`);
+  the assistant chat stays open, read-only for the differential.
+- AI file reads (`services/file_read_service`, `agents/file_reader`, `ClinicalSummary.kind="file_reads"`): uploaded
+  images and scanned PDFs (no extractable text) are read by the model at pre-screening, after urgency/routing, each
+  capped at 30s; a failure marks the file `unavailable` and never blocks the case. Clinician-only decision support,
+  always labelled "AI read, not a radiology report": it may feed the AI differential and doctor assistant as
+  labelled context, never a `PatientFact`, never triage/routing, never the patient projection. Files go to the model
+  whole (no chunking/RAG), so `FILE_READ_*` settings are checked first: at most 5 files a visit, images up to
+  7.5 MB, PDFs cut to their first 10 pages, encrypted PDFs skipped - a file outside them is `skipped` with a reason
+  and costs nothing.
+  Typed documents (extracted text) get an AI summary too (`source="text"`, labelled "AI summary of the document
+  text", at most 8, text cut to 8000 chars); every read reaches the briefing (`summary_lines`) and the doctor's
+  "Attached documents" card, but only image/scan reads are added to the agents' context (typed text already is).
+  A prescription uploaded during intake has its medicine names read at upload - from the text, or from a photo/scan
+  by the model inside the same limits and 30s cap - and the intake assistant asks the patient whether they take
+  them; only the patient's answer creates medication entries.
+  Regenerating the AI diagnosis first reads uploads its reads do not cover (added after pre-screening, or whose
+  read failed) within what is left of the caps (`read_case(only_new=True)`); earlier reads are kept, not redone.
+- The consultation report (`services/report_service`, `agents/report_writer`) may be AI-drafted and AI-edited, but
+  only as proposals returned to the doctor's form: nothing is stored until the doctor signs with their HMS password,
+  the AI never writes examination findings, and the audit records which sections were still AI-written at signing.
+  Every save is a new `ConsultationNote` version until release; once the visit summary is released the report is
+  final (`/consultation-notes`, `/report/*` 409 on a `COMPLETED` case).
+  It is an OPD consultation record, not a summary: presenting complaints, HPI, past history, allergies, current
+  medications, examination (stored under headings in `notes`), diagnosis (name only), investigations, Rx, advice,
+  follow-up (stored together in `follow_up_instructions`, follow-up last as `Follow-up: ...`) and referral. The
+  writer charts in terse clinical lines and never comments on missing data. The released record carries the
+  doctor's signed advice verbatim; the visit reporter's narrative fields are not shown to the doctor or patient.
+- Patients register once. The first visit's identity form creates the OpenEMR record; a later visit reuses that
+  MRN (`intake_service.start_session` falls back to `last_linked_hms_patient_id`) and fills the identity step
+  from it on consent (`identity_from_profile`), so the form is shown only when no complete record exists. The
+  Profile tab edits that same record (`PUT /intake-sessions/profile`, looked up by the account's MRN, never a search).
+- A visit is `new` or `follow_up` (`PatientCase.visit_type`, `follow_up_of`). A follow-up names one of the
+  account's own COMPLETED visits (`services/visit_history`), routes to that visit's department unless a triage
+  rule names one, and lists/holds that visit's doctor first (`routing.doctor_first`); the patient may still pick
+  any of the department's doctors. Only what the doctor signed (diagnosis, prescription, tests, advice) is carried
+  over - to the intake planner and the clinician agents/case view - never the AI differential or referral notes.
+- Referrals (`services/referral_service`, `Referral`): a doctor who has signed a consultation report refers the
+  patient to another department (`POST /cases/{id}/referrals`, signed with their HMS password). It opens a linked
+  visit (`visit_type="referral"`, same owner and MRN) that starts at `NEEDS_REVIEW` and is booked straight away with
+  the asked-for or earliest free doctor - no accept step; the patient sees it under My visits and changes it like any
+  booking. The patient's statements/allergies/medicines are copied verbatim (new rows), priority comes from
+  `triage_engine` re-run on them (the referral's "how soon" is never a priority), and the referring visit's signed
+  report, uploads, file reads and intake are linked, not copied (`case_context`, "Referred by" card). The patient
+  sees who referred them, never why. Status is read from the linked visit, and the receiving doctor's signed
+  diagnosis/advice is shown back on the referring visit. One open referral per department per visit.
+- The hospital chart is written only at release (`OpenEMRClient.sync_reviewed_intake`), except the referral record
+  (OpenEMR LBTref transaction, best effort, needs `user/transaction.*` scopes) written when a referral is signed: patient-stated allergies
+  and medicines, and the medical problems the doctor signed under "Past history" (`intake_sync.signed_problems`) -
+  never raw intake history facts. Anything already on the chart is skipped. Until a visit is released the chart is
+  legitimately empty; `case_context` says so and the agents must not report that as a discrepancy.
 - Reviewer edits go to `ClinicalReview.edits`; `PatientFact` rows are never rewritten. HMS imports are
   `source=hms`; patient statements are `source=patient`.
 - Uploaded document text may ground patient answers but never becomes a fact or reaches `triage_engine.evaluate()`.
@@ -68,8 +130,14 @@ tokens must never be exposed to browser code or storage.
   and `PatientFact.value` keeps the patient's own words.
 - Patient answers receive only scope-selected context; external search receives only an identifier-free health topic.
   Restricted actions are code-gated, and generated answers are checked before delivery.
-- The HMS adapter receives appointment *requests* only; `CareTask.status` is always `draft`. Against
-OpenEMR that is a chart note for scheduling staff - never a calendar event, which would be a booking.
+- Booking is instant: when the patient confirms a time (`services/appointment_service.select_slot`) it goes
+  straight onto the doctor's OpenEMR calendar as an "Office Visit" (`HMSClient.book_appointment`), with no clinician
+  approval; changing the time moves it and a rejected case releases it. The clinician's review prepares the visit and
+  gates notes/finalize, never the booking. Post-visit follow-ups stay *requests*: `CareTask.status` is always `draft`.
+  `integrations/hms/openemr/provisioning.py` is the only code that writes OpenEMR's database directly - doctors and
+  their "In Office" hours (Admin > Doctors, own `clinic_id` only) and the patient's confirmed booking.
+- Red-flag triage rules (`emergency: true`) stop intake on the turn they match with a code-written "call an
+  ambulance" message, and the case is never offered a booking. There is no emergency department.
 - OpenEMR is the source of truth for patients, practitioners and documents. Patient self-service record search/linking
   is disabled until identity-proofing and proxy rules exist; the identity form creates the OpenEMR record. Departments, routing keywords
   and triage rules stay clinic policy in `data/hospitals/*.yaml`, and practitioners map to a department by
@@ -94,8 +162,27 @@ Every status write goes through `services/lifecycle.transition()`; every state c
   (`ge=`, `maxLength`). OpenAI strict mode rejects them.
 - Reasoning models reject `temperature`; older chat models reject `reasoning_effort`. `LLM_SUPPORTS_EFFORT`
   picks which one `build_model()` sends.
+- Intake has two phases: the clinic's required fields (`question_planner`), then a focused history
+  (`clinical_interviewer`, `asks_field="clinical_detail"`, at most `MAX_FOCUSED_QUESTIONS`) that ends when the
+  interviewer says the doctor has enough, or closes intake if the model is down. Denied symptoms are `negative`
+  facts (pertinent negatives) - never matched by routing or triage.
 - The intake loop closes a field the patient denied with a sentinel row (`app/domain/intake_fields.py`). Never
-  write `NONE_REPORTED` for an answer that was not a denial.
+  write `NONE_REPORTED` for an answer that was not a denial. When intake ends with fields open (question cap, or
+  `MAX_FAILED_TURNS` model failures in a row) they close as `NOT_ASKED` so the case still reaches pre-screening,
+  which lists them as not collected. Sentinels are shown via `intake_fields.display()` ("No known allergies (NKA)",
+  "Not asked"), never raw and never as a blank.
+- A new visit's department is the AI router's pick (`agents/department_router`, clinical facts only, the
+  clinic's `ai_routing.policy` lines) when `routing.accept_ai_pick` accepts it: a configured department, at
+  least one cited fact really on the case, and an `ai_routing.protected` department (Cardiology) keeps a
+  keyword-routed case unless an infection sign is present. Otherwise - and when the model is down or slower
+  than 25s - the keyword rules decide. Urgency, emergencies, follow-ups and rule `specialty_hint`s never go
+  to the model. The rationale names the AI reason and the rules' alternative; the audit records both.
+- Keyword routing (`domain/routing.route`) matches whole words in the current complaint only (`symptom`,
+  `reason_for_visit`; never history or negatives), and the department with the most keyword hits wins (reason
+  for visit counts double; past history only breaks a tie between departments the complaint matched, then
+  `specialty_map` order). A department with no doctor rostered hands the case to the default one. `infection_routing` sends fever with
+  pulmonology/orthopedics/dermatology symptoms to the default department. A triage rule's `specialty_hint`
+  overrides all of it, so only give one to a rule whose symptoms belong to a single specialty.
 - `scripts/seed.py` prints ASCII only (Windows console is cp1252).
 - Integration tests share `tests/helpers.py` (a valid identity form, fake intake agents, session helpers). They use
   configured synthetic OpenEMR and are skipped when it is unavailable; no production mock provider exists.

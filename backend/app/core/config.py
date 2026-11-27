@@ -49,13 +49,18 @@ class Settings(BaseSettings):
     WORKFLOW_LEASE_SECONDS: int = 300
     WORKFLOW_MAX_ATTEMPTS: int = 3
 
-    # LLM — every model call goes through app/agents/llm.py (agno OpenAIChat).
+    # LLM — every model call goes through app/agents/llm.py. "anthropic" (Claude) or "openai"
+    # (OpenAI or any OpenAI-compatible endpoint at LLM_BASE_URL).
+    LLM_PROVIDER: str = "anthropic"
     LLM_BASE_URL: str = "https://api.openai.com/v1"
-    LLM_MODEL: str = "gpt-5.4-nano"
+    LLM_MODEL: str = "gpt-4.1-mini"
     LLM_TIMEOUT_SECONDS: float = 120.0
-    LLM_SUPPORTS_EFFORT: bool = True
+    # True only for reasoning models (gpt-5*, o-series); gpt-4.1* rejects reasoning_effort.
+    LLM_SUPPORTS_EFFORT: bool = False
     LLM_EFFORT: str = "low"
     OPENAI_API_KEY: str | None = None
+    ANTHROPIC_API_KEY: str | None = None
+    LLM_MAX_TOKENS: int = 16000
 
     TAVILY_API_KEY: str | None = None
 
@@ -68,6 +73,13 @@ class Settings(BaseSettings):
     # Synthetic uploads only.
     UPLOAD_DIR: Path = BACKEND_DIR / "data" / "uploads"
     MAX_UPLOAD_MB: int = 25
+    # AI file reads (services/file_read_service) send each whole file to the model - no chunking or
+    # retrieval - so these keep every read inside the API's limits and its cost bounded. Claude API:
+    # 10 MB per image base64-encoded (~7.5 MB raw); images above 2,576 px are downscaled server-side,
+    # so one image costs at most ~4,800 tokens; a PDF page costs ~1,500-3,000 text tokens plus its image.
+    FILE_READ_MAX_FILES: int = 5          # per visit; the rest are left for the doctor to open
+    FILE_READ_MAX_IMAGE_MB: float = 7.5   # larger images are not sent (the API would reject them)
+    FILE_READ_MAX_PDF_PAGES: int = 10     # only the first pages of a longer scan are sent
 
     # One YAML per clinic; the file stem is the hospital id.
     HOSPITALS_DIR: Path = BACKEND_DIR / "data" / "hospitals"
@@ -113,7 +125,8 @@ class Settings(BaseSettings):
 
     @property
     def llm_enabled(self) -> bool:
-        return bool(self.OPENAI_API_KEY)
+        key = self.ANTHROPIC_API_KEY if self.LLM_PROVIDER == "anthropic" else self.OPENAI_API_KEY
+        return bool(key)
 
     @property
     def tracing_enabled(self) -> bool:

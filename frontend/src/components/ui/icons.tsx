@@ -24,6 +24,7 @@ export const Icons = {
   send: make(<><path d="M22 2 11 13" /><path d="M22 2 15 22l-4-9-9-4z" /></>, "Send"),
   paperclip: make(<path d="m21.4 11.05-9.2 9.2a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5" />, "Paperclip"),
   check: make(<path d="M20 6 9 17l-5-5" />, "Check"),
+  copy: make(<><rect x="9" y="9" width="12" height="12" rx="2" /><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1" /></>, "Copy"),
   checkCircle: make(<><circle cx="12" cy="12" r="9" /><path d="m8.5 12 2.5 2.5 4.5-5" /></>, "CheckCircle"),
   x: make(<path d="M18 6 6 18M6 6l12 12" />, "X"),
   alert: make(<><path d="M12 9v4M12 17h.01" /><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z" /></>, "Alert"),

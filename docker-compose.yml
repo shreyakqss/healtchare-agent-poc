@@ -137,8 +137,10 @@ services:
       start_period: 1s
 
   langfuse-minio:
-    image: minio/minio
+    # minio/minio is no longer published on Docker Hub; Chainguard's build ships minio + mc.
+    image: cgr.dev/chainguard/minio:latest
     profiles: ["tracing"]
+    user: root
     entrypoint: sh
     command: -c 'mkdir -p /data/langfuse && minio server --address ":9000" --console-address ":9001" /data'
     environment:

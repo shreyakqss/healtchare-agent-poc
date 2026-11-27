@@ -6,6 +6,61 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 
+class PreviousVisitResponse(BaseModel):
+    """A completed visit as a follow-up carries it over: what the doctor signed and released."""
+
+    case_id: str
+    visit_at: datetime
+    department_name: str | None = None
+    doctor_id: str | None = None
+    doctor_name: str | None = None
+    complaint: str | None = None
+    diagnosis: str | None = None
+    prescription: str | None = None
+    tests: str | None = None
+    advice: str | None = None
+
+
+class ReferralResponse(BaseModel):
+    """A doctor-to-doctor referral (services/referral_service). Clinician-facing: the reason,
+    question and outcome are clinical content and never on the patient projection."""
+
+    id: str
+    source_case_id: str
+    case_id: str
+    from_doctor_name: str
+    from_department_name: str | None = None
+    to_department_id: str
+    to_department_name: str
+    to_doctor_name: str | None = None
+    reason: str
+    question: str | None = None
+    urgency: str
+    # Read from the visit it opened: awaiting_time | booked | seen | completed | cancelled.
+    status: str
+    doctor_name: str | None = None  # who holds the booking now (the patient may have changed it)
+    appointment_start: datetime | None = None
+    # Closing the loop: the receiving doctor's signed answer, once they have signed.
+    outcome_diagnosis: str | None = None
+    outcome_advice: str | None = None
+    outcome_by: str | None = None
+    hms_recorded: bool = False
+    # On the referred visit only: the referring doctor's latest signed consultation report.
+    source_report: SourceReport | None = None
+    created_at: datetime
+
+
+class SourceReport(BaseModel):
+    doctor_name: str | None = None
+    signed_at: datetime
+    notes: str
+    diagnosis: str | None = None
+    prescription: str | None = None
+    tests_ordered: str | None = None
+    advice: str | None = None
+    notes_for_doctors: str | None = None
+
+
 class SessionResponse(BaseModel):
     session_id: str
     case_id: str
@@ -18,6 +73,10 @@ class SessionResponse(BaseModel):
     required_attachment_kinds: list[str] = Field(default_factory=list)
     pending_attachment_kinds: list[str] = Field(default_factory=list)
     past_attachments: list[AttachmentResponse] = Field(default_factory=list)
+    # Step 1 done: by the form, or from a registered patient's profile when consent was given.
+    identity_complete: bool = False
+    visit_type: str = "new"
+    previous_visit: PreviousVisitResponse | None = None
 
 
 class TranscriptMessage(BaseModel):
@@ -79,12 +138,13 @@ class AttachmentResponse(BaseModel):
     size_bytes: int
     has_text: bool
     extracted_text: str | None
+    # Medicine names read off an uploaded prescription (text or photo) - asked about at intake.
+    extracted_medications: list[str] = Field(default_factory=list)
     uploaded_by: str
     created_at: datetime
 
 
 class ActiveIntakeResponse(SessionResponse):
-    identity_complete: bool
     intake_complete: bool
     transcript: list[TranscriptMessage] = Field(default_factory=list)
     attachments: list[AttachmentResponse] = Field(default_factory=list)
@@ -125,10 +185,23 @@ class SlotResponse(BaseModel):
     department_id: str
     start: datetime
     end: datetime
+    # Another patient holds this time: shown greyed out in the patient's picker, not pickable.
+    taken: bool = False
+    # Whose time this is: slots span every doctor in the department. None on older routings.
+    doctor_name: str | None = None
+    # On a follow-up: the doctor who saw the patient at the visit it follows up (listed first).
+    previous_doctor: bool = False
 
 
 class DoctorAssistantResponse(BaseModel):
     reply: str
+
+
+class AssistantMessageResponse(BaseModel):
+    role: Literal["doctor", "assistant"]
+    content: str
+    author_id: str
+    created_at: datetime
 
 
 class RoutingResponse(BaseModel):
@@ -145,6 +218,11 @@ class RoutingResponse(BaseModel):
     selected_slot_id: str | None
 
 
+class WeeklyHoursResponse(BaseModel):
+    days: list[str]  # mon, tue, ... sharing the hours below
+    times: list[list[str]]  # [["10:00", "13:00"], ...] clinic-local
+
+
 class PatientRoutingResponse(BaseModel):
     department_id: str
     department_name: str
@@ -155,6 +233,17 @@ class PatientRoutingResponse(BaseModel):
     suggested_slot: SlotResponse | None
     slot_options: list[SlotResponse]
     selected_slot_id: str | None
+    # The patient may pick which of the department's doctors to see; false for urgent or approved cases.
+    doctor_choice: bool = False
+    # The patient confirmed a doctor and time, so it is booked on the doctor's HMS calendar. Until
+    # then the earliest one is only suggested (and held).
+    slot_confirmed: bool = False
+    # The booked time is in the past: shown as the visit's time, no longer changeable.
+    slot_passed: bool = False
+    # The doctor's weekly consulting hours from the HMS calendar; empty when it publishes none.
+    doctor_hours: list[WeeklyHoursResponse] = []
+    # Weekly hours of every doctor whose times are offered, by practitioner id.
+    hours_by_doctor: dict[str, list[WeeklyHoursResponse]] = {}
 
 
 class SummaryResponse(BaseModel):
@@ -188,6 +277,7 @@ class ConsultationNoteResponse(BaseModel):
     tests_ordered: str | None
     referral_notes: str | None
     patient_report: str | None
+    diagnosis: str | None = None
     created_at: datetime
 
 
@@ -246,6 +336,7 @@ class CaseListItem(BaseModel):
     case_id: str
     session_id: str
     status: str
+    visit_type: str = "new"
     priority: str | None
     department_id: str | None
     department_name: str | None
@@ -256,29 +347,98 @@ class CaseListItem(BaseModel):
     hms_patient_id: str | None
     review_decision: str | None
     missing_count: int
+    # A red-flag rule matched: the patient was told to seek emergency care now.
+    emergency: bool = False
     appointment_start: datetime | None
+    # The time is on the doctor's HMS calendar (the patient confirmed it), not just a default.
+    appointment_booked: bool = False
+    # A referred visit: "Dr X, General Medicine".
+    referred_by: str | None = None
     created_at: datetime
     updated_at: datetime | None
+
+
+class PastVisitItem(BaseModel):
+    case_id: str
+    visit_at: datetime
+    status: str
+    review_decision: str | None
+    chief_complaint: str | None
+    department_name: str | None
+    doctor_id: str | None
+    doctor_name: str | None
+
+
+class PastPatientItem(BaseModel):
+    """One patient on the doctor's "Past patients" list (services/past_patients)."""
+    patient_key: str
+    hms_patient_id: str | None
+    name: str | None
+    age: str | None
+    sex: str | None
+    last_visit_at: datetime
+    visit_count: int
+    visits: list[PastVisitItem]
+
+
+class AdminPatientVisit(BaseModel):
+    """Administrative facts of one visit - deliberately no clinical field."""
+    status: str
+    department_name: str | None
+    doctor_name: str | None
+    appointment_start: datetime | None
+    appointment_booked: bool
+    created_at: datetime
+
+
+class AdminPatientItem(BaseModel):
+    """One row of Admin > Patients (services/patient_directory)."""
+    hms_patient_id: str
+    name: str | None
+    age: str | None
+    sex: str | None
+    visit_count: int
+    visits: list[AdminPatientVisit]
 
 
 class PatientVisitItem(BaseModel):
     case_id: str
     status: str
+    visit_type: str = "new"
     review_decision: str | None
     department_name: str | None
     doctor_name: str | None
     created_at: datetime
     updated_at: datetime | None
+    # What the patient came in with, in their words - the card's title.
+    complaint: str | None = None
+    # A follow-up: the visit it follows up, by its signed diagnosis (else complaint) and date.
+    follow_up_of: str | None = None
+    follow_up_title: str | None = None
+    follow_up_at: datetime | None = None
+    # A referred visit: who referred the patient ("Dr X, General Medicine") - never why.
+    referred_by: str | None = None
+
+
+class EmergencyAdviceResponse(BaseModel):
+    """Shown to a patient whose answers matched a red-flag rule: call an ambulance now.
+    Never the priority or the rule - only that this is an emergency."""
+    ambulance_number: str
+    emergency_number: str
+    flagged_at: datetime
 
 
 class PatientCaseResponse(BaseModel):
     case_id: str
     status: str
     review_decision: str | None
+    emergency: EmergencyAdviceResponse | None = None
     routing: PatientRoutingResponse | None
     final_summary: dict[str, Any] | None
     consultation_mode: str | None
     appointment_reference: str | None
+    has_letterhead: bool = False
+    referred_by: str | None = None
     created_at: datetime
 
 
@@ -291,6 +451,7 @@ class CaseDetailResponse(BaseModel):
     hospital_id: str
     demographics: dict[str, Any]
     hms_patient_id: str | None
+    emergency_flagged_at: datetime | None = None
     transcript: list[TranscriptMessage]
     facts: list[FactResponse]
     allergies_medications: list[EntryResponse]
@@ -302,6 +463,20 @@ class CaseDetailResponse(BaseModel):
     routing: RoutingResponse | None
     discrepancies: list[DiscrepancyResponse] = Field(default_factory=list)
     prescreening_summary: SummaryResponse | None
+    # Clinician-facing decision support; never on the patient projection.
+    ai_diagnosis: SummaryResponse | None = None
+    # AI reads of uploaded images / scanned PDFs (clinician only; never on the patient projection).
+    file_reads: SummaryResponse | None = None
+    # AI first draft of the consultation report; the doctor's form starts from it.
+    report_draft: SummaryResponse | None = None
+    assistant_messages: list[AssistantMessageResponse] = Field(default_factory=list)
+    visit_type: str = "new"
+    # The visit a follow-up is about, with its signed diagnosis, prescription and advice.
+    previous_visit: PreviousVisitResponse | None = None
+    # A referred visit: the referral that opened it. The referring visit itself is readable by id.
+    referral: ReferralResponse | None = None
+    # Referrals this visit's doctor made to other departments, with where each one stands.
+    referrals_made: list[ReferralResponse] = Field(default_factory=list)
     review: ReviewResponse | None
     consultation_notes: list[ConsultationNoteResponse]
     final_summary: SummaryResponse | None

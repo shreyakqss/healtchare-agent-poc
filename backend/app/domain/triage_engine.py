@@ -27,6 +27,8 @@ _WORD_RE = re.compile(
 SYMPTOM_KINDS = {"symptom", "reason_for_visit"}
 HISTORY_KINDS = {"history", "condition"}
 DURATION_KINDS = {"duration"}
+# Severity words may sit in any answer ("2 days, it's severe"), so they are looked for in all of them.
+SEVERITY_KINDS = SYMPTOM_KINDS | DURATION_KINDS
 
 
 class Fact(Protocol):
@@ -45,6 +47,8 @@ class Rule(Protocol):
     condition: dict[str, Any]
     explanation: str
     action: str
+    # A red flag: the patient is told to seek emergency care now instead of being offered a booking.
+    emergency: bool
 
 
 @dataclass
@@ -55,6 +59,7 @@ class TriageOutcome:
     warnings: list[dict[str, Any]] = field(default_factory=list)
     evidence: list[dict[str, Any]] = field(default_factory=list)
     specialty_hint: str | None = None
+    emergency: bool = False
 
 
 def parse_duration_days(text: str) -> float | None:
@@ -109,6 +114,17 @@ def _hits(facts: list[Fact], kinds: set[str], keywords: list[str]):
                 yield kw, f
 
 
+def _severity_hits(facts: list[Fact], words: list[str]):
+    """Whole words only, so "sever" never matches "several days"."""
+    for f in facts:
+        if f.kind not in SEVERITY_KINDS:
+            continue
+        value = f"{f.value or ''} {getattr(f, 'normalized', '') or ''}".lower()
+        for word in words:
+            if re.search(rf"\b{re.escape(word.lower())}\b", value):
+                yield word, f
+
+
 def _evidence(matched_on: str, hits) -> list[dict[str, Any]]:
     return [{"matched_on": matched_on, "keyword": kw, "text": f.value, "fact_kind": f.kind} for kw, f in hits]
 
@@ -130,6 +146,12 @@ def _match(condition: dict[str, Any], facts: list[Fact], conflicts: list[dict[st
         if {kw for kw, _ in hits} != set(kws):
             return False, []
         evidence += _evidence("symptom", hits)
+
+    if words := condition.get("any_severity"):
+        hits = list(_severity_hits(facts, words))
+        if not hits:
+            return False, []
+        evidence += _evidence("severity", hits)
 
     if kws := condition.get("any_history"):
         hits = list(_hits(facts, HISTORY_KINDS, kws))
@@ -158,11 +180,12 @@ def _match(condition: dict[str, Any], facts: list[Fact], conflicts: list[dict[st
 
 
 def evaluate(facts: Iterable[Fact], entries: Iterable[Entry], rules: Iterable[Rule]) -> TriageOutcome:
-    """High -> medium -> low, first match wins. A rule with an empty condition is the fallback."""
+    """High -> medium -> low, first match wins; within a priority, red-flag (emergency) rules are
+    tried first. A rule with an empty condition is the fallback."""
     facts = list(facts)
     conflicts = find_allergy_conflicts(entries)
 
-    for rule in sorted(rules, key=lambda r: (PRIORITY_RANK.get(r.priority, 99), r.code)):
+    for rule in sorted(rules, key=lambda r: (PRIORITY_RANK.get(r.priority, 99), not getattr(r, "emergency", False), r.code)):
         matched, evidence = _match(rule.condition or {}, facts, conflicts)
         if not matched:
             continue
@@ -175,6 +198,7 @@ def evaluate(facts: Iterable[Fact], entries: Iterable[Entry], rules: Iterable[Ru
             warnings=conflicts,
             evidence=[{"rule_code": rule.code, **e} for e in evidence],
             specialty_hint=getattr(rule, "specialty_hint", None),
+            emergency=bool(getattr(rule, "emergency", False)),
         )
 
     raise ValueError("No triage rule matched and no fallback rule is configured.")

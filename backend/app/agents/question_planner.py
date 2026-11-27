@@ -22,6 +22,9 @@ INSTRUCTIONS = [
     "Do not repeat or reword any question already asked, and do not ask about anything already on file.",
     "Reply with the question itself and nothing else: no preamble, no quotes, no list.",
     "Never use an em dash (—); use a comma, period or parenthesis instead.",
+    "On a follow-up visit, ask in the light of the previous visit: how the problem has changed since, whether "
+    "they took the prescribed medicines as advised and any side effects, results of advised tests. Refer to the "
+    "previous diagnosis or medicines by name only as the doctor wrote them; never judge whether they worked.",
 ]
 
 
@@ -33,6 +36,8 @@ class PlannerContext:
     on_file: list[str] = field(default_factory=list)
     patient_name: str | None = None
     medication_candidates: list[str] = field(default_factory=list)
+    # A follow-up visit: what the patient's previous visit for this problem found and prescribed.
+    previous_visit: str | None = None
 
 
 @lru_cache(maxsize=1)
@@ -65,6 +70,10 @@ def _prompt(ctx: PlannerContext) -> str:
         f"Still missing: {', '.join(FIELD_PROMPTS.get(f, f) for f in ctx.outstanding)}.",
         f"Ask one question about: {FIELD_PROMPTS.get(ctx.field, ctx.field)}.",
     ]
+    if ctx.previous_visit:
+        lines.insert(0, "This is a FOLLOW-UP visit about the patient's earlier visit, recorded by their doctor:\n"
+                     + ctx.previous_visit
+                     + "\nTie the question to that visit where it fits (progress since, medicines taken, tests done).")
     if ctx.patient_name:
         lines.append(f"The patient's name is {ctx.patient_name}; you may use it once, naturally.")
     if ctx.field == "medication" and ctx.medication_candidates:

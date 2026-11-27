@@ -460,6 +460,19 @@ def test_status_counts_real_entries_and_caches():
     assert mock_req.call_count == 4  # cached: no second round-trip
 
 
+def test_status_counts_patients_past_one_page():
+    """OpenEMR returns at most 200 per page with no `next` link, so the count walks `_offset`."""
+    hms = _client(status_cache_seconds=0)
+
+    def patients(kwargs):
+        offset, size, total = kwargs["params"]["_offset"], kwargs["params"]["_count"], 448
+        return _resp({"entry": [{"resource": {"id": f"pt{i}"}} for i in range(offset, min(offset + size, total))]})
+
+    routes = {"/Patient": patients, "/Practitioner": EMPTY, "/PractitionerRole": EMPTY, "/Appointment": EMPTY}
+    with patch(REQUEST, side_effect=_router(routes)), _with_token(hms):
+        assert hms.status().patients == 448
+
+
 def test_status_reports_disconnected_on_error():
     hms = _client(status_cache_seconds=0)
     with patch(REQUEST, side_effect=httpx.ConnectError("down")), _with_token(hms):
@@ -573,7 +586,9 @@ def test_sync_reviewed_intake_writes_patient_stated_rows_only():
     hms = _client()
     calls = []
     payload = {
-        "facts": [{"kind": "history", "value": "asthma", "source": "patient"}, {"kind": "history", "value": "imported", "source": "hms"}],
+        "facts": [{"kind": "history", "value": "asthma", "source": "patient"}, {"kind": "history", "value": "imported", "source": "hms"},
+                  {"kind": "history", "value": "last period 2 weeks ago", "source": "patient"}],
+        "problems": ["asthma"],
         "entries": [{"kind": "allergy", "name": "penicillin", "reaction_or_dose": "rash", "source": "patient"},
                     {"kind": "medication", "name": "inhaler", "reaction_or_dose": None, "source": "patient"}],
     }

@@ -5,7 +5,7 @@ export const STATUS_LABEL: Record<CaseStatus, string> = {
   INGESTING: "Intake in progress",
   ANALYZING: "Pre-screening",
   NEEDS_REVIEW: "Awaiting review",
-  APPROVED: "Approved",
+  APPROVED: "Reviewed",
   COMPLETED: "Completed",
   REJECTED: "Rejected",
   FAILED: "Failed",
@@ -29,6 +29,7 @@ export const FIELD_LABEL: Record<string, string> = {
   allergy: "Allergies",
   contact_preference: "Contact preference",
   condition: "Condition",
+  negative: "Denies",
 };
 
 export const ACTOR_LABEL: Record<string, string> = {

@@ -68,8 +68,15 @@ async def write_summary(step_input: StepInput) -> StepOutput:
                 "patient_friendly_summary": "Your visit summary is not available yet. Contact the clinic for reviewed instructions.",
             }
             generated_by = "fallback"
+        # The released record is what the doctor signed, word for word: advice and follow-up are
+        # their lines, not the model's rewording (the narrative fields are kept for the HMS copy only).
+        if latest.follow_up_instructions:
+            sections["follow_up_instructions"] = [
+                line.strip() for line in latest.follow_up_instructions.splitlines() if line.strip()
+            ]
         sections["prescription"] = latest.prescription
         sections["tests_ordered"] = latest.tests_ordered
+        sections["diagnosis"] = latest.diagnosis
         sections["consultation_mode"] = latest.consultation_mode
         sections["doctor"] = inputs.doctor
         sections["department"] = inputs.department

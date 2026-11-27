@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { casesApi, type AuditEvent, type CaseDetail, type HospitalIdentity } from "@/lib/api";
+import { casesApi, type CaseDetail, type Department, type HospitalIdentity, type RosterDoctor } from "@/lib/api";
 import { Tabs } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { Icons } from "@/components/ui/icons";
@@ -11,17 +11,16 @@ import { OverviewTab } from "@/features/case/overview-tab";
 import { TranscriptTab } from "@/features/case/transcript-tab";
 import { RecordsTab } from "@/features/case/records-tab";
 import { ReviewTab } from "@/features/case/review-tab";
-import { AuditTab } from "@/features/case/audit-tab";
-import { AssistantTab } from "@/features/case/assistant-tab";
+import { DiagnosisTab } from "@/features/case/diagnosis-tab";
 import type { Me } from "@/features/doctor/use-doctor";
 
-type TabId = "overview" | "records" | "review" | "conversation" | "audit" | "assistant";
+type TabId = "overview" | "diagnosis" | "records" | "review" | "conversation";
 
-export function CaseView({ initialCase, initialAudit, doctorContext, me, hospital }: {
-  initialCase: CaseDetail; initialAudit: AuditEvent[]; doctorContext: string; me: Me | null; hospital: HospitalIdentity | null;
+export function CaseView({ initialCase, doctorContext, me, hospital, departments = [], doctors = [] }: {
+  initialCase: CaseDetail; doctorContext: string; me: Me | null; hospital: HospitalIdentity | null;
+  departments?: Department[]; doctors?: RosterDoctor[];
 }) {
   const [detail, setDetail] = useState(initialCase);
-  const [audit, setAudit] = useState(initialAudit);
   const [tab, setTab] = useState<TabId>("overview");
   const [refreshing, setRefreshing] = useState(false);
   const toast = useToast();
@@ -29,9 +28,7 @@ export function CaseView({ initialCase, initialAudit, doctorContext, me, hospita
   async function refresh() {
     setRefreshing(true);
     try {
-      const [d, a] = await Promise.all([casesApi.get(detail.case_id), casesApi.audit(detail.case_id)]);
-      setDetail(d);
-      setAudit(a);
+      setDetail(await casesApi.get(detail.case_id));
     } catch (err) {
       toast.push({ tone: "danger", message: err instanceof Error ? err.message : "Could not refresh the case." });
     } finally {
@@ -41,11 +38,11 @@ export function CaseView({ initialCase, initialAudit, doctorContext, me, hospita
 
   const tabs: Array<{ id: TabId; label: string; count?: number }> = [
     { id: "overview", label: "Overview" },
-    { id: "records", label: "Facts & records", count: detail.facts.length + detail.allergies_medications.length + detail.attachments.length },
+    { id: "diagnosis", label: "AI Diagnosis", count: detail.ai_diagnosis ? (detail.ai_diagnosis.sections.differentials as unknown[] | undefined)?.length : undefined },
+    // Only when the patient uploaded documents: otherwise the briefing already covers the facts.
+    ...(detail.attachments.length ? [{ id: "records" as const, label: "Facts & records" }] : []),
     { id: "review", label: "Review & visit" },
-    { id: "conversation", label: "Conversations", count: detail.transcript.length },
-    { id: "audit", label: "Audit trail", count: audit.length },
-    { id: "assistant", label: "AI Assistant" },
+    { id: "conversation", label: "Conversations" },
   ];
 
   return (
@@ -70,12 +67,11 @@ export function CaseView({ initialCase, initialAudit, doctorContext, me, hospita
         className="animate-in"
         key={tab}
       >
-        {tab === "overview" && <OverviewTab detail={detail} />}
+        {tab === "overview" && <OverviewTab detail={detail} onOpenDiagnosis={() => setTab("diagnosis")} />}
+        {tab === "diagnosis" && <DiagnosisTab detail={detail} doctorContext={doctorContext} onChanged={(s) => setDetail({ ...detail, ai_diagnosis: s })} onRegenerated={() => void refresh()} onOpenReport={() => setTab("review")} />}
         {tab === "records" && <RecordsTab detail={detail} />}
-        {tab === "review" && <ReviewTab detail={detail} me={me} onChanged={refresh} hospital={hospital} />}
+        {tab === "review" && <ReviewTab detail={detail} me={me} onChanged={refresh} hospital={hospital} departments={departments} doctors={doctors} />}
         {tab === "conversation" && <TranscriptTab detail={detail} />}
-        {tab === "audit" && <AuditTab events={audit} />}
-        {tab === "assistant" && <AssistantTab caseId={detail.case_id} doctorContext={doctorContext} />}
       </div>
     </div>
   );

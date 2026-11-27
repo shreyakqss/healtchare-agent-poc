@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import type { PatientCase } from "@/lib/api";
+import { casesApi, type EmergencyAdvice, type PatientCase } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Icons } from "@/components/ui/icons";
@@ -20,6 +20,12 @@ export function PatientResults({ detail, onUpdated, onRefresh, refreshing }: {
     </Button>
   ) : null;
 
+  // Red flag: the emergency, first and alone - no booking is offered, so nothing competes with
+  // "call an ambulance" (the pattern NHS 111 online and symptom checkers use).
+  if (detail.emergency) {
+    return <EmergencyNotice advice={detail.emergency} action={refreshAction} />;
+  }
+
   if (detail.status === "REJECTED") {
     return (
       <Panel icon={<Icons.info size={18} />} title="Please contact the clinic">
@@ -28,9 +34,20 @@ export function PatientResults({ detail, onUpdated, onRefresh, refreshing }: {
     );
   }
   if (!approved) {
+    const booked = Boolean(detail.routing?.slot_confirmed);
+    const passed = booked && Boolean(detail.routing?.slot_passed);
     return (
-      <Panel icon={<Icons.clock size={18} />} title="Your answers are with the care team" tone="pending" action={refreshAction}>
-        <p>A clinician will review them shortly. Your visit is saved under &ldquo;My visits&rdquo;, so you can close this page and come back any time.</p>
+      <Panel icon={booked ? <Icons.checkCircle size={18} /> : <Icons.clock size={18} />}
+        title={passed ? "Your appointment time has passed" : booked ? "Your appointment is booked" : "Choose your appointment"}
+        tone={booked ? "good" : "pending"} action={refreshAction}>
+        <p>
+          {passed
+            ? "This visit's appointment time is over. "
+            : booked
+            ? "Your doctor will go through your answers before the visit. "
+            : "Pick a doctor and time below. It's booked as soon as you confirm. "}
+          Your visit is saved under &ldquo;My visits&rdquo;, so you can close this page and come back any time.
+        </p>
         {detail.routing ? (
           <div className="mt-5 border-t border-line pt-5">
             <p className="mb-3 text-sm font-medium text-fg">Your appointment</p>
@@ -44,38 +61,88 @@ export function PatientResults({ detail, onUpdated, onRefresh, refreshing }: {
   const routing = detail.routing;
   const completed = detail.status === "COMPLETED";
   const sections = detail.final_summary ?? {};
-  const friendly = asString(sections.patient_friendly_summary);
+  const doctor = asString(sections.doctor);
+  const department = asString(sections.department);
+  const diagnosis = asString(sections.diagnosis);
   const prescription = asString(sections.prescription);
   const testsOrdered = asString(sections.tests_ordered);
   const followUps = asStringList(sections.follow_up_instructions);
   const mode = asString(sections.consultation_mode) ?? detail.consultation_mode;
-  const reference = detail.appointment_reference;
 
   return (
     <div className="space-y-4">
-      <Panel icon={<Icons.checkCircle size={18} />} title={completed ? "Your visit summary" : "Your plan has been approved"} tone="good">
+      <Panel icon={<Icons.checkCircle size={18} />} tone="good"
+        title={completed ? "Your visit summary" : routing?.slot_passed ? "Your appointment time has passed" : "Your appointment is booked"}>
         {routing ? (
           <AppointmentSlotPicker caseId={detail.case_id} routing={routing} locked={completed} onUpdated={onUpdated} />
         ) : (
-          <p>The care team has approved your request. They will contact you with the next step.</p>
+          <p>Your doctor has gone through your answers. The clinic will contact you if anything changes.</p>
         )}
       </Panel>
 
       {completed ? (
-        <div className="space-y-4 rounded-lg border border-line bg-surface p-5 shadow-card">
-          {friendly ? <p className="text-[15px] leading-7">{friendly}</p> : null}
+        <div className="space-y-4 overflow-hidden rounded-lg border border-line bg-surface p-5 shadow-card">
+          {detail.has_letterhead ? (
+            // eslint-disable-next-line @next/next/no-img-element -- the clinic's own uploaded letterhead, not a static import
+            <img src={casesApi.letterheadUrl(detail.case_id)} alt="Clinic letterhead" className="-mx-5 -mt-5 mb-1 block w-[calc(100%+2.5rem)] max-w-none border-b border-line bg-white object-contain" />
+          ) : null}
+          {/* The record the doctor signed, section by section - no AI summary in front of it. */}
+          <p className="text-center text-xs font-semibold uppercase tracking-widest text-fg-muted">Prescription &amp; advice</p>
+          <dl className="grid grid-cols-2 gap-x-4 gap-y-1.5 rounded-md border border-line px-3 py-2.5 text-xs">
+            <Item label="Doctor" value={doctor ?? "–"} />
+            <Item label="Department" value={department ?? "–"} />
+          </dl>
           <dl className="grid gap-4">
             {mode ? <Item label="Consultation" value={mode === "virtual" ? "Video consultation" : "In person"} /> : null}
-            {prescription ? <Item label="Prescription" value={<span className="whitespace-pre-wrap">{prescription}</span>} /> : null}
+            {diagnosis ? <Item label="Diagnosis" value={<span className="whitespace-pre-wrap">{diagnosis}</span>} /> : null}
+            {prescription ? (
+              <Item label="Rx" value={
+                <ol className="list-decimal space-y-1 pl-5">{prescription.split("\n").filter((l) => l.trim()).map((l, i) => <li key={i}>{l}</li>)}</ol>
+              } />
+            ) : null}
             {testsOrdered ? <Item label="Tests / investigations" value={<span className="whitespace-pre-wrap">{testsOrdered}</span>} /> : null}
             {followUps.length ? (
-              <Item label="Follow-up instructions" value={<ul className="list-disc space-y-1 pl-5">{followUps.map((f) => <li key={f}>{f}</li>)}</ul>} />
+              <Item label="Advice & follow-up" value={<ul className="list-disc space-y-1 pl-5">{followUps.map((f) => <li key={f}>{f}</li>)}</ul>} />
             ) : null}
-            {reference ? <Item label="Appointment request reference" value={<span className="font-mono">{reference}</span>} /> : null}
           </dl>
         </div>
       ) : null}
     </div>
+  );
+}
+
+function EmergencyNotice({ advice, action }: { advice: EmergencyAdvice; action?: ReactNode }) {
+  const tel = (n: string) => `tel:${n.replace(/[^\d+]/g, "")}`;
+  return (
+    <section role="alert" className="space-y-5 rounded-lg border-2 border-danger bg-danger-soft p-5 shadow-card">
+      <div className="flex flex-wrap items-start gap-3">
+        <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-danger text-danger-fg" aria-hidden="true">
+          <Icons.alert size={22} />
+        </span>
+        <div className="min-w-0 flex-1">
+          <p className="text-xs font-bold uppercase tracking-widest text-danger">Emergency</p>
+          <h3 className="text-xl font-semibold text-danger">Call an ambulance now</h3>
+          <p className="mt-1 text-sm leading-6 text-fg">
+            What you told us may be a medical emergency. Don&rsquo;t wait for an appointment.
+          </p>
+        </div>
+        {action}
+      </div>
+
+      <a href={tel(advice.ambulance_number)}
+        className="flex items-center justify-center gap-2 rounded-lg bg-danger px-4 py-4 text-lg font-bold text-danger-fg hover:opacity-90">
+        <Icons.alert size={20} /> Call ambulance {advice.ambulance_number}
+      </a>
+      <p className="-mt-3 text-center text-sm text-fg-muted">
+        Can&rsquo;t get through? Call <a href={tel(advice.emergency_number)} className="font-semibold text-danger underline">{advice.emergency_number}</a>.
+      </p>
+
+      <ul className="list-disc space-y-1 pl-5 text-sm leading-6 text-fg">
+        <li>Don&rsquo;t drive yourself.</li>
+        <li>If you can, have someone stay with you until help arrives.</li>
+        <li>Keep your phone with you. Your answers have already been passed to the care team.</li>
+      </ul>
+    </section>
   );
 }
 

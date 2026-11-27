@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, type ReactNode } from "react";
-import { casesApi, type Attachment, type CaseDetail, type Entry, type Fact } from "@/lib/api";
+import { casesApi, type Attachment, type CaseDetail, type Entry, type Fact, type FileRead } from "@/lib/api";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/ui/feedback";
@@ -10,7 +10,18 @@ import { Icons } from "@/components/ui/icons";
 import { FIELD_LABEL } from "@/lib/constants";
 import { bytes, cn, formatDateTime, titleCase } from "@/lib/utils";
 
-const SENTINELS = new Set(["None reported by patient", "Declined to answer", "Answered - see the intake transcript"]);
+// The intake sentinels (backend app/domain/intake_fields.py) and how they read - same mapping as
+// intake_fields.display(), so a denial shows as "NKA", never as raw sentinel text.
+function sentinelLabel(kind: string, v: string): string | null {
+  switch (v) {
+    case "None reported by patient":
+      return kind === "allergy" ? "No known allergies (NKA)" : kind === "medication" ? "No current medicines" : "None reported";
+    case "Declined to answer": return "Declined to answer";
+    case "Answered - see the intake transcript": return "Answered, see the intake conversation";
+    case "Not asked - intake ended first": return "Not asked (intake ended first)";
+    default: return null;
+  }
+}
 
 function Source({ source, turn }: { source: "patient" | "hms"; turn: number }) {
   return source === "hms"
@@ -18,8 +29,9 @@ function Source({ source, turn }: { source: "patient" | "hms"; turn: number }) {
     : <span className="text-xs text-fg-muted">Patient · turn {turn}</span>;
 }
 
-function Value({ v }: { v: string }) {
-  return SENTINELS.has(v) ? <span className="italic text-fg-subtle">{v}</span> : <>{v}</>;
+function Value({ kind, v }: { kind: string; v: string }) {
+  const label = sentinelLabel(kind, v);
+  return label ? <span className="text-fg-muted">{label}</span> : <>{v}</>;
 }
 
 function groupFacts(facts: Fact[]): Array<[string, Fact[]]> {
@@ -64,7 +76,30 @@ function CollapsibleCard({ title, description, count, children }: {
 /** Opens in a new tab, never a download - the backend serves every attachment with
  * Content-Disposition: inline. Not an <iframe>: this app's CSP sets object-src 'none' (a
  * deliberate hardening default), which blocks Chrome's built-in PDF viewer when framed. */
-function AttachmentRow({ a, caseId }: { a: Attachment; caseId: string }) {
+/** The AI's read of an image or scanned PDF: decision support for the doctor, never a fact. */
+export function AiRead({ read }: { read: FileRead }) {
+  if (read.status !== "read") {
+    const why = read.status === "skipped" && read.note ? read.note : "AI could not read this file.";
+    return <p className="mt-2 text-xs italic text-fg-subtle">{why} Open it to review.</p>;
+  }
+  const partial = (read.pages_total ?? 0) > (read.pages_read ?? 0);
+  return (
+    <div className="mt-2 rounded-md border border-line bg-sunken p-2.5 text-xs">
+      <p className="flex items-center gap-1.5 font-medium text-fg-muted">
+        <Icons.sparkles size={12} /> {read.label ?? "AI read, not a radiology report"}
+        {partial ? <span className="font-normal text-fg-subtle"> · first {read.pages_read} of {read.pages_total} pages</span> : null}
+      </p>
+      {read.what_it_is ? <p className="mt-1 font-medium text-fg">{read.what_it_is}</p> : null}
+      {read.findings?.length ? (
+        <ul className="mt-1 list-disc space-y-0.5 pl-4 text-fg-muted">{read.findings.map((f, i) => <li key={i}>{f}</li>)}</ul>
+      ) : null}
+      {read.impression ? <p className="mt-1 text-fg"><span className="font-medium">Impression:</span> {read.impression}</p> : null}
+      {read.limitations ? <p className="mt-1 text-fg-subtle">{read.limitations}</p> : null}
+    </div>
+  );
+}
+
+function AttachmentRow({ a, caseId, read }: { a: Attachment; caseId: string; read?: FileRead }) {
   const [showText, setShowText] = useState(false);
   const url = casesApi.fileUrl(caseId, a.id);
   return (
@@ -94,6 +129,7 @@ function AttachmentRow({ a, caseId }: { a: Attachment; caseId: string }) {
       {showText && a.extracted_text ? (
         <pre className="mt-2 max-h-48 overflow-y-auto whitespace-pre-wrap rounded-md bg-sunken p-2.5 text-xs text-fg-muted">{a.extracted_text}</pre>
       ) : null}
+      {read ? <AiRead read={read} /> : null}
     </li>
   );
 }
@@ -101,16 +137,19 @@ function AttachmentRow({ a, caseId }: { a: Attachment; caseId: string }) {
 export function RecordsTab({ detail }: { detail: CaseDetail }) {
   const groups = groupFacts(detail.facts);
   const entries: Entry[] = detail.allergies_medications;
+  const reads = new Map(
+    ((detail.file_reads?.sections.reads as FileRead[] | undefined) ?? []).map((r) => [r.attachment_id, r]),
+  );
 
   return (
     <div className="space-y-5">
       <Card>
-        <CardHeader title="Uploaded documents" description="Stored and displayed only. Nothing here can change a priority. Opens in the browser's own viewer - no download." />
+        <CardHeader title="Uploaded documents" description="Nothing here can change a priority. Images and scanned files carry an AI read for you only. Opens in the browser's own viewer - no download." />
         <CardBody>
           {!detail.attachments.length ? (
             <EmptyState icon={<Icons.paperclip size={20} />} title="No documents uploaded" />
           ) : (
-            <ul className="space-y-2">{detail.attachments.map((a) => <AttachmentRow key={a.id} a={a} caseId={detail.case_id} />)}</ul>
+            <ul className="space-y-2">{detail.attachments.map((a) => <AttachmentRow key={a.id} a={a} caseId={detail.case_id} read={reads.get(a.id)} />)}</ul>
           )}
         </CardBody>
       </Card>
@@ -125,7 +164,7 @@ export function RecordsTab({ detail }: { detail: CaseDetail }) {
               {entries.map((e) => (
                 <tr key={e.id}>
                   <Td><Badge tone={e.kind === "allergy" ? "danger" : "neutral"}>{titleCase(e.kind)}</Badge></Td>
-                  <Td className="text-sm"><Value v={e.name} /></Td>
+                  <Td className="text-sm"><Value kind={e.kind} v={e.name} /></Td>
                   <Td className="text-sm text-fg-muted">{e.reaction_or_dose ?? "–"}</Td>
                   <Td><Source source={e.source} turn={e.source_turn} /></Td>
                 </tr>
@@ -146,7 +185,7 @@ export function RecordsTab({ detail }: { detail: CaseDetail }) {
                 facts.map((f, i) => (
                   <tr key={f.id}>
                     <Td className="text-sm text-fg-muted">{i === 0 ? (FIELD_LABEL[kind] ?? titleCase(kind)) : <span className="sr-only">{FIELD_LABEL[kind] ?? titleCase(kind)}</span>}</Td>
-                    <Td className="text-sm"><Value v={f.value} /></Td>
+                    <Td className="text-sm"><Value kind={f.kind} v={f.value} /></Td>
                     <Td><Source source={f.source} turn={f.source_turn} /></Td>
                     <Td className="tabular text-right text-xs text-fg-muted">{Math.round(f.confidence * 100)}%</Td>
                   </tr>

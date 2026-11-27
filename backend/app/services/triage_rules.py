@@ -31,6 +31,7 @@ def sync(db: Session, hospital_id: str | None = None) -> int:
         rule.action = entry["action"]
         rule.explanation = entry["explanation"]
         rule.specialty_hint = entry.get("specialty_hint")
+        rule.emergency = bool(entry.get("emergency", False))
         rule.retired = False
     for stale in existing.values():
         stale.retired = True

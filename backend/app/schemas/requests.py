@@ -1,13 +1,24 @@
 from __future__ import annotations
 
+import uuid
 from datetime import UTC, date, datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class StartSessionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+    # "follow_up" needs `follow_up_of`: one of the patient's own completed visits.
+    visit_type: Literal["new", "follow_up"] = "new"
+    follow_up_of: uuid.UUID | None = None
+
+    @model_validator(mode="after")
+    def follow_up_needs_visit(self) -> StartSessionRequest:
+        if (self.visit_type == "follow_up") != (self.follow_up_of is not None):
+            raise ValueError("A follow-up names the visit it follows up; a new visit names none.")
+        return self
 
 
 class ConsentRequest(BaseModel):
@@ -41,6 +52,11 @@ class IdentityFormRequest(BaseModel):
         return value
 
 
+class ProfileRequest(IdentityFormRequest):
+    """The patient's own profile edit: the same fields as the first-visit registration,
+    written to their existing hospital record."""
+
+
 class MessageRequest(BaseModel):
     """Step 2 of intake: one turn of the clinical conversation (reason for visit,
     symptoms, duration, history, medications, allergies)."""
@@ -70,9 +86,24 @@ class ConsultationNoteRequest(BaseModel):
     follow_up_instructions: str | None = None
     tests_ordered: str | None = None
     referral_notes: str | None = None
+    diagnosis: str | None = None
+    # Report sections still exactly as the AI wrote them when the doctor signed - audit only.
+    ai_drafted_sections: list[str] = Field(default_factory=list, max_length=16)
     # The doctor's own final-draft report to the patient. Optional: when blank, the model
     # drafts the patient-facing summary from these notes at finalize time, same as before.
     patient_report: str | None = None
+
+
+class ReferralRequest(BaseModel):
+    """Signed like a consultation note: the referring doctor's HMS login."""
+
+    doctor_username: str = Field(min_length=1, max_length=64)
+    doctor_password: str = Field(min_length=1)
+    to_department_id: str = Field(min_length=1, max_length=64)
+    to_doctor_id: str | None = Field(default=None, max_length=64)
+    reason: str = Field(min_length=3, max_length=2000)
+    question: str | None = Field(default=None, max_length=2000)
+    urgency: Literal["routine", "soon", "urgent"] = "routine"
 
 
 class AppointmentSlotRequest(BaseModel):
@@ -87,7 +118,29 @@ class DoctorAssistantTurn(BaseModel):
 class DoctorAssistantRequest(BaseModel):
     message: str = Field(min_length=1, max_length=4000)
     doctor_context: str = Field(min_length=1, max_length=300)
+    # Ignored: the chat is now kept server-side per case. Accepted so older clients still work.
     transcript: list[DoctorAssistantTurn] = Field(default_factory=list, max_length=20)
+
+
+class ReportAssistantRequest(BaseModel):
+    instruction: str = Field(min_length=1, max_length=2000)
+    sections: dict[str, str] = Field(default_factory=dict)
+
+
+class AIDiagnosisAddRequest(BaseModel):
+    condition: str = Field(min_length=1, max_length=300)
+    likelihood: Literal["high", "medium", "low"] = "medium"
+    supporting: list[str] = Field(default_factory=list, max_length=10)
+
+
+class AIDiagnosisExtractRequest(BaseModel):
+    reply: str = Field(min_length=1, max_length=20000)
+
+
+class AIDiagnosisDecisionRequest(BaseModel):
+    index: int = Field(ge=0, le=20)
+    decision: Literal["accept", "edit", "dismiss"]
+    text: str | None = Field(default=None, max_length=300)
 
 
 class FinalizeRequest(BaseModel):
@@ -106,3 +159,59 @@ class NewHospitalRequest(BaseModel):
 
 class HospitalYamlRequest(BaseModel):
     yaml: str
+
+
+class NewDoctorRequest(BaseModel):
+    """Admin > Doctors > Add doctor. The hospital is never a field: it is the admin's own, and the
+    NPI is generated (synthetic test data only; a real NPI is issued by CMS)."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    title: str = Field(default="Dr.", max_length=30)
+    first_name: str = Field(min_length=1, max_length=100)
+    last_name: str = Field(min_length=1, max_length=100)
+    email: str = Field(pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$", max_length=254)
+    phone: str = Field(default="", max_length=30)
+    username: str = Field(min_length=3, max_length=32)
+    password: str = Field(min_length=1, max_length=128)
+    department_id: str = Field(min_length=1, max_length=100)
+    specialty_code: str = Field(min_length=1, max_length=20)
+    licence: str = Field(default="", max_length=60)
+    days: list[str] = Field(default_factory=list)
+    ranges: list[tuple[str, str]] = Field(default_factory=list)
+    start_date: date
+    weeks: int = Field(ge=1, le=26)
+
+    @field_validator("username")
+    @classmethod
+    def username_lowercase(cls, value: str) -> str:
+        return value.lower()
+
+
+class ExtendHoursRequest(BaseModel):
+    weeks: int = Field(ge=1, le=26)
+
+
+class UpdateDoctorRequest(BaseModel):
+    """Admin > Doctors > Edit. Name, NPI, username and department are fixed at onboarding, so they
+    are not fields here (extra="forbid" refuses them); the specialty may change within the
+    department. The password is not edited here; hours have their own requests."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    title: str = Field(default="Dr.", max_length=30)
+    email: str = Field(pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$", max_length=254)
+    phone: str = Field(default="", max_length=30)
+    specialty_code: str = Field(min_length=1, max_length=20)
+    licence: str = Field(default="", max_length=60)
+
+
+class ChangeHoursRequest(BaseModel):
+    """Admin > Doctors > Edit hours: from `start_date` on, these hours replace what was published."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    days: list[str] = Field(default_factory=list)
+    ranges: list[tuple[str, str]] = Field(default_factory=list)
+    start_date: date
+    weeks: int = Field(ge=1, le=26)

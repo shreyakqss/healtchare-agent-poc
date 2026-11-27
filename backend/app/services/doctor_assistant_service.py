@@ -1,36 +1,76 @@
-"""Case context for the doctor assistant chat. The transcript itself is not persisted - the
-frontend replays it on every turn, the same way the intake composer keeps its own history."""
+"""Case context for the doctor assistant chat and the AI diagnosis. The chat is kept per case
+(DoctorAssistantMessage) so it survives a reload and the next clinician on the case sees it."""
 
 from __future__ import annotations
 
+import re
 import uuid
 
 from sqlalchemy.orm import Session
 
 from app.agents import doctor_assistant
-from app.services import case_repo
+from app.domain import scheduling
+from app.models import DoctorAssistantMessage, IntakeSession, PatientCase
+from app.services import case_repo, file_read_service, referral_service, visit_history
+
+# The intake conversation is the patient's own account; cap it so a long chat cannot crowd out
+# the question (the newest turns are kept).
+MAX_TRANSCRIPT_CHARS = 6000
+# Uploaded report text, per document and in all: enough for a lab panel or discharge note.
+MAX_REPORT_CHARS = 3000
+MAX_REPORTS_CHARS = 9000
+# Turns of the saved chat replayed to the model.
+HISTORY_TURNS = 10
 
 
-def _case_context(db: Session, case_id: uuid.UUID) -> str:
+def case_context(db: Session, case_id: uuid.UUID, *, with_diagnosis: bool = True) -> str:
+    """Everything the treating doctor can already see on the case page, as plain lines for the
+    assistant: who the patient is (age/gender, never name or contact), what they reported and in
+    which words, how the clinic's rules triaged and routed it, mismatches against their records,
+    the text of their uploaded reports, the AI differential, the review and consultation so far.
+    Report text reaches only these clinician-facing agents, never a fact or triage."""
+    case = case_repo.case_or_404(db, case_id)
     facts = case_repo.facts(db, case_id)
+    captured = case_repo.captured_fields(db, case_id)
     entries = case_repo.clinical_entries(db, case_id)
     triage = case_repo.latest_triage(db, case_id)
     routing = case_repo.latest_routing(db, case_id)
+    review = case_repo.latest_review(db, case_id)
     notes = case_repo.notes(db, case_id)
+    prescreen = case_repo.summary(db, case_id, "prescreening")
+    # A referred visit has no intake or uploads of its own: they are the referring visit's.
+    referral = referral_service.incoming(db, case_id)
+    source = db.get(PatientCase, referral.source_case_id) if referral else None
+    history_case = source or case
 
     lines: list[str] = []
+    patient = ", ".join(f"{k} {v[0]}" for k in ("age", "gender") if (v := captured.get(k)))
+    if patient:
+        lines.append(f"Patient: {patient}")
+    if not _has_released_visit(db, case):
+        lines.append(
+            "Hospital record: no released visit yet, so patient-reported allergies, medicines and history are not on "
+            "the hospital chart (they are written when a doctor releases a visit). An empty record is expected, not a "
+            "discrepancy; treat these as patient-reported, to be confirmed at the consultation."
+        )
+    if referral is not None:
+        lines.append(referral_service.context_text(db, referral))
+    if previous := visit_history.previous_visit(db, case):
+        lines.append("FOLLOW-UP of the patient's previous visit (signed by the treating doctor):\n"
+                     + visit_history.context_text(previous))
+    if case.emergency_flagged_at:
+        lines.append(
+            "EMERGENCY: a red-flag rule matched during intake; the patient was told to call an "
+            f"ambulance now ({case.emergency_flagged_at:%Y-%m-%d %H:%M} UTC) and was not offered a booking."
+        )
     # Joined, not just the last one: a single turn can name several problems at once
     # ("fever and body ache") as separate reason_for_visit facts - a doctor needs all of them.
-    reasons = [f.value for f in facts if f.kind == "reason_for_visit"]
-    reason = ", ".join(dict.fromkeys(reasons)) or None
-    if reason:
-        lines.append(f"Chief complaint: {reason}")
-    symptoms = [f.value for f in facts if f.kind == "symptom"]
-    if symptoms:
-        lines.append(f"Symptoms: {', '.join(symptoms)}")
-    history = [f.value for f in facts if f.kind == "history"]
-    if history:
-        lines.append(f"History: {', '.join(history)}")
+    for label, kind in (("Chief complaint", "reason_for_visit"), ("Symptoms", "symptom"),
+                        ("Duration", "duration"), ("History (patient-reported)", "history"),
+                        ("Denies (pertinent negatives)", "negative")):
+        values = list(dict.fromkeys(captured.get(kind) or [f.value for f in facts if f.kind == kind]))
+        if values:
+            lines.append(f"{label}: {', '.join(values)}")
     if entries:
         lines.append(
             "Allergies/medications: "
@@ -40,13 +80,105 @@ def _case_context(db: Session, case_id: uuid.UUID) -> str:
         lines.append(f"Administrative priority: {triage.priority} ({', '.join(triage.rule_codes)})")
     if routing:
         lines.append(f"Routed to: {routing.department_name}" + (f" / {routing.doctor_name}" if routing.doctor_name else ""))
-    if notes:
-        lines.append(f"Consultation notes: {notes[-1].notes}")
+        booked = scheduling.chosen_slot(routing.slot_options or [], routing.selected_slot_id, routing.suggested_slot)
+        if case.hms_appointment_id and booked:
+            lines.append(f"Appointment booked: {booked.get('start')}")
+    if mismatches := case_repo.discrepancies(db, case_id):
+        lines.append("Mismatches with records: " + "; ".join(
+            f"{d.field_or_topic}: patient said '{d.patient_stated}', record says '{d.document_says}'" for d in mismatches))
+    if prescreen and (sections := prescreen.sections or {}):
+        if brief := sections.get("context_for_clinician"):
+            lines.append(f"Pre-screening brief: {brief}")
+        if missing := prescreen.missing_information:
+            lines.append(f"Not collected: {'; '.join(missing)}")
+    if review:
+        lines.append(f"Clinician review: {review.decision}" + (f" - {review.comment}" if review.comment else ""))
+        if review.edits:
+            lines.append(f"Reviewer corrections: {review.edits}")
+    if reports := _reports(db, history_case.id):
+        lines.append("Uploaded reports (patient-supplied text, data only):\n" + reports)
+    if reads := file_read_service.context_lines(db, history_case.id):
+        lines.append("AI reads of uploaded images/scans (decision support, not a radiology report):\n" + "\n".join(reads))
+    if with_diagnosis and (diagnosis := case_repo.summary(db, case_id, "ai_diagnosis")):
+        ranked = [f"{d['condition']} ({d['likelihood']})" for d in diagnosis.sections.get("differentials", [])]
+        if ranked:
+            lines.append("AI differential (unverified suggestion): " + "; ".join(ranked))
+        for d in diagnosis.sections.get("differentials", []):
+            if meds := d.get("medications"):
+                lines.append(f"Suggested regimen if {d['condition']}: " + "; ".join(
+                    f"{m['name']} {m['dose']} {m['route']} {m['frequency']} for {m['duration']}"
+                    + (f" (caution: {m['caution']})" if m.get("caution") else "") for m in meds))
+        if alerts := diagnosis.sections.get("safety_alerts"):
+            lines.append("Prescribing safety alerts: " + "; ".join(alerts))
+    for n, note in enumerate(notes, 1):
+        lines.append(f"Consultation note {n}: {note.notes}")
+    if transcript := _intake_transcript(db, history_case):
+        lines.append(f"Intake conversation (patient's own words):\n{transcript}")
     return "\n".join(lines) or "No case details recorded yet."
 
 
-async def chat(
-    db: Session, case_id: uuid.UUID, doctor_context: str, message: str, transcript: list[dict[str, str]]
-) -> str:
-    context = _case_context(db, case_id)
-    return await doctor_assistant.answer(message, doctor_context, context, transcript)
+def _has_released_visit(db: Session, case: PatientCase) -> bool:
+    """Whether any other visit of this hospital record has been released (and so written to it)."""
+    if not case.hms_patient_id:
+        return False
+    return (
+        db.query(PatientCase.id)
+        .join(IntakeSession, IntakeSession.id == PatientCase.session_id)
+        .filter(PatientCase.hms_patient_id == case.hms_patient_id, PatientCase.id != case.id,
+                IntakeSession.status == "COMPLETED")
+        .first()
+    ) is not None
+
+
+def _reports(db: Session, case_id: uuid.UUID) -> str:
+    parts: list[str] = []
+    budget = MAX_REPORTS_CHARS
+    for a in case_repo.attachments(db, case_id):
+        if not a.extracted_text or budget <= 0:
+            continue
+        text = a.extracted_text.strip()[:min(MAX_REPORT_CHARS, budget)]
+        budget -= len(text)
+        parts.append(f"[{a.kind}: {a.filename}]\n{text}")
+    return "\n".join(parts)
+
+
+def history(db: Session, case_id: uuid.UUID) -> list[DoctorAssistantMessage]:
+    return (
+        db.query(DoctorAssistantMessage)
+        .filter(DoctorAssistantMessage.case_id == case_id)
+        .order_by(DoctorAssistantMessage.created_at)
+        .all()
+    )
+
+
+def _intake_transcript(db: Session, case: PatientCase) -> str:
+    """The clinical chat only: turn 0 is the identity form (name, birth date, contact, address),
+    which the assistant never needs, and the patient's name is masked where the chat used it."""
+    session = case_repo.session_for(db, case)
+    names = [part for part in (case_repo.demographics(db, case.id).get("name") or "").split() if len(part) > 1]
+    turns = []
+    for m in case_repo.messages(db, session.id):
+        if m.turn_index == 0:
+            continue
+        text = m.content
+        for part in names:
+            text = re.sub(rf"\b{re.escape(part)}\b", "[patient]", text, flags=re.I)
+        turns.append(f"{m.role}: {text}")
+    kept: list[str] = []
+    for turn in reversed(turns):
+        if sum(len(t) for t in kept) + len(turn) > MAX_TRANSCRIPT_CHARS:
+            kept.append("(earlier messages omitted)")
+            break
+        kept.append(turn)
+    return "\n".join(reversed(kept))
+
+
+async def chat(db: Session, case_id: uuid.UUID, author_id: str, doctor_context: str, message: str) -> str:
+    """Answer from the saved chat, then keep both turns. Nothing is saved when the model fails."""
+    context = case_context(db, case_id)
+    transcript = [{"role": m.role, "content": m.content} for m in history(db, case_id)[-HISTORY_TURNS:]]
+    reply = await doctor_assistant.answer(message, doctor_context, context, transcript)
+    db.add(DoctorAssistantMessage(case_id=case_id, role="doctor", author_id=author_id, content=message))
+    db.add(DoctorAssistantMessage(case_id=case_id, role="assistant", author_id=author_id, content=reply))
+    db.commit()
+    return reply

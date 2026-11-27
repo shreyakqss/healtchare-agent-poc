@@ -28,3 +28,14 @@ def test_each_response_settles_a_field_differently():
     assert f.sentinel_for("answered") == f.NOT_CAPTURED
     assert f.sentinel_for("not_answered") is None
     assert f.sentinel_for(None) is None
+
+
+def test_display_labels_for_sentinels():
+    from app.domain import intake_fields as f
+    assert f.display("allergy", f.NONE_REPORTED) == "No known allergies (NKA)"
+    assert f.display("medication", f.NONE_REPORTED) == "No current medicines"
+    assert f.display("history", f.NONE_REPORTED) == "None reported"
+    assert f.display("allergy", f.DECLINED) == "Declined to answer"
+    assert f.display("duration", f.NOT_ASKED) == "Not asked"
+    assert f.display("symptom", "cough") == "cough"
+    assert f.NOT_ASKED in f.PLACEHOLDERS

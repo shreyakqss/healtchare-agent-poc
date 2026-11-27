@@ -1,7 +1,7 @@
 import "server-only";
 
 import { cookies } from "next/headers";
-import { parseError } from "@/lib/api/client";
+import { parseError, WORKSPACE_CASES } from "@/lib/api/client";
 import type {
   Attachment,
   AuditEvent,
@@ -9,12 +9,17 @@ import type {
   CaseDetail,
   CaseListItem,
   Health,
+  AdminDoctors,
+  AdminPatientItem,
+  WeeklyHours,
   HMSStatus,
   HospitalConfig,
   HospitalSummary,
   IntakeConfig,
   LinkedPatientRecord,
+  PreviousVisit,
   PatientCase,
+  PastPatientItem,
   PatientVisitItem,
   Roster,
 } from "@/lib/api/types";
@@ -45,18 +50,23 @@ export const serverApi = {
     activeIntake: () => serverRequest<ActiveIntake | null>("/intake-sessions/active"),
     pastAttachments: () => serverRequest<Attachment[]>("/intake-sessions/past-attachments"),
     linkedRecord: () => serverRequest<LinkedPatientRecord | null>("/intake-sessions/linked-record"),
+    followUpOptions: () => serverRequest<PreviousVisit[]>("/intake-sessions/follow-up-options"),
     case: (id: string) => serverRequest<PatientCase>(`/cases/${encodeURIComponent(id)}/patient-view`),
   },
   clinician: {
-    cases: () => serverRequest<CaseListItem[]>("/cases"),
+    cases: () => serverRequest<CaseListItem[]>(`/cases?limit=${WORKSPACE_CASES}`),
+    pastPatients: () => serverRequest<PastPatientItem[]>("/cases/past-patients"),
     case: (id: string) => serverRequest<CaseDetail>(`/cases/${encodeURIComponent(id)}`),
     audit: (id: string) => serverRequest<AuditEvent[]>(`/cases/${encodeURIComponent(id)}/audit`),
     config: () => serverRequest<HospitalConfig & { hospital_id: string }>("/hospital/config"),
     roster: () => serverRequest<Roster>("/hospital/roster"),
+    myHours: () => serverRequest<WeeklyHours[]>("/hospital/my-hours"),
   },
   admin: {
     hospitals: () => serverRequest<HospitalSummary[]>("/hospital/hospitals"),
     config: () => serverRequest<HospitalConfig & { hospital_id: string }>("/hospital/config"),
     hms: () => serverRequest<HMSStatus>("/hms/status"),
+    doctors: () => serverRequest<AdminDoctors>("/admin/doctors"),
+    patients: () => serverRequest<AdminPatientItem[]>("/admin/patients"),
   },
 };

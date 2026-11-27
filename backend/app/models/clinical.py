@@ -76,9 +76,25 @@ class ConsultationNote(Base):
     prescription: Mapped[str | None] = mapped_column(Text)
     follow_up_instructions: Mapped[str | None] = mapped_column(Text)
     tests_ordered: Mapped[str | None] = mapped_column(Text)
+    # Provisional diagnosis, its own section of the report so it reaches the visit summary.
+    diagnosis: Mapped[str | None] = mapped_column(Text)
     # For other clinicians on referral, never surfaced on the patient-facing summary or the
     # patient endpoint's safe projection (see finalize.py: not written into ClinicalSummary.sections).
     referral_notes: Mapped[str | None] = mapped_column(Text)
     # The doctor's own final-draft report to the patient, in their own words. When set, this
     # stands in for the model-drafted patient_friendly_summary at finalize time.
     patient_report: Mapped[str | None] = mapped_column(Text)
+
+
+class DoctorAssistantMessage(Base):
+    """One turn of the doctor assistant chat on a case, kept so the discussion survives a reload
+    and is visible to the next clinician on the case. Clinician-facing only."""
+
+    __tablename__ = "doctor_assistant_messages"
+
+    case_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("patient_cases.id", ondelete="CASCADE"), index=True
+    )
+    role: Mapped[str] = mapped_column(String(16))  # doctor | assistant
+    author_id: Mapped[str] = mapped_column(String(128))  # the signed-in clinician who asked
+    content: Mapped[str] = mapped_column(Text)

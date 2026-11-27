@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Protocol
 
 from app.integrations.hms.schemas import (
@@ -11,7 +12,9 @@ from app.integrations.hms.schemas import (
     HMSPractitioner,
     HMSSlot,
     HMSStatus,
+    HMSWeeklyHours,
     PatientRegistration,
+    ReferralRecord,
     VerifiedIdentity,
 )
 
@@ -44,6 +47,18 @@ class HMSClient(Protocol):
     def get_document_content(self, mrn: str, reference: str) -> tuple[bytes, str, str]: ...
     def list_practitioners(self, limit: int = 100) -> list[HMSPractitioner]: ...
     def available_slots(self, department_id: str, practitioner_id: str | None = None, limit: int = 5) -> list[HMSSlot]: ...
+    def office_hours(self, practitioner_id: str) -> list[HMSWeeklyHours]:
+        """The practitioner's weekly consulting hours as the HMS publishes them, clinic-local.
+        `[]` when it publishes none."""
+        ...
+    def book_appointment(self, mrn: str, practitioner_id: str, start: datetime, end: datetime, note: str) -> str:
+        """Put the patient's confirmed appointment on the practitioner's calendar. Returns the
+        HMS's id for it, which `cancel_appointment` takes."""
+        ...
+    def cancel_appointment(self, reference: str) -> None: ...
+    def record_referral(self, referral: ReferralRecord) -> str:
+        """File a doctor-to-doctor referral on the patient's chart. Returns the HMS's id for it."""
+        ...
     def request_appointment(self, request: AppointmentRequest) -> AppointmentRequestResult: ...
     def list_requests(self, limit: int = 100) -> list[AppointmentRequestResult]: ...
 

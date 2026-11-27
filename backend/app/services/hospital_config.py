@@ -22,7 +22,7 @@ from app.services.attachments import ATTACHMENT_KINDS
 
 ACTIVE_POINTER = "active.txt"
 PRIORITIES = {"high", "medium", "low"}
-RULE_CONDITIONS = {"any_symptom", "all_symptoms", "any_history", "min_duration_days", "allergy_conflict"}
+RULE_CONDITIONS = {"any_symptom", "all_symptoms", "any_history", "any_severity", "min_duration_days", "allergy_conflict"}
 
 
 def _dir() -> Path:
@@ -66,6 +66,9 @@ def validate(config: Any) -> None:
         not isinstance(hospital_details["timezone"], str) or not hospital_details["timezone"].strip()
     ):
         raise InvalidConfig("hospital timezone must be a non-empty IANA name.")
+    facility_id = hospital_details.get("hms_facility_id")
+    if facility_id is not None and (isinstance(facility_id, bool) or not isinstance(facility_id, int) or facility_id < 1):
+        raise InvalidConfig("hospital hms_facility_id must be the hospital system's facility id (a positive number).")
     triage_config = config.get("triage_rules") or {}
     if not isinstance(triage_config, dict):
         raise InvalidConfig("triage_rules must be a mapping.")
@@ -83,7 +86,11 @@ def validate(config: Any) -> None:
         condition = rule.get("condition") or {}
         if not isinstance(condition, dict) or set(condition) - RULE_CONDITIONS:
             raise InvalidConfig(f"Rule {rule['code']} has an invalid condition.")
-        for key in ("any_symptom", "all_symptoms", "any_history"):
+        if "emergency" in rule and not isinstance(rule["emergency"], bool):
+            raise InvalidConfig(f"Rule {rule['code']} has an invalid emergency value.")
+        if rule.get("emergency") and rule.get("priority") != "high":
+            raise InvalidConfig(f"Rule {rule['code']} is an emergency rule, so its priority must be high.")
+        for key in ("any_symptom", "all_symptoms", "any_history", "any_severity"):
             values = condition.get(key, [])
             if not isinstance(values, list) or not all(isinstance(value, str) and value for value in values):
                 raise InvalidConfig(f"Rule {rule['code']} has invalid {key} values.")
@@ -132,6 +139,24 @@ def validate(config: Any) -> None:
     unknown_doctor_departments = set(doctor_departments) - set(department_ids)
     if unknown_hints or unknown_routes or unknown_doctor_departments:
         raise InvalidConfig("Routing configuration references an unknown department.")
+    infection = config.get("infection_routing") or {}
+    if not isinstance(infection, dict) or not all(
+        isinstance(infection.get(key) or [], list)
+        and all(isinstance(value, str) and value for value in infection.get(key) or [])
+        for key in ("signs", "departments")
+    ):
+        raise InvalidConfig("infection_routing needs lists of signs and department ids.")
+    if set(infection.get("departments") or []) - set(department_ids):
+        raise InvalidConfig("infection_routing references an unknown department.")
+    ai_routing = config.get("ai_routing") or {}
+    if not isinstance(ai_routing, dict) or not all(
+        isinstance(ai_routing.get(key) or [], list)
+        and all(isinstance(value, str) and value for value in ai_routing.get(key) or [])
+        for key in ("protected", "policy")
+    ):
+        raise InvalidConfig("ai_routing needs lists of protected department ids and policy lines.")
+    if set(ai_routing.get("protected") or []) - set(department_ids):
+        raise InvalidConfig("ai_routing protects an unknown department.")
 
     appointment_types = config.get("appointment_types") or []
     if not isinstance(appointment_types, list):
@@ -285,6 +310,17 @@ def clinic_vocabulary() -> list[str]:
     for keywords in (config.get("specialty_map") or {}).values():
         terms.update(keywords)
     return sorted(terms)
+
+
+def emergency_number() -> str:
+    """The number a red-flag patient is told to call; India's national emergency line by default."""
+    return str(hospital().get("emergency_number") or "112")
+
+
+def ambulance_number() -> str:
+    """The ambulance a red-flag patient is told to call; India's free ambulance line by default."""
+    return str(hospital().get("ambulance_number") or "108")
+
 
 def department_by_id(department_id: str | None) -> dict[str, Any] | None:
     return next((d for d in departments() if d["id"] == department_id), None)

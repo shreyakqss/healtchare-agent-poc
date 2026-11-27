@@ -15,7 +15,25 @@ from typing import Protocol
 NONE_REPORTED = "None reported by patient"
 DECLINED = "Declined to answer"
 NOT_CAPTURED = "Answered - see the intake transcript"
-PLACEHOLDERS = frozenset({NONE_REPORTED, DECLINED, NOT_CAPTURED})
+# Intake ended (question cap, or the model stayed down) before this field was asked. Not an
+# answer of any kind: it only lets the case reach a clinician, who still sees it as not collected.
+NOT_ASKED = "Not asked - intake ended first"
+PLACEHOLDERS = frozenset({NONE_REPORTED, DECLINED, NOT_CAPTURED, NOT_ASKED})
+
+
+def display(kind: str, value: str) -> str:
+    """How a sentinel is shown to anyone - patient checklist, doctor's record, chart notes - so a
+    denial reads as a clinical answer ("No known allergies"), never a blank or "(not given)".
+    A real value is returned unchanged."""
+    if value == NONE_REPORTED:
+        return {"allergy": "No known allergies (NKA)", "medication": "No current medicines"}.get(kind, "None reported")
+    if value == DECLINED:
+        return "Declined to answer"
+    if value == NOT_CAPTURED:
+        return "Answered, see the intake conversation"
+    if value == NOT_ASKED:
+        return "Not asked"
+    return value
 
 ENTRY_FIELDS = {"allergy", "medication"}  # live in allergy_medications, not patient_facts
 
@@ -41,7 +59,11 @@ FIELD_PROMPTS = {
     "medication": "any medications you currently take",
     "allergy": "any allergies you have",
     "contact_preference": "how you prefer to be contacted",
+    # Not a required field: the focused history the clinical interviewer asks once those are done.
+    "clinical_detail": "a few more details about your symptoms",
 }
+
+FOCUSED_FIELD = "clinical_detail"
 
 
 class Fact(Protocol):

@@ -18,6 +18,7 @@ QuestionScope = Literal[
 
 FactKind = Literal[
     "reason_for_visit", "symptom", "duration", "history", "contact_preference", "name", "age", "gender",
+    "negative",
 ]
 
 
@@ -63,6 +64,12 @@ class PatientAnswerReview(BaseModel):
     )
 
 
+class FocusedQuestion(BaseModel):
+    done: bool = Field(description="True when the doctor already has enough history for this complaint.")
+    question: str = Field(default="", description="The next question to the patient; empty when done.")
+    topic: str = Field(default="", description="What it asks about, e.g. 'cough', 'tonsil swelling', 'dehydration'.")
+
+
 class PrescreeningSummary(BaseModel):
     chief_complaint: str
     reported_symptoms: list[str] = Field(default_factory=list)
@@ -97,9 +104,124 @@ class MedicationCandidatesResult(BaseModel):
     )
 
 
+class MedicationSuggestion(BaseModel):
+    name: str = Field(description="Generic drug name, e.g. 'Phenoxymethylpenicillin'.")
+    dose: str = Field(description="Typical adult dose for this patient, e.g. '500 mg'.")
+    route: str = Field(description="e.g. 'oral'.")
+    frequency: str = Field(description="e.g. 'four times a day'.")
+    duration: str = Field(description="e.g. '5 to 10 days', or 'as needed'.")
+    purpose: str = Field(description="Why: 'first-line antibiotic', 'fever and pain relief', 'rehydration'.")
+    caution: str = Field(default="", description="Allergy, interaction, age or pregnancy caution for THIS patient; empty if none.")
+
+
+class DiagnosisSuggestion(BaseModel):
+    condition: str = Field(description="The condition's clinical name.")
+    likelihood: Literal["high", "medium", "low"]
+    supporting: list[str] = Field(default_factory=list, description="Findings in the case that point to it.")
+    against: list[str] = Field(default_factory=list, description="Findings in the case that argue against it.")
+    tests: list[str] = Field(default_factory=list, description="Investigations that would confirm or exclude it.")
+    management: list[str] = Field(default_factory=list, description="Non-drug management and advice if confirmed.")
+    medications: list[MedicationSuggestion] = Field(
+        default_factory=list,
+        description="Guideline first-line regimen if confirmed, already adjusted for this patient's allergies and medicines.",
+    )
+    allergy_check: str = Field(
+        default="",
+        description="How the regimen accounts for the recorded allergies and current medicines, in one line.",
+    )
+
+
+class AIDiagnosis(BaseModel):
+    """Decision support for the treating doctor. Never shown to the patient unless the doctor
+    writes it into the consultation themselves."""
+
+    differentials: list[DiagnosisSuggestion] = Field(
+        default_factory=list, description="Most likely first; only genuinely plausible ones (often one to three, never more than five)."
+    )
+    red_flags: list[str] = Field(
+        default_factory=list, description="Serious conditions that must be excluded, with the reason."
+    )
+    missing_information: list[str] = Field(
+        default_factory=list, description="Questions or findings that would change the differential."
+    )
+    safety_alerts: list[str] = Field(
+        default_factory=list,
+        description="Allergy cross-reactions, drug interactions or contraindications the doctor must see before prescribing.",
+    )
+    reasoning: str = Field(description="Two to four sentences on how the differential was reached.")
+
+
+class ProposedDiagnosis(BaseModel):
+    condition: str = Field(description="A medical condition the text proposes for this patient, by its clinical name.")
+    likelihood: Literal["high", "medium", "low"] = Field(description="How strongly the text favours it.")
+    supporting: list[str] = Field(default_factory=list, description="The text's own reasons for it, short.")
+
+
+class ProposedDiagnoses(BaseModel):
+    conditions: list[ProposedDiagnosis] = Field(
+        default_factory=list,
+        description="Empty when the text proposes no diagnosis (advice, dosing, test lists, questions).",
+    )
+
+
+ReportSection = Literal[
+    "complaints", "history", "past_history", "allergies", "medications", "examination",
+    "diagnosis", "investigations", "prescription", "advice", "follow_up", "referral",
+]
+
+
+class ReportDraft(BaseModel):
+    """The OPD consultation record (SOAP / ABDM OP consultation shape), written the way a doctor
+    charts: terse clinical lines, never narrative or commentary. No examination: only the doctor
+    examined the patient."""
+
+    complaints: str = Field(description="Presenting complaints with duration, one per line, e.g. 'Fever x 3 days'.")
+    history: str = Field(description="History of presenting illness: 2 to 4 short clinical lines, including pertinent negatives.")
+    past_history: str = Field(description="Relevant past medical/surgical history, one per line; 'Nil significant' if none.")
+    allergies: str = Field(description="Drug and other allergies with reaction, one per line; 'NKDA' if none.")
+    medications: str = Field(description="Current medicines the patient takes, one per line; 'Nil' if none.")
+    diagnosis: str = Field(description="Diagnosis name(s) only, one per line, optionally with ICD-10 code in brackets.")
+    investigations: str = Field(description="Test names only, one per line; empty if none.")
+    prescription: str = Field(description="Rx, one medicine per line: form, generic name, strength, dose schedule, duration, instructions.")
+    advice: str = Field(description="Advice for the patient, short plain-language lines.")
+    follow_up: str = Field(description="When to review and when to return earlier, one line.")
+    referral: str = Field(description="Notes for other doctors; empty when there is nothing to hand over.")
+
+
+class ReportEdit(BaseModel):
+    section: ReportSection
+    text: str = Field(description="The complete new text of the section, not a fragment.")
+    reason: str = Field(description="One short line on what changed.")
+
+
+class ReportEditProposal(BaseModel):
+    reply: str = Field(description="One or two sentences to the doctor about the proposed change.")
+    edits: list[ReportEdit] = Field(default_factory=list)
+
+
 class VisitSummary(BaseModel):
     visit_reason: str
     consultation_overview: str
     doctor_notes_summary: str
     follow_up_instructions: list[str] = Field(default_factory=list)
     patient_friendly_summary: str = Field(description="Two or three plain sentences the patient can read.")
+
+
+class DepartmentPick(BaseModel):
+    department_id: str = Field(description="One department id from the clinic's list, exactly as given.")
+    reason: str = Field(description="One short clinical phrase for the doctor, e.g. 'Fever with cough, likely chest infection'.")
+    facts_used: list[str] = Field(
+        default_factory=list, description="The patient facts the choice rests on, copied word for word from the list."
+    )
+
+
+class FileRead(BaseModel):
+    """The AI's read of one uploaded image or scanned document, for the treating doctor only."""
+
+    what_it_is: str = Field(description="What the file shows, e.g. 'Chest X-ray, PA view' or 'Scanned CBC report'.")
+    findings: list[str] = Field(
+        default_factory=list,
+        description="Short lines on what is visible, or the key values read from a report with units and flags.",
+    )
+    impression: str = Field(description="One line on what the findings may suggest; empty when nothing stands out.")
+    limitations: str = Field(description="One line on image quality or what cannot be judged; empty when none.")

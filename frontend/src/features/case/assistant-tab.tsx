@@ -2,7 +2,7 @@
 
 import { useRef, useState, type KeyboardEvent } from "react";
 import ReactMarkdown from "react-markdown";
-import { ApiError, casesApi, type AssistantTurn } from "@/lib/api";
+import { ApiError, casesApi, type AssistantTurn, type ProposedDiagnosis, type Summary } from "@/lib/api";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { Alert, EmptyState } from "@/components/ui/feedback";
 import { Button } from "@/components/ui/button";
@@ -10,11 +10,20 @@ import { Icons } from "@/components/ui/icons";
 import { cn } from "@/lib/utils";
 import { MARKDOWN_COMPONENTS } from "@/features/intake/message-list";
 
-/** A clinical discussion for whoever is reading this case - literature lookups included, no
- * content filtering, and it never writes anything back to the record itself. */
-export function AssistantTab({ caseId, doctorContext }: { caseId: string; doctorContext: string }) {
-  const [turns, setTurns] = useState<AssistantTurn[]>([]);
-  const [text, setText] = useState("");
+/** A clinical discussion for whoever is reading this case - it reads the uploaded reports and the
+ * AI differential, looks up literature, and never writes anything back to the record itself. */
+export function AssistantPanel({ caseId, doctorContext, initialMessages, text, onTextChange, onDiagnosisAdded, className, canAddDiagnosis = true }: {
+  caseId: string; doctorContext: string; initialMessages: AssistantTurn[];
+  /** The composer is controlled so the differential beside it can prefill a question. */
+  text: string; onTextChange: (text: string) => void;
+  /** The doctor took a diagnosis from a reply into the differential. */
+  onDiagnosisAdded: (summary: Summary) => void; className?: string;
+  // False once the visit is closed: the differential is final, so replies offer no "Add".
+  canAddDiagnosis?: boolean;
+}) {
+  // The chat is kept on the case server-side, so it is here again after a reload.
+  const [turns, setTurns] = useState<AssistantTurn[]>(initialMessages);
+  const setText = onTextChange;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const ref = useRef<HTMLTextAreaElement | null>(null);
@@ -29,7 +38,7 @@ export function AssistantTab({ caseId, doctorContext }: { caseId: string; doctor
     setBusy(true);
     setError(null);
     try {
-      const { reply } = await casesApi.assistantChat(caseId, message, doctorContext, turns);
+      const { reply } = await casesApi.assistantChat(caseId, message, doctorContext);
       setTurns([...next, { role: "assistant", content: reply }]);
     } catch (e) {
       setError(e instanceof ApiError ? e.message : "Could not reach the assistant.");
@@ -46,15 +55,15 @@ export function AssistantTab({ caseId, doctorContext }: { caseId: string; doctor
   }
 
   return (
-    <Card>
+    <Card className={className}>
       <CardHeader
-        title="Clinical assistant"
-        description="Discussion only - literature lookups via PubMed included. Nothing here writes to the record; open for you, at any point in the visit."
+        title="Ask the assistant"
+        description="About this differential, the uploaded reports or the literature (PubMed). Saved on this case; never writes to the record."
       />
-      <CardBody className="space-y-4">
-        <div className="max-h-[55vh] min-h-[16rem] space-y-4 overflow-y-auto rounded-md border border-line bg-sunken/40 p-4">
+      <CardBody className="space-y-3">
+        <div className="max-h-[50vh] min-h-[14rem] space-y-4 overflow-y-auto rounded-md border border-line bg-sunken/40 p-4">
           {!turns.length ? (
-            <EmptyState icon={<Icons.sparkles size={20} />} title="Ask about this visit" description="Differentials, dosing, interactions, or a literature question." />
+            <EmptyState icon={<Icons.sparkles size={20} />} title="Ask about this case" description="Type a question, or use Ask about this on a diagnosis." />
           ) : (
             turns.map((t, i) => (
               <div key={i} className={cn("flex gap-3", t.role === "doctor" && "flex-row-reverse")}>
@@ -64,8 +73,13 @@ export function AssistantTab({ caseId, doctorContext }: { caseId: string; doctor
                 )} aria-hidden="true">
                   {t.role === "doctor" ? <Icons.stethoscope size={15} /> : <Icons.sparkles size={15} />}
                 </span>
-                <div className={cn("max-w-[80%] rounded-lg px-3.5 py-2.5 text-sm leading-6", t.role === "doctor" ? "whitespace-pre-wrap bg-brand text-brand-fg" : "border border-line bg-surface")}>
-                  {t.role === "doctor" ? t.content : <ReactMarkdown components={MARKDOWN_COMPONENTS}>{t.content}</ReactMarkdown>}
+                <div className="max-w-[80%] min-w-0 space-y-1.5">
+                  <div className={cn("rounded-lg px-3.5 py-2.5 text-sm leading-6", t.role === "doctor" ? "whitespace-pre-wrap bg-brand text-brand-fg" : "border border-line bg-surface")}>
+                    {t.role === "doctor" ? t.content : <ReactMarkdown components={MARKDOWN_COMPONENTS}>{t.content}</ReactMarkdown>}
+                  </div>
+                  {t.role === "assistant" && canAddDiagnosis ? (
+                    <AddToDiagnosis caseId={caseId} reply={t.content} onAdded={onDiagnosisAdded} />
+                  ) : null}
                 </div>
               </div>
             ))
@@ -83,7 +97,7 @@ export function AssistantTab({ caseId, doctorContext }: { caseId: string; doctor
             rows={1}
             value={text}
             disabled={busy}
-            placeholder="Ask about diagnosis, treatment, interactions, or literature…"
+            placeholder="Ask a question…"
             onChange={(e) => {
               setText(e.target.value);
               e.target.style.height = "auto";
@@ -96,5 +110,79 @@ export function AssistantTab({ caseId, doctorContext }: { caseId: string; doctor
         </div>
       </CardBody>
     </Card>
+  );
+}
+
+/** Picks the diagnoses a reply puts forward (read by the model, never free text), so advice or
+ * dosing can't end up in the differential. The doctor adds each one they agree with. */
+function AddToDiagnosis({ caseId, reply, onAdded }: {
+  caseId: string; reply: string; onAdded: (summary: Summary) => void;
+}) {
+  const [proposed, setProposed] = useState<ProposedDiagnosis[] | null>(null);
+  const [added, setAdded] = useState<string[]>([]);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function load() {
+    setBusy("load");
+    setError(null);
+    try {
+      setProposed(await casesApi.proposedDiagnoses(caseId, reply));
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "Could not read diagnoses from this reply.");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function add(d: ProposedDiagnosis) {
+    setBusy(d.condition);
+    setError(null);
+    try {
+      onAdded(await casesApi.addDiagnosis(caseId, d));
+      setAdded((a) => [...a, d.condition]);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "Could not add the diagnosis.");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  if (proposed === null) {
+    return (
+      <div className="space-y-1">
+        <button type="button" onClick={load} disabled={busy === "load"}
+          className="inline-flex items-center gap-1 text-xs font-medium text-fg-muted hover:text-brand disabled:opacity-60">
+          <Icons.plus size={12} /> {busy === "load" ? "Reading diagnoses…" : "Add to diagnosis"}
+        </button>
+        {error ? <p className="text-xs text-danger">{error}</p> : null}
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-1.5 rounded-md border border-line bg-surface p-2.5">
+      {!proposed.length ? (
+        <p className="text-xs text-fg-muted">This reply doesn&rsquo;t propose a diagnosis, so there is nothing to add. Advice like this belongs in the prescription or follow-up instructions.</p>
+      ) : (
+        <>
+          <p className="text-xs font-medium text-fg-muted">Diagnoses in this reply</p>
+          {proposed.map((d) => {
+            const done = added.includes(d.condition);
+            return (
+              <div key={d.condition} className="flex items-center justify-between gap-2">
+                <span className="min-w-0 text-sm">{d.condition} <span className="text-xs text-fg-subtle">({d.likelihood})</span></span>
+                <Button size="sm" variant={done ? "ghost" : "secondary"} disabled={done} loading={busy === d.condition}
+                  icon={done ? <Icons.check size={14} /> : <Icons.plus size={14} />} onClick={() => add(d)}>
+                  {done ? "Added" : "Add"}
+                </Button>
+              </div>
+            );
+          })}
+        </>
+      )}
+      {error ? <p className="text-xs text-danger">{error}</p> : null}
+      <button type="button" onClick={() => setProposed(null)} className="text-xs text-fg-subtle hover:text-fg">Close</button>
+    </div>
   );
 }

@@ -22,19 +22,26 @@ import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import date, timedelta
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.agents import AgentUnavailable, answer_guard, fact_extractor, patient_assistant, question_planner
+from app.agents import (
+    AgentUnavailable,
+    answer_guard,
+    clinical_interviewer,
+    fact_extractor,
+    patient_assistant,
+    question_planner,
+)
 from app.agents.question_planner import PlannerContext
 from app.agents.schemas import ExtractedFact, ExtractionResult, QuestionResponse
 from app.core.config import settings
-from app.core.tracing import case_trace
 from app.core.errors import Conflict, Forbidden
+from app.core.tracing import case_trace
 from app.db import utcnow
-from app.domain import intake_fields
+from app.domain import intake_fields, triage_engine
 from app.domain.demographics import age_from_birth_date
 from app.domain.lifecycle import TERMINAL, CaseStatus
 from app.integrations.hms import get_hms
@@ -52,11 +59,23 @@ from app.models import (
 from app.models.facts import SOURCE_HMS
 from app.schemas.requests import IdentityFormRequest
 from app.schemas.responses import MessageResponse, TranscriptMessage, TurnEvent
-from app.services import assistant_tools, audit, case_repo, hospital_config, lifecycle
+from app.services import (
+    assistant_tools,
+    audit,
+    case_repo,
+    emergency_service,
+    hospital_config,
+    lifecycle,
+    triage_rules,
+    visit_history,
+)
 
 logger = logging.getLogger(__name__)
 
-MAX_ASSISTANT_QUESTIONS = 12
+MAX_ASSISTANT_QUESTIONS = 18
+# The focused history after the required fields (clinical_interviewer): enough for a doctor's
+# differential without turning intake into an interrogation.
+MAX_FOCUSED_QUESTIONS = 6
 MAX_FACT_CHARS = 220
 
 CLOSING = (
@@ -66,6 +85,13 @@ CLOSING = (
 CLOSING_WITH_GAPS = (
     "Thank you - I will pass on what you have told me. Anything still missing will be picked up "
     "by the clinician who reviews your case."
+)
+# Consecutive turns the model could not understand before intake closes with what it has, so a
+# patient is never stuck on "try again" while the model is down.
+MAX_FAILED_TURNS = 3
+CLOSING_ASSISTANT_DOWN = (
+    "Sorry, the assistant is having trouble right now, so I will stop the questions here and pass on "
+    "what you have told me. The clinician who reviews your case will ask about anything still missing."
 )
 GREETING = (
     "Hello, I am the clinic's intake assistant. Tell me what brings you in today, in your own words. "
@@ -81,6 +107,20 @@ EMERGENCY_GUIDANCE = (
     "I cannot safely assess an emergency in chat. If you may be experiencing a life-threatening emergency, "
     "contact local emergency services now."
 )
+def emergency_stop() -> str:
+    """Written by code, never by a model: what a patient whose answers matched a red-flag rule is
+    told, the moment it matches. No priority, rule or diagnosis is named."""
+    ambulance = hospital_config.ambulance_number()
+    emergency = hospital_config.emergency_number()
+    return (
+        f"**This may be a medical emergency. Call an ambulance now on {ambulance}** "
+        f"(or {emergency}).\n\n"
+        "- Do not wait for an appointment and do not drive yourself.\n"
+        "- If you can, have someone stay with you until help arrives.\n\n"
+        "I have stopped the questions and passed everything you told me to the care team."
+    )
+
+
 REFERENCE_UNAVAILABLE = (
     "I cannot answer that reliably because the supporting report or clinic information is not available right now."
 )
@@ -128,25 +168,35 @@ def active_session(db: Session, owner_user_id: uuid.UUID) -> tuple[IntakeSession
     )
 
 
-def start_session(db: Session, owner_user_id: uuid.UUID) -> tuple[IntakeSession, PatientCase]:
+def start_session(
+    db: Session, owner_user_id: uuid.UUID, visit_type: str = "new", follow_up_of: uuid.UUID | None = None,
+) -> tuple[IntakeSession, PatientCase]:
     owner = db.query(ApplicationUser).filter(ApplicationUser.id == owner_user_id).with_for_update().one()
     active = active_session(db, owner_user_id)
     if active is not None:
         return active
+    parent = visit_history.parent_for(db, owner_user_id, follow_up_of) if follow_up_of else None
     session = IntakeSession(status=CaseStatus.CREATED, started_at=utcnow(), channel="web")
     db.add(session)
     db.flush()
 
+    # A returning patient keeps the hospital record their first visit registered; without it a
+    # self-registered account (no Keycloak claim) would create a duplicate record every visit.
+    mrn = owner.hms_patient_id or case_repo.last_linked_hms_patient_id(db, owner_user_id)
     case = PatientCase(
         session_id=session.id,
-        hms_patient_id=owner.hms_patient_id,
+        hms_patient_id=mrn,
         hospital_id=hospital_config.active_id(),
+        visit_type="follow_up" if parent else "new",
+        follow_up_of=parent.id if parent else None,
     )
     db.add(case)
     db.flush()
     db.add(CaseOwner(case_id=case.id, user_id=owner_user_id))
 
-    audit.record(db, case.id, "patient", "intake.session_started", {"channel": "web", "hms_linked": False})
+    audit.record(db, case.id, "patient", "intake.session_started",
+                 {"channel": "web", "hms_linked": bool(mrn), "visit_type": case.visit_type,
+                  "follow_up_of": str(parent.id) if parent else None})
     db.commit()
     return session, case
 
@@ -160,7 +210,62 @@ def record_consent(db: Session, session: IntakeSession, case: PatientCase, grant
     else:
         lifecycle.transition(db, session, CaseStatus.REJECTED, "patient", case.id)
     db.commit()
+    if granted:
+        identity_from_profile(db, session, case)
     return session
+
+
+def _identity_submitted(db: Session, case: PatientCase) -> bool:
+    return db.query(AuditEvent.id).filter(
+        AuditEvent.case_id == case.id, AuditEvent.action == "intake.identity_submitted"
+    ).first() is not None
+
+
+def _write_identity(
+    db: Session, session: IntakeSession, case: PatientCase, transcript_text: str,
+    name: str, birth_date: date, gender: str, contact_preference: str,
+) -> int:
+    turn_index = case_repo.next_turn_index(db, session.id)
+    db.add(IntakeMessage(session_id=session.id, role="patient", content=transcript_text, turn_index=turn_index))
+    for kind, value in (
+        ("name", name),
+        ("age", str(age_from_birth_date(birth_date, utcnow().date()))),
+        ("gender", gender),
+        ("contact_preference", contact_preference),
+    ):
+        value = value.strip()[:MAX_FACT_CHARS]
+        if value:
+            db.add(PatientFact(case_id=case.id, kind=kind, value=value, source_turn=turn_index))
+    return turn_index
+
+
+def identity_from_profile(db: Session, session: IntakeSession, case: PatientCase) -> bool:
+    """A registered patient is not asked who they are again: the identity step is filled from
+    their hospital record (their profile, which they edit on the Profile tab). Falls back to the
+    form - returns False - when there is no record, the HMS is unreachable, or the record lacks
+    a required identity field."""
+    if not case.hms_patient_id or _identity_submitted(db, case):
+        return False
+    try:
+        patient = get_hms().get_patient(case.hms_patient_id)
+    except Exception as exc:  # noqa: BLE001 - any HMS failure just means the form is shown
+        logger.warning("Profile lookup failed (%s); identity form shown", type(exc).__name__)
+        return False
+    if patient is None or not patient.name or not patient.birth_date or not patient.sex:
+        return False
+    preference = patient.contact_preference or ("email" if patient.email and not patient.phone else "phone")
+    detail = patient.email if preference == "email" else patient.phone
+    contact = f"{preference} ({detail.strip()})" if detail else preference
+    transcript_text = (
+        f"Name: {patient.name}\nDate of birth: {patient.birth_date.isoformat()}\nGender: {patient.sex}\n"
+        f"Contact preference: {contact}\n(From the patient's profile.)"
+    )
+    turn_index = _write_identity(db, session, case, transcript_text, patient.name, patient.birth_date, patient.sex, contact)
+    audit.record(db, case.id, "system:intake", "intake.identity_submitted", {"turn_index": turn_index, "from_profile": True})
+    db.commit()
+    if case_repo.missing_identity_fields(db, case.id):
+        logger.info("Profile lacks a required identity field for case %s; form still needed", case.id)
+    return True
 
 
 def _guard_open(db: Session, session: IntakeSession, case: PatientCase) -> None:
@@ -216,12 +321,7 @@ def submit_identity_form(db: Session, session: IntakeSession, case: PatientCase,
     caller (api layer) checks case_repo.missing_identity_fields() afterward and 422s the same
     way the old one-shot form did."""
     _guard_open(db, session, case)
-    already_submitted = (
-        db.query(AuditEvent.id)
-        .filter(AuditEvent.case_id == case.id, AuditEvent.action == "intake.identity_submitted")
-        .first()
-    )
-    if already_submitted:
+    if _identity_submitted(db, case):
         raise Conflict("Identity details have already been submitted for this intake.")
 
     # Patient matching happens before this point in the UI. An explicit linked MRN updates
@@ -238,22 +338,14 @@ def submit_identity_form(db: Session, session: IntakeSession, case: PatientCase,
     )
     case.hms_patient_id = registered.mrn
 
-    turn_index = case_repo.next_turn_index(db, session.id)
-    db.add(IntakeMessage(session_id=session.id, role="patient", content=_identity_transcript_text(payload), turn_index=turn_index))
-
     contact_detail = payload.email if payload.contact_preference == "email" else payload.phone
     contact_preference_value = (
         f"{payload.contact_preference} ({contact_detail.strip()})" if contact_detail else payload.contact_preference
     )
-    for kind, value in (
-        ("name", payload.name),
-        ("age", str(age_from_birth_date(payload.birth_date, utcnow().date()))),
-        ("gender", payload.gender),
-        ("contact_preference", contact_preference_value),
-    ):
-        value = value.strip()[:MAX_FACT_CHARS]
-        if value:
-            db.add(PatientFact(case_id=case.id, kind=kind, value=value, source_turn=turn_index))
+    turn_index = _write_identity(
+        db, session, case, _identity_transcript_text(payload),
+        payload.name, payload.birth_date, payload.gender, contact_preference_value,
+    )
 
     db.commit()
 
@@ -296,6 +388,29 @@ def _settle_last_question(
     else:
         db.add(PatientFact(case_id=case.id, kind=field, value=value, source_turn=turn_index))
     db.commit()
+
+
+def _close_unasked(db: Session, case: PatientCase, turn_index: int) -> list[str]:
+    """Intake is ending with required fields still open: close each with NOT_ASKED so the case
+    passes the completeness gate and reaches a clinician (pre-screening still lists them as not
+    collected). Returns the fields closed."""
+    open_fields = case_repo.missing_clinical_fields(db, case.id)
+    for field in open_fields:
+        if field in intake_fields.ENTRY_FIELDS:
+            db.add(AllergyMedication(case_id=case.id, kind=field, name=intake_fields.NOT_ASKED, source_turn=turn_index))
+        else:
+            db.add(PatientFact(case_id=case.id, kind=field, value=intake_fields.NOT_ASKED, source_turn=turn_index))
+    return open_fields
+
+
+def _failed_streak(db: Session, session: IntakeSession) -> int:
+    """How many of the latest assistant turns in a row were 'could not process that message'."""
+    streak = 0
+    for m in reversed([m for m in case_repo.messages(db, session.id) if m.role == "assistant"]):
+        if m.content != UNDERSTANDING_UNAVAILABLE:
+            break
+        streak += 1
+    return streak
 
 
 def _clinic_term(proposed: str, vocabulary: list[str]) -> str:
@@ -457,6 +572,25 @@ async def _answer_patient_question(
     return reply, f"assistant:{scope}"
 
 
+def _red_flag(db: Session, case: PatientCase, turn_index: int) -> list[str] | None:
+    """Run the clinic's rules over what the patient has said so far; a red-flag (emergency) rule
+    stops the interview. The rules decide, not the model, and only the flag is kept here -
+    pre-screening still records the priority and evidence as for any case."""
+    if case.emergency_flagged_at is not None:
+        return None
+    outcome = triage_engine.evaluate(
+        case_repo.facts(db, case.id), case_repo.clinical_entries(db, case.id),
+        triage_rules.active_rules(db, case.hospital_id),
+    )
+    if not outcome.emergency:
+        return None
+    emergency_service.flag(db, case, "system:intake", outcome.rule_codes)
+    audit.record(db, case.id, "system:intake", "intake.emergency_flagged",
+                 {"turn_index": turn_index, "rule_codes": outcome.rule_codes})
+    db.commit()
+    return outcome.rule_codes
+
+
 async def process_turn(db: Session, session: IntakeSession, case: PatientCase, content: str) -> AsyncIterator[TurnEvent]:
     """Every agent run of one turn under a single trace; the turn itself is `_process_turn`."""
     with case_trace("intake.turn", case.id):
@@ -492,21 +626,29 @@ async def _process_turn(db: Session, session: IntakeSession, case: PatientCase, 
         turn_index,
     )
 
+    emergency = _red_flag(db, case, turn_index)
     outstanding = case_repo.missing_clinical_fields(db, case.id)
-    asked_so_far = sum(
-        1 for m in case_repo.messages(db, session.id) if m.role == "assistant" and m.asks_field is not None
-    )
+    assistant_turns = [m for m in case_repo.messages(db, session.id) if m.role == "assistant" and m.asks_field is not None]
+    asked_so_far = len(assistant_turns)
+    focused_asked = sum(1 for m in assistant_turns if m.asks_field == intake_fields.FOCUSED_FIELD)
+    # Required fields first; then the focused history, until the interviewer says the doctor
+    # has enough or the cap is reached.
+    focused_open = not outstanding and focused_asked < MAX_FOCUSED_QUESTIONS and asked_so_far < MAX_ASSISTANT_QUESTIONS
     asks_field: str | None = None
     planner_mode = "code"
     reply_streamed = False
 
-    if extraction is None:
+    if emergency is not None:
+        reply, complete, planner_mode = emergency_stop(), True, "emergency"
+    elif extraction is None and _failed_streak(db, session) + 1 >= MAX_FAILED_TURNS:
+        reply, complete, planner_mode = CLOSING_ASSISTANT_DOWN, True, "fallback"
+    elif extraction is None:
         reply, complete, planner_mode = UNDERSTANDING_UNAVAILABLE, False, "fallback"
         yield TurnEvent(type="token", text=reply)
         reply_streamed = True
     elif question:
-        complete = not outstanding or asked_so_far >= MAX_ASSISTANT_QUESTIONS
-        asks_field = None if complete else outstanding[0]
+        complete = (not outstanding and not focused_open) or asked_so_far >= MAX_ASSISTANT_QUESTIONS
+        asks_field = None if complete else (outstanding[0] if outstanding else intake_fields.FOCUSED_FIELD)
         reply, planner_mode = await _answer_patient_question(
             db, session, case, extraction, asks_field, outstanding, complete
         )
@@ -518,7 +660,23 @@ async def _process_turn(db: Session, session: IntakeSession, case: PatientCase, 
         # candidates were already answered - independent of the required-field loop below.
         pending_meds = case_repo.pending_medication_candidates(db, case.id)
         force_medication = bool(pending_meds) and "medication" not in outstanding
-        if not outstanding and not force_medication:
+        if not outstanding and not force_medication and focused_open:
+            try:
+                nxt = await clinical_interviewer.next_question(
+                    case_repo.transcript(db, session.id), _on_file(db, case.id), focused_asked, MAX_FOCUSED_QUESTIONS,
+                    visit_history.context_text(prev) if (prev := visit_history.previous_visit(db, case)) else None,
+                )
+            except AgentUnavailable as exc:
+                logger.warning("Clinical interviewer unavailable (%s); closing intake", type(exc).__name__)
+                nxt = None
+            if nxt is not None and not nxt.done and nxt.question.strip():
+                reply, complete, planner_mode = nxt.question.strip(), False, "interviewer"
+                asks_field = intake_fields.FOCUSED_FIELD
+                yield TurnEvent(type="token", text=reply)
+                reply_streamed = True
+            else:
+                reply, complete = CLOSING, True
+        elif not outstanding and not force_medication:
             reply, complete = CLOSING, True
         elif asked_so_far >= MAX_ASSISTANT_QUESTIONS:
             reply, complete = CLOSING_WITH_GAPS, True
@@ -538,6 +696,7 @@ async def _process_turn(db: Session, session: IntakeSession, case: PatientCase, 
                 on_file=_on_file(db, case.id),
                 patient_name=case_repo.demographics(db, case.id).get("name"),
                 medication_candidates=pending_meds if asks_field == "medication" else [],
+                previous_visit=(visit_history.context_text(prev) if (prev := visit_history.previous_visit(db, case)) else None),
             )
             try:
                 async for kind, text in _streamed(lambda emit: question_planner.plan(ctx, emit)):
@@ -554,8 +713,15 @@ async def _process_turn(db: Session, session: IntakeSession, case: PatientCase, 
                 yield TurnEvent(type="token", text=reply)
                 reply_streamed = True
 
+    # Whatever ended intake (question cap, model down), a case that closes with fields open must
+    # still reach a clinician: the completeness gate would otherwise hold it forever.
+    # `outstanding` stays as it was: the patient's checklist still shows those fields as not collected.
+    unasked = _close_unasked(db, case, turn_index) if complete and emergency is None else []
     if complete and not reply_streamed:
         yield TurnEvent(type="token", text=reply)
+    if emergency is not None:
+        # After the patient has the ambulance advice on screen, never before it.
+        await asyncio.to_thread(emergency_service.record_in_hms, db, case, "system:intake", emergency)
 
     db.add(IntakeMessage(session_id=session.id, role="assistant", content=reply, turn_index=turn_index + 1, asks_field=asks_field))
     audit.record(
@@ -574,6 +740,7 @@ async def _process_turn(db: Session, session: IntakeSession, case: PatientCase, 
             "planner": planner_mode,
             "asks_field": asks_field,
             "intake_complete": complete,
+            "closed_unasked": unasked,
         },
     )
     db.commit()
@@ -589,6 +756,6 @@ async def _process_turn(db: Session, session: IntakeSession, case: PatientCase, 
             missing_fields=outstanding,
             intake_complete=complete,
             transcript=_transcript(db, session.id),
-            captured_fields=case_repo.captured_fields(db, case.id),
+            captured_fields=case_repo.captured_for_display(db, case.id),
         ),
     )

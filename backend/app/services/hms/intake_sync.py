@@ -46,10 +46,31 @@ def clinical_entries(entries: Iterable[_Entry]) -> list[dict[str, Any]]:
     ]
 
 
+# The signed OPD record's clinical headings (frontend consultation-form NOTE_HEADINGS).
+PAST_HISTORY = "Past history:"
+_NEXT_HEADINGS = ("Current medications:", "Examination:", "Allergies:", "Presenting complaints:", "History of presenting illness:")
+_NIL = {"nil", "nil significant", "none", "nkda", "no significant past history", "not significant"}
+
+
+def signed_problems(notes_text: str) -> list[str]:
+    """The conditions the doctor signed under Past history - the only text that goes on the
+    hospital chart's problem list, so 'last period 2 weeks ago' or 'finished nitrofurantoin'
+    (patient history facts, not diagnoses) never become medical problems."""
+    start = notes_text.find(PAST_HISTORY)
+    if start < 0:
+        return []
+    body = notes_text[start + len(PAST_HISTORY):]
+    ends = [i for i in (body.find(h) for h in _NEXT_HEADINGS) if i >= 0]
+    body = body[: min(ends)] if ends else body
+    lines = [line.strip().rstrip(".") for line in body.splitlines()]
+    return [line for line in lines if line and line.lower() not in _NIL]
+
+
 def reviewed_payload(db: Session, case: PatientCase) -> dict[str, Any]:
     session = case_repo.session_for(db, case)
     triage = case_repo.latest_triage(db, case.id)
     routing = case_repo.latest_routing(db, case.id)
+    notes = case_repo.notes(db, case.id)
     return {
         "case_id": str(case.id),
         "transcript": [
@@ -58,6 +79,7 @@ def reviewed_payload(db: Session, case: PatientCase) -> dict[str, Any]:
         ],
         "facts": clinical_facts(case_repo.facts(db, case.id)),
         "entries": clinical_entries(case_repo.entries(db, case.id)),
+        "problems": signed_problems(notes[-1].notes) if notes else [],
         "triage": (
             {"priority": triage.priority, "rule_codes": triage.rule_codes, "evidence": triage.evidence}
             if triage else None
@@ -68,6 +90,6 @@ def reviewed_payload(db: Session, case: PatientCase) -> dict[str, Any]:
         ),
         "consultation_notes": [
             {"notes": n.notes, "prescription": n.prescription, "follow_up_instructions": n.follow_up_instructions}
-            for n in case_repo.notes(db, case.id)
+            for n in notes
         ],
     }

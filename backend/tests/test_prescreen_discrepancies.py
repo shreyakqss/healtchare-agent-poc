@@ -35,11 +35,12 @@ def _prescreened_case(client) -> dict:
     for msg in ["knee pain for about a week", "no", "no", "no", "no", "no"]:
         last = client.post(f"{BASE}/intake-sessions/{sid}/messages", json={"content": msg}).json()
     assert last["intake_complete"] is True
-    for _ in range(100):
+    # Real model calls (discrepancies, briefing, AI diagnosis, report draft): allow for them.
+    for _ in range(240):
         detail = client.get(f"{BASE}/cases/{cid}").json()
         if detail["status"] == "NEEDS_REVIEW":
             return detail
-        time.sleep(0.1)
+        time.sleep(0.5)
     raise AssertionError(f"prescreen did not complete: status={detail['status']}")
 
 

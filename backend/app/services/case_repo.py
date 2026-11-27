@@ -76,10 +76,11 @@ DEMOGRAPHIC_KEYS = {"name": "name", "age": "age", "gender": "sex"}
 
 
 def demographics_from_facts(fact_rows: list[PatientFact]) -> dict[str, str]:
+    """`fact_rows` oldest first; a later row supersedes an earlier one, as in `captured_fields`."""
     merged: dict[str, str] = {}
     for f in fact_rows:
         if f.kind in DEMOGRAPHIC_KEYS and f.value not in intake_fields.PLACEHOLDERS:
-            merged.setdefault(DEMOGRAPHIC_KEYS[f.kind], f.value.strip())
+            merged[DEMOGRAPHIC_KEYS[f.kind]] = f.value.strip()
     return merged
 
 
@@ -241,6 +242,32 @@ def missing_fields(db: Session, case_id: uuid.UUID) -> list[str]:
     )
 
 
+def unasked_fields(db: Session, case_id: uuid.UUID) -> list[str]:
+    """Required fields closed only because intake ended before they were asked (NOT_ASKED)."""
+    closed = {f.kind for f in facts(db, case_id) if f.value == intake_fields.NOT_ASKED}
+    closed |= {e.kind for e in entries(db, case_id) if e.name == intake_fields.NOT_ASKED}
+    return [f for f in hospital_config.required_intake_fields() if f in closed]
+
+
+def field_notes(db: Session, case_id: uuid.UUID) -> dict[str, str]:
+    """For a field closed by a sentinel and nothing else (a denial, a decline, never asked), how
+    to show it: "No known allergies (NKA)", "Declined to answer", "Not asked" - never a blank."""
+    real = captured_fields(db, case_id)
+    notes: dict[str, str] = {}
+    rows = [(f.kind, f.value) for f in facts(db, case_id)] + [(e.kind, e.name) for e in entries(db, case_id)]
+    for kind, value in rows:
+        if value in intake_fields.PLACEHOLDERS and kind not in real:
+            notes[kind] = intake_fields.display(kind, value)
+    return notes
+
+
+def captured_for_display(db: Session, case_id: uuid.UUID) -> dict[str, list[str]]:
+    """captured_fields for the patient's checklist: a field closed without a value shows its
+    label ("No known allergies (NKA)", "Not asked") instead of a blank tick. Display only -
+    agents read captured_fields, which never carries a sentinel."""
+    return {**{k: [v] for k, v in field_notes(db, case_id).items()}, **captured_fields(db, case_id)}
+
+
 def pending_attachment_kinds(db: Session, case_id: uuid.UUID) -> list[str]:
     """Required attachment kinds neither uploaded nor explicitly skipped."""
     required = hospital_config.required_attachment_kinds()
@@ -253,7 +280,10 @@ def pending_attachment_kinds(db: Session, case_id: uuid.UUID) -> list[str]:
 
 def ready_for_prescreen(db: Session, case_id: uuid.UUID) -> bool:
     """The intake completeness gate: every required field present AND every required
-    attachment kind uploaded or skipped."""
+    attachment kind uploaded or skipped. A red-flag case skips the gate: the patient was told
+    to seek emergency care, and staff must see it now, gaps and all."""
+    if case_or_404(db, case_id).emergency_flagged_at is not None:
+        return True
     return not missing_fields(db, case_id) and not pending_attachment_kinds(db, case_id)
 
 

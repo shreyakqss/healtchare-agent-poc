@@ -105,6 +105,13 @@ class HMSSlot(BaseModel):
     end: datetime
 
 
+class HMSWeeklyHours(BaseModel):
+    """Days (FHIR mon/tue/... codes) that share the same clinic-local hours, e.g.
+    days=["mon", "tue"], times=[["10:00", "13:00"], ["16:00", "19:00"]]."""
+    days: list[str]
+    times: list[list[str]]
+
+
 class AppointmentRequest(BaseModel):
     case_id: str
     patient_mrn: str | None
@@ -129,6 +136,20 @@ class HMSStatus(BaseModel):
     patients: int
     practitioners: int
     pending_requests: int
+
+
+class ReferralRecord(BaseModel):
+    """A doctor-to-doctor referral as the hospital system records it (OpenEMR: an LBTref
+    transaction on the chart). Written when the referring doctor signs the referral."""
+
+    patient_mrn: str
+    from_practitioner_id: str
+    to_practitioner_id: str | None = None
+    to_department: str
+    reason: str
+    diagnosis: str | None = None
+    urgency: str = "routine"  # routine | soon | urgent
+    referred_on: date
 
 
 class VerifiedIdentity(BaseModel):

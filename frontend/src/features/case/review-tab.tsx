@@ -1,4 +1,4 @@
-import type { CaseDetail, HospitalIdentity } from "@/lib/api";
+import type { CaseDetail, Department, HospitalIdentity, RosterDoctor } from "@/lib/api";
 import { Card, CardBody, CardHeader, SectionTitle } from "@/components/ui/card";
 import { Badge, PriorityBadge } from "@/components/ui/badge";
 import { Alert, EmptyState } from "@/components/ui/feedback";
@@ -7,7 +7,7 @@ import { Icons } from "@/components/ui/icons";
 import { formatDateTime, titleCase } from "@/lib/utils";
 import { ConsultationForm } from "@/features/doctor/consultation-form";
 import { DiscrepancyFlags } from "@/features/doctor/discrepancy-flags";
-import { ReviewForm } from "@/features/doctor/review-form";
+import { ReferralCard } from "@/features/doctor/referral-card";
 import type { Me } from "@/features/doctor/use-doctor";
 
 function str(v: unknown): string | null {
@@ -22,8 +22,9 @@ function original(sections: Record<string, unknown>, key: string): string {
   return str(v) ?? "–";
 }
 
-export function ReviewTab({ detail, me, onChanged, hospital }: {
+export function ReviewTab({ detail, me, onChanged, hospital, departments = [], doctors = [] }: {
   detail: CaseDetail; me: Me | null; onChanged: () => Promise<void>; hospital: HospitalIdentity | null;
+  departments?: Department[]; doctors?: RosterDoctor[];
 }) {
   const review = detail.review;
   const sections = (detail.prescreening_summary?.sections ?? {}) as Record<string, unknown>;
@@ -32,15 +33,18 @@ export function ReviewTab({ detail, me, onChanged, hospital }: {
 
   return (
     <div className="space-y-5">
-      {me && detail.status === "NEEDS_REVIEW" ? <ReviewForm c={detail} me={me} onDone={onChanged} hospital={hospital} /> : null}
-      {me && detail.status === "APPROVED" ? <ConsultationForm c={detail} me={me} onDone={onChanged} hospital={hospital} /> : null}
+      {/* Signing the report is the review (consultation_service.record_note). */}
+      {me && (detail.status === "NEEDS_REVIEW" || detail.status === "APPROVED" || detail.status === "COMPLETED") ? <ConsultationForm c={detail} me={me} onDone={onChanged} hospital={hospital} /> : null}
+      {me && (detail.status === "NEEDS_REVIEW" || detail.status === "APPROVED" || detail.status === "COMPLETED") ? (
+        <ReferralCard detail={detail} me={me} departments={departments} doctors={doctors} onDone={onChanged} />
+      ) : null}
       <DiscrepancyFlags c={detail} />
 
       <Card>
-        <CardHeader title="Clinician review" description="The gate: consultation notes and the visit summary are only possible after approve or approve-with-edits." />
+        <CardHeader title="Clinician review" description="Recorded when you sign the consultation report above (or decline the case). The appointment is already booked by the patient and does not wait for this." />
         <CardBody>
           {!review ? (
-            <EmptyState icon={<Icons.shield size={20} />} title="Not reviewed yet" description={detail.status === "NEEDS_REVIEW" ? "Awaiting a clinician." : "Pre-screening must finish before a review can be recorded."} />
+            <EmptyState icon={<Icons.shield size={20} />} title="Not reviewed yet" description={detail.status === "NEEDS_REVIEW" ? "Sign the consultation report above to review this case." : "Pre-screening must finish before a review can be recorded."} />
           ) : (
             <div className="space-y-4">
               <div className="flex flex-wrap items-center gap-2">
