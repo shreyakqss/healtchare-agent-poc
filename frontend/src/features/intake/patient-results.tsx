@@ -68,7 +68,6 @@ export function PatientResults({ detail, onUpdated, onRefresh, refreshing }: {
   const testsOrdered = asString(sections.tests_ordered);
   const followUps = asStringList(sections.follow_up_instructions);
   const mode = asString(sections.consultation_mode) ?? detail.consultation_mode;
-  const reference = detail.appointment_reference;
 
   return (
     <div className="space-y-4">
@@ -105,7 +104,6 @@ export function PatientResults({ detail, onUpdated, onRefresh, refreshing }: {
             {followUps.length ? (
               <Item label="Advice & follow-up" value={<ul className="list-disc space-y-1 pl-5">{followUps.map((f) => <li key={f}>{f}</li>)}</ul>} />
             ) : null}
-            {reference ? <Item label="Appointment request reference" value={<span className="font-mono">{reference}</span>} /> : null}
           </dl>
         </div>
       ) : null}

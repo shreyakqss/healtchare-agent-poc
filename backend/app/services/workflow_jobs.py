@@ -209,10 +209,15 @@ async def run_worker(stop: asyncio.Event) -> None:
     worker_id = f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex[:8]}"
     logger.info("Workflow worker started (%s)", worker_id)
     while not stop.is_set():
-        job = await asyncio.to_thread(claim_next, worker_id)
-        if job is not None:
-            await execute(job, worker_id)
-            continue
+        try:
+            job = await asyncio.to_thread(claim_next, worker_id)
+            if job is not None:
+                await execute(job, worker_id)
+                continue
+        except Exception:
+            # e.g. the database is not up yet (API started before Docker): keep polling rather
+            # than letting the task die silently and strand every queued job.
+            logger.exception("Workflow worker poll failed; retrying")
         try:
             await asyncio.wait_for(stop.wait(), timeout=settings.WORKFLOW_POLL_SECONDS)
         except TimeoutError:

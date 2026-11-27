@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useSyncExternalStore } from "react";
-import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Icons } from "@/components/ui/icons";
 
@@ -67,7 +66,6 @@ function loginHref(returnTo: string) {
  * picker still shows every role you're allowed, so a shared machine can't silently sign
  * in as the wrong person. */
 export function RoleCards({ roles, signedIn }: { roles: RoleCard[]; signedIn: boolean }) {
-  const router = useRouter();
   // null on the server and before hydration, so the first client render matches the HTML.
   const lastRole = useSyncExternalStore(noSubscribe, readLastRole, () => null);
   const [registering, setRegistering] = useState(false);
@@ -175,7 +173,9 @@ export function RoleCards({ roles, signedIn }: { roles: RoleCard[]; signedIn: bo
           </dl>
           <button
             type="button"
-            onClick={() => router.push("/patient")}
+            // Full page load, not router.push: the session cookie was only just set, and a client
+            // navigation can reuse the signed-out /patient (a redirect to Keycloak it cannot follow).
+            onClick={() => window.location.assign("/patient")}
             className="mt-3 rounded-md bg-brand px-3 py-1.5 text-xs font-medium text-brand-fg"
           >
             Continue to intake form
