@@ -139,6 +139,24 @@ def validate(config: Any) -> None:
     unknown_doctor_departments = set(doctor_departments) - set(department_ids)
     if unknown_hints or unknown_routes or unknown_doctor_departments:
         raise InvalidConfig("Routing configuration references an unknown department.")
+    infection = config.get("infection_routing") or {}
+    if not isinstance(infection, dict) or not all(
+        isinstance(infection.get(key) or [], list)
+        and all(isinstance(value, str) and value for value in infection.get(key) or [])
+        for key in ("signs", "departments")
+    ):
+        raise InvalidConfig("infection_routing needs lists of signs and department ids.")
+    if set(infection.get("departments") or []) - set(department_ids):
+        raise InvalidConfig("infection_routing references an unknown department.")
+    ai_routing = config.get("ai_routing") or {}
+    if not isinstance(ai_routing, dict) or not all(
+        isinstance(ai_routing.get(key) or [], list)
+        and all(isinstance(value, str) and value for value in ai_routing.get(key) or [])
+        for key in ("protected", "policy")
+    ):
+        raise InvalidConfig("ai_routing needs lists of protected department ids and policy lines.")
+    if set(ai_routing.get("protected") or []) - set(department_ids):
+        raise InvalidConfig("ai_routing protects an unknown department.")
 
     appointment_types = config.get("appointment_types") or []
     if not isinstance(appointment_types, list):

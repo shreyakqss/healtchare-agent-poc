@@ -73,6 +73,13 @@ class Settings(BaseSettings):
     # Synthetic uploads only.
     UPLOAD_DIR: Path = BACKEND_DIR / "data" / "uploads"
     MAX_UPLOAD_MB: int = 25
+    # AI file reads (services/file_read_service) send each whole file to the model - no chunking or
+    # retrieval - so these keep every read inside the API's limits and its cost bounded. Claude API:
+    # 10 MB per image base64-encoded (~7.5 MB raw); images above 2,576 px are downscaled server-side,
+    # so one image costs at most ~4,800 tokens; a PDF page costs ~1,500-3,000 text tokens plus its image.
+    FILE_READ_MAX_FILES: int = 5          # per visit; the rest are left for the doctor to open
+    FILE_READ_MAX_IMAGE_MB: float = 7.5   # larger images are not sent (the API would reject them)
+    FILE_READ_MAX_PDF_PAGES: int = 10     # only the first pages of a longer scan are sent
 
     # One YAML per clinic; the file stem is the hospital id.
     HOSPITALS_DIR: Path = BACKEND_DIR / "data" / "hospitals"

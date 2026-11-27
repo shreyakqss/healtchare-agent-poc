@@ -418,6 +418,8 @@ class CaseDetailResponse(BaseModel):
     prescreening_summary: SummaryResponse | None
     # Clinician-facing decision support; never on the patient projection.
     ai_diagnosis: SummaryResponse | None = None
+    # AI reads of uploaded images / scanned PDFs (clinician only; never on the patient projection).
+    file_reads: SummaryResponse | None = None
     # AI first draft of the consultation report; the doctor's form starts from it.
     report_draft: SummaryResponse | None = None
     assistant_messages: list[AssistantMessageResponse] = Field(default_factory=list)

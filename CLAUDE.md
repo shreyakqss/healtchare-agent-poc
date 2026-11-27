@@ -73,6 +73,14 @@ tokens must never be exposed to browser code or storage.
   patient sees them only in the note the doctor signs. Report text may feed it and the doctor assistant, never facts.
   Once the case is `COMPLETED` or `REJECTED` it is final: regenerate/decide/add 409 (`ai_diagnosis_service._require_open`);
   the assistant chat stays open, read-only for the differential.
+- AI file reads (`services/file_read_service`, `agents/file_reader`, `ClinicalSummary.kind="file_reads"`): uploaded
+  images and scanned PDFs (no extractable text) are read by the model at pre-screening, after urgency/routing, each
+  capped at 30s; a failure marks the file `unavailable` and never blocks the case. Clinician-only decision support,
+  always labelled "AI read, not a radiology report": it may feed the AI differential and doctor assistant as
+  labelled context, never a `PatientFact`, never triage/routing, never the patient projection. Files go to the model
+  whole (no chunking/RAG), so `FILE_READ_*` settings are checked first: at most 5 files a visit, images up to
+  7.5 MB, PDFs cut to their first 10 pages, encrypted PDFs skipped - a file outside them is `skipped` with a reason
+  and costs nothing.
 - The consultation report (`services/report_service`, `agents/report_writer`) may be AI-drafted and AI-edited, but
   only as proposals returned to the doctor's form: nothing is stored until the doctor signs with their HMS password,
   the AI never writes examination findings, and the audit records which sections were still AI-written at signing.
@@ -142,6 +150,17 @@ Every status write goes through `services/lifecycle.transition()`; every state c
   facts (pertinent negatives) - never matched by routing or triage.
 - The intake loop closes a field the patient denied with a sentinel row (`app/domain/intake_fields.py`). Never
   write `NONE_REPORTED` for an answer that was not a denial.
+- A new visit's department is the AI router's pick (`agents/department_router`, clinical facts only, the
+  clinic's `ai_routing.policy` lines) when `routing.accept_ai_pick` accepts it: a configured department, at
+  least one cited fact really on the case, and an `ai_routing.protected` department (Cardiology) keeps a
+  keyword-routed case unless an infection sign is present. Otherwise - and when the model is down or slower
+  than 25s - the keyword rules decide. Urgency, emergencies, follow-ups and rule `specialty_hint`s never go
+  to the model. The rationale names the AI reason and the rules' alternative; the audit records both.
+- Keyword routing (`domain/routing.route`) matches whole words in the current complaint only (`symptom`,
+  `reason_for_visit`; never history or negatives), and the department with the most keyword hits wins (reason
+  for visit counts double, ties keep `specialty_map` order). `infection_routing` sends fever with
+  pulmonology/orthopedics/dermatology symptoms to the default department. A triage rule's `specialty_hint`
+  overrides all of it, so only give one to a rule whose symptoms belong to a single specialty.
 - `scripts/seed.py` prints ASCII only (Windows console is cp1252).
 - Integration tests share `tests/helpers.py` (a valid identity form, fake intake agents, session helpers). They use
   configured synthetic OpenEMR and are skipped when it is unavailable; no production mock provider exists.

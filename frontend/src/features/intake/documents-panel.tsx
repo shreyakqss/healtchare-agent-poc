@@ -34,7 +34,12 @@ export function DocumentsPanel({ attachments, pastAttachments, skippedKinds }: {
                   <p className="text-xs text-fg-muted">{attachmentKindLabel(file.kind)} · {bytes(file.size_bytes)}</p>
                 </div>
                 <Badge tone={file.has_text ? "success" : "neutral"}>
-                  {file.has_text ? "Text extracted" : "Stored for the clinician"}
+                  {/* A text-less PDF is a scan: say so, so the patient knows it was not read automatically. */}
+                  {file.has_text
+                    ? "Text extracted"
+                    : file.mime_type === "application/pdf"
+                      ? "Couldn't read the text, your doctor will review it"
+                      : "Your doctor will review it"}
                 </Badge>
               </li>
             ))}

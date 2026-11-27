@@ -112,6 +112,36 @@ specialty_map:
   - sinus
   - hearing
   - nasal congestion
+  - runny nose
+  - running nose
+  - blocked nose
+  - sneezing
+# Fever with these departments' symptoms usually means an infection - a chest infection, a
+# viral fever with body or joint pains, a fever with a rash - which the default department
+# (General Medicine) sees first and refers on if needed.
+infection_routing:
+  signs:
+  - fever
+  - chills
+  departments:
+  - pulmonology
+  - orthopedics
+  - dermatology
+# The AI router (agents/department_router) chooses the department for a new visit from this
+# policy; the keyword rules above are its fallback. A `protected` department keeps a case its
+# keywords sent there unless an infection sign is present (code-enforced, domain/routing).
+ai_routing:
+  enabled: true
+  protected:
+  - cardiology
+  policy:
+  - Fever with cough, breathlessness, body aches, joint pains or a rash goes to General Medicine (likely infection).
+  - Sore throat, tonsils, ear, nose, sinus, hoarse voice, or a cold with sneezing and runny nose goes to ENT.
+  - Chest pain, chest tightness or palpitations without fever goes to Cardiology.
+  - Wheezing, asthma or breathlessness without fever goes to Pulmonology.
+  - Joint, back, knee, shoulder pain or an injury without fever goes to Orthopedics.
+  - Skin rash, itching of the skin, acne or a skin lesion without fever goes to Dermatology.
+  - Urinary, stomach, bowel, fever, diabetes, blood pressure, thyroid and anything unclear goes to General Medicine.
 triage_rules:
   version: 2026.08.1
   rules:
@@ -171,7 +201,6 @@ triage_rules:
     action: Route to an urgent same-day slot and flag for immediate staff attention.
     explanation: The patient reported a symptom the clinic has designated for same-day
       administrative escalation.
-    specialty_hint: cardiology
   - code: TR-HIGH-002
     priority: high
     condition:

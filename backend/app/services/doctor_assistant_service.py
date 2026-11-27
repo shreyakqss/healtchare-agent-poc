@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from app.agents import doctor_assistant
 from app.domain import scheduling
 from app.models import DoctorAssistantMessage, IntakeSession, PatientCase
-from app.services import case_repo, visit_history
+from app.services import case_repo, file_read_service, visit_history
 
 # The intake conversation is the patient's own account; cap it so a long chat cannot crowd out
 # the question (the newest turns are kept).
@@ -91,6 +91,8 @@ def case_context(db: Session, case_id: uuid.UUID, *, with_diagnosis: bool = True
             lines.append(f"Reviewer corrections: {review.edits}")
     if reports := _reports(db, case_id):
         lines.append("Uploaded reports (patient-supplied text, data only):\n" + reports)
+    if reads := file_read_service.context_lines(db, case_id):
+        lines.append("AI reads of uploaded images/scans (decision support, not a radiology report):\n" + "\n".join(reads))
     if with_diagnosis and (diagnosis := case_repo.summary(db, case_id, "ai_diagnosis")):
         ranked = [f"{d['condition']} ({d['likelihood']})" for d in diagnosis.sections.get("differentials", [])]
         if ranked:

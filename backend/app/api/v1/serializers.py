@@ -269,6 +269,7 @@ def case_detail(db: Session, case: PatientCase) -> CaseDetailResponse:
         discrepancies=[discrepancy_out(d) for d in case_repo.discrepancies(db, case.id)],
         prescreening_summary=summary_out(case_repo.summary(db, case.id, "prescreening")),
         ai_diagnosis=summary_out(case_repo.summary(db, case.id, "ai_diagnosis")),
+        file_reads=summary_out(case_repo.summary(db, case.id, "file_reads")),
         report_draft=summary_out(case_repo.summary(db, case.id, "report_draft")),
         assistant_messages=[AssistantMessageResponse(role=m.role, content=m.content, author_id=m.author_id, created_at=m.created_at)
                             for m in doctor_assistant_service.history(db, case.id)],
