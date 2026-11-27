@@ -120,6 +120,11 @@ def select_slot(db: Session, case: PatientCase, slot_id: str) -> None:
         cancel_booking(previous)
 
 
+def book(db: Session, case: PatientCase, slot: dict, department_name: str) -> str:
+    """Put `slot` on the doctor's calendar for `case` (a referral books this way); the HMS id."""
+    return _book(db, case, slot, department_name)
+
+
 def _book(db: Session, case: PatientCase, slot: dict, department_name: str) -> str:
     """The appointment on the doctor's calendar. On failure nothing CareFlow wrote this request
     is kept, so the patient's earlier booking (if any) still stands."""

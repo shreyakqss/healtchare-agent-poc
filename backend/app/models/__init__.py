@@ -14,6 +14,7 @@ from app.models.clinical import (
 from app.models.facts import AllergyMedication, MedicalAttachment, PatientFact
 from app.models.identity import ApplicationUser, AuthSession, CaseOwner, RateLimitBucket
 from app.models.intake import IntakeMessage, IntakeSession
+from app.models.referral import Referral
 from app.models.triage import RoutingRecommendation, SlotHold, TriageResult, TriageRule
 from app.models.workflow import WorkflowJob, WorkflowOperation
 
@@ -37,6 +38,7 @@ __all__ = [
     "RateLimitBucket",
     "IntakeMessage",
     "IntakeSession",
+    "Referral",
     "RoutingRecommendation",
     "SlotHold",
     "TriageResult",

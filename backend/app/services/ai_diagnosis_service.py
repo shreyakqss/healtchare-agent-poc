@@ -16,7 +16,7 @@ from app.core.errors import Conflict, NotFound, Unprocessable
 from app.db import utcnow
 from app.domain.lifecycle import CaseStatus
 from app.models import ClinicalSummary
-from app.services import audit, case_repo, doctor_assistant_service
+from app.services import audit, case_repo, doctor_assistant_service, file_read_service
 
 KIND = "ai_diagnosis"
 # Once the visit is released (or the case declined) the differential is part of the closed record:
@@ -33,6 +33,10 @@ def _require_open(db: Session, case_id: uuid.UUID) -> None:
 async def generate(db: Session, case_id: uuid.UUID, actor: str) -> ClinicalSummary:
     """Raises AgentUnavailable when the model is down; the previous differential is kept."""
     _require_open(db, case_id)
+    # Files uploaded after pre-screening (or whose read failed) are read first, so the new
+    # differential sees them. Best effort: a failed read is marked and the differential goes on.
+    if await file_read_service.read_case(db, case_id, actor, only_new=True) is not None:
+        db.commit()
     context = doctor_assistant_service.case_context(db, case_id, with_diagnosis=False)
     result = await diagnosis_writer.write(context)
     summary = ClinicalSummary(

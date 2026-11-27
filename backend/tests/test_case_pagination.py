@@ -69,5 +69,5 @@ def test_case_list_projection_uses_constant_query_count(cases):
 
     assert len(result) == 5
     # One bulk query per related model (sessions, triage, routing, reviews, care tasks, facts,
-    # allergies/medications, updated-at) - still O(1) in page size, never one query per case.
-    assert statements == 8
+    # allergies/medications, updated-at, referrals) - still O(1) in page size, never one query per case.
+    assert statements == 9

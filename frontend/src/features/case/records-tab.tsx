@@ -77,7 +77,7 @@ function CollapsibleCard({ title, description, count, children }: {
  * Content-Disposition: inline. Not an <iframe>: this app's CSP sets object-src 'none' (a
  * deliberate hardening default), which blocks Chrome's built-in PDF viewer when framed. */
 /** The AI's read of an image or scanned PDF: decision support for the doctor, never a fact. */
-function AiRead({ read }: { read: FileRead }) {
+export function AiRead({ read }: { read: FileRead }) {
   if (read.status !== "read") {
     const why = read.status === "skipped" && read.note ? read.note : "AI could not read this file.";
     return <p className="mt-2 text-xs italic text-fg-subtle">{why} Open it to review.</p>;
@@ -86,7 +86,7 @@ function AiRead({ read }: { read: FileRead }) {
   return (
     <div className="mt-2 rounded-md border border-line bg-sunken p-2.5 text-xs">
       <p className="flex items-center gap-1.5 font-medium text-fg-muted">
-        <Icons.sparkles size={12} /> AI read, not a radiology report
+        <Icons.sparkles size={12} /> {read.label ?? "AI read, not a radiology report"}
         {partial ? <span className="font-normal text-fg-subtle"> · first {read.pages_read} of {read.pages_total} pages</span> : null}
       </p>
       {read.what_it_is ? <p className="mt-1 font-medium text-fg">{read.what_it_is}</p> : null}

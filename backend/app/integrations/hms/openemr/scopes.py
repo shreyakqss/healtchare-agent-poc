@@ -31,6 +31,8 @@ STANDARD_API_SCOPES = (
     # and the note is a SOAP form on it - OpenEMR scopes the form separately.
     "user/encounter.read", "user/encounter.write",
     "user/soap_note.read", "user/soap_note.write",
+    # Doctor-to-doctor referrals: OpenEMR's referral record is a patient "transaction" (LBTref).
+    "user/transaction.read", "user/transaction.write",
     # Read-only on purpose. Creating an OpenEMR appointment puts it on the calendar, which is
     # a booking - CareFlow files an appointment *request* on the chart instead.
     "user/appointment.read",

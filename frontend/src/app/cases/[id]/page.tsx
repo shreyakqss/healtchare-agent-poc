@@ -44,7 +44,8 @@ export default async function CasePage({ params }: { params: Promise<{ id: strin
         </Link>
       }
     >
-      <CaseView initialCase={detail} doctorContext={doctorContext} me={me} hospital={config?.hospital ?? null} />
+      <CaseView initialCase={detail} doctorContext={doctorContext} me={me} hospital={config?.hospital ?? null}
+        departments={config?.departments ?? []} doctors={roster?.doctors ?? []} />
     </AppShell>
   );
 }

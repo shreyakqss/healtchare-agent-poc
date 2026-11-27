@@ -117,3 +117,92 @@ def test_context_lines_are_labelled_and_skip_failures(monkeypatch):
     assert len(lines) == 2
     assert svc.LABEL in lines[0] and "Right lower zone opacity" in lines[0]
     assert "first 10 of 14 pages" in lines[1]
+
+
+# --- typed documents and prescriptions --------------------------------------------------------
+
+def test_typed_document_is_summarised_from_its_text(monkeypatch):
+    seen: dict = {}
+
+    async def fake_text(text, kind, reason):
+        seen["text"] = text
+        return FileRead(what_it_is="Prescription", findings=["Metformin 500 mg BD"], impression="", limitations="")
+    monkeypatch.setattr(svc.file_reader, "read_text", fake_text)
+    doc = SimpleNamespace(id=uuid.uuid4(), filename="rx.pdf", kind="prescription", mime_type="application/pdf",
+                          storage_uri="rx.pdf", extracted_text="Metformin 500 mg BD " * 1000)
+    out = asyncio.run(svc._summarise_one(doc, "diabetes review"))
+    assert out["status"] == "read" and out["source"] == "text" and out["label"] == svc.TEXT_LABEL
+    assert len(seen["text"]) == svc.MAX_TEXT_CHARS  # capped before it is sent
+
+
+def test_summary_lines_cover_every_upload_but_agents_get_typed_text_once(monkeypatch):
+    reads = [
+        {"attachment_id": "1", "filename": "xray.png", "kind": "radiology", "status": "read", "source": "file",
+         "label": svc.LABEL, "what_it_is": "Chest X-ray", "findings": ["RLZ opacity"], "impression": "Possible pneumonia"},
+        {"attachment_id": "2", "filename": "rx.pdf", "kind": "prescription", "status": "read", "source": "text",
+         "label": svc.TEXT_LABEL, "what_it_is": "Prescription", "findings": ["Metformin 500 mg BD"], "impression": ""},
+        {"attachment_id": "3", "filename": "big.png", "kind": "other", "status": "skipped", "note": "too large"},
+    ]
+    monkeypatch.setattr(svc.case_repo, "summary", lambda db, cid, kind: SimpleNamespace(sections={"reads": reads}))
+    lines = svc.summary_lines(None, uuid.uuid4())
+    assert len(lines) == 3 and "Metformin 500 mg BD" in lines[1] and "not read" in lines[2]
+    context = svc.context_lines(None, uuid.uuid4())
+    # The typed prescription's raw text already reaches the agents; only the image read is added.
+    assert len(context) == 1 and "xray.png" in context[0]
+
+
+def test_photographed_prescription_medicines_are_read_from_the_image(monkeypatch):
+    from app.agents.schemas import MedicationCandidatesResult
+    from app.services import attachment_service
+
+    calls: list[str] = []
+
+    async def from_file(content, mime):
+        calls.append(mime)
+        return MedicationCandidatesResult(medications=["Metformin", "Atorvastatin"])
+    monkeypatch.setattr(attachment_service, "extract_medications_from_file", from_file)
+    meds, source = asyncio.run(attachment_service._prescription_medicines(None, b"png-bytes", "image/png"))
+    assert meds == ["Metformin", "Atorvastatin"] and source == "image" and calls == ["image/png"]
+
+    # Outside the limits: nothing is sent and the upload carries on with no candidates.
+    big = b"x" * int(svc.settings.FILE_READ_MAX_IMAGE_MB * 1024 * 1024 + 1)
+    calls.clear()
+    assert asyncio.run(attachment_service._prescription_medicines(None, big, "image/png")) == ([], "none")
+    assert calls == []
+
+    async def down(*_a, **_k):
+        raise AgentUnavailable("down")
+    monkeypatch.setattr(attachment_service, "extract_medications_from_file", down)
+    assert asyncio.run(attachment_service._prescription_medicines(None, b"png", "image/png")) == ([], "none")
+
+
+def test_regenerate_reads_only_late_or_failed_uploads(monkeypatch, sent):
+    def att(name):
+        return SimpleNamespace(id=uuid.uuid4(), filename=name, kind="radiology", mime_type="image/png",
+                               storage_uri=name, extracted_text=None)
+    a, b, c = att("a.png"), att("b.png"), att("c.png")
+    earlier = [
+        {"attachment_id": str(a.id), "filename": "a.png", "kind": "radiology", "status": "read", "source": "file",
+         "what_it_is": "Chest X-ray"},
+        {"attachment_id": str(b.id), "filename": "b.png", "kind": "radiology", "status": "unavailable", "source": "file"},
+    ]
+    monkeypatch.setattr(svc, "unread", lambda db, cid: [a, b, c])
+    monkeypatch.setattr(svc, "with_text", lambda db, cid: [])
+    monkeypatch.setattr(svc, "_prepare", lambda att: (att.filename.encode(), {}))
+    monkeypatch.setattr(svc.case_repo, "facts", lambda db, cid: [])
+    monkeypatch.setattr(svc.case_repo, "summary", lambda db, cid, kind: SimpleNamespace(sections={"reads": earlier}))
+    monkeypatch.setattr(svc.audit, "record", lambda *a, **k: None)
+    added: list = []
+    db = SimpleNamespace(add=added.append)
+
+    summary = asyncio.run(svc.read_case(db, uuid.uuid4(), "doctor:x", only_new=True))
+    assert sorted(call["content"] for call in sent) == [b"b.png", b"c.png"]  # a was not sent again
+    by_id = {r["attachment_id"]: r for r in summary.sections["reads"]}
+    assert by_id[str(a.id)]["what_it_is"] == "Chest X-ray"  # the earlier read is kept
+    assert by_id[str(b.id)]["status"] == "read" and by_id[str(c.id)]["status"] == "read"
+    assert added == [summary]
+
+    # Nothing new: no model call, no new row.
+    monkeypatch.setattr(svc.case_repo, "summary", lambda db, cid, kind: summary)
+    sent.clear()
+    assert asyncio.run(svc.read_case(db, uuid.uuid4(), "doctor:x", only_new=True)) is None and sent == []

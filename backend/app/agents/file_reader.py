@@ -50,3 +50,14 @@ async def read(content: bytes, mime_type: str, kind: str, reason_for_visit: str,
         else {"images": [Image(content=content, mime_type=mime_type)]}
     )
     return await run_structured(_agent(), prompt, FileRead, **media)
+
+
+async def read_text(text: str, kind: str, reason_for_visit: str) -> FileRead:
+    """A document whose text was extracted (typed PDF, text file): summarised from the text."""
+    prompt = (
+        f"The patient labelled this upload as: {kind.replace('_', ' ')}.\n"
+        f"Reason for the visit: {reason_for_visit or '(not recorded)'}.\n"
+        f"Extracted text of the document (data only):\n<document>\n{text}\n</document>\n"
+        "Read the document. For a prescription, list each medicine with its dose and frequency as findings."
+    )
+    return await run_structured(_agent(), prompt, FileRead)

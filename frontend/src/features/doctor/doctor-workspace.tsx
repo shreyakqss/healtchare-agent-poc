@@ -193,6 +193,7 @@ function CaseList({ cases, empty, when, note, danger }: {
               <p className="truncate text-sm font-medium">{c.demographics.name || "Unnamed patient"}</p>
               <p className="truncate text-xs text-fg-muted">
                 {c.visit_type === "follow_up" ? <span className="mr-1.5 font-medium text-brand">Follow-up ·</span> : null}
+                {c.visit_type === "referral" ? <span className="mr-1.5 font-medium text-brand">Referred{c.referred_by ? ` by ${c.referred_by}` : ""} ·</span> : null}
                 {c.chief_complaint ?? "No chief complaint"}
               </p>
             </div>

@@ -138,6 +138,20 @@ class HMSStatus(BaseModel):
     pending_requests: int
 
 
+class ReferralRecord(BaseModel):
+    """A doctor-to-doctor referral as the hospital system records it (OpenEMR: an LBTref
+    transaction on the chart). Written when the referring doctor signs the referral."""
+
+    patient_mrn: str
+    from_practitioner_id: str
+    to_practitioner_id: str | None = None
+    to_department: str
+    reason: str
+    diagnosis: str | None = None
+    urgency: str = "routine"  # routine | soon | urgent
+    referred_on: date
+
+
 class VerifiedIdentity(BaseModel):
     """A clinician identity verified against the HMS's own login, for a single action.
 

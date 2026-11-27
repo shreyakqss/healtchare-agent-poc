@@ -1,4 +1,4 @@
-import type { CaseDetail, HospitalIdentity } from "@/lib/api";
+import type { CaseDetail, Department, HospitalIdentity, RosterDoctor } from "@/lib/api";
 import { Card, CardBody, CardHeader, SectionTitle } from "@/components/ui/card";
 import { Badge, PriorityBadge } from "@/components/ui/badge";
 import { Alert, EmptyState } from "@/components/ui/feedback";
@@ -7,6 +7,7 @@ import { Icons } from "@/components/ui/icons";
 import { formatDateTime, titleCase } from "@/lib/utils";
 import { ConsultationForm } from "@/features/doctor/consultation-form";
 import { DiscrepancyFlags } from "@/features/doctor/discrepancy-flags";
+import { ReferralCard } from "@/features/doctor/referral-card";
 import type { Me } from "@/features/doctor/use-doctor";
 
 function str(v: unknown): string | null {
@@ -21,8 +22,9 @@ function original(sections: Record<string, unknown>, key: string): string {
   return str(v) ?? "–";
 }
 
-export function ReviewTab({ detail, me, onChanged, hospital }: {
+export function ReviewTab({ detail, me, onChanged, hospital, departments = [], doctors = [] }: {
   detail: CaseDetail; me: Me | null; onChanged: () => Promise<void>; hospital: HospitalIdentity | null;
+  departments?: Department[]; doctors?: RosterDoctor[];
 }) {
   const review = detail.review;
   const sections = (detail.prescreening_summary?.sections ?? {}) as Record<string, unknown>;
@@ -33,6 +35,9 @@ export function ReviewTab({ detail, me, onChanged, hospital }: {
     <div className="space-y-5">
       {/* Signing the report is the review (consultation_service.record_note). */}
       {me && (detail.status === "NEEDS_REVIEW" || detail.status === "APPROVED" || detail.status === "COMPLETED") ? <ConsultationForm c={detail} me={me} onDone={onChanged} hospital={hospital} /> : null}
+      {me && (detail.status === "NEEDS_REVIEW" || detail.status === "APPROVED" || detail.status === "COMPLETED") ? (
+        <ReferralCard detail={detail} me={me} departments={departments} doctors={doctors} onDone={onChanged} />
+      ) : null}
       <DiscrepancyFlags c={detail} />
 
       <Card>

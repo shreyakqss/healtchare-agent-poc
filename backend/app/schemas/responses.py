@@ -21,6 +21,46 @@ class PreviousVisitResponse(BaseModel):
     advice: str | None = None
 
 
+class ReferralResponse(BaseModel):
+    """A doctor-to-doctor referral (services/referral_service). Clinician-facing: the reason,
+    question and outcome are clinical content and never on the patient projection."""
+
+    id: str
+    source_case_id: str
+    case_id: str
+    from_doctor_name: str
+    from_department_name: str | None = None
+    to_department_id: str
+    to_department_name: str
+    to_doctor_name: str | None = None
+    reason: str
+    question: str | None = None
+    urgency: str
+    # Read from the visit it opened: awaiting_time | booked | seen | completed | cancelled.
+    status: str
+    doctor_name: str | None = None  # who holds the booking now (the patient may have changed it)
+    appointment_start: datetime | None = None
+    # Closing the loop: the receiving doctor's signed answer, once they have signed.
+    outcome_diagnosis: str | None = None
+    outcome_advice: str | None = None
+    outcome_by: str | None = None
+    hms_recorded: bool = False
+    # On the referred visit only: the referring doctor's latest signed consultation report.
+    source_report: SourceReport | None = None
+    created_at: datetime
+
+
+class SourceReport(BaseModel):
+    doctor_name: str | None = None
+    signed_at: datetime
+    notes: str
+    diagnosis: str | None = None
+    prescription: str | None = None
+    tests_ordered: str | None = None
+    advice: str | None = None
+    notes_for_doctors: str | None = None
+
+
 class SessionResponse(BaseModel):
     session_id: str
     case_id: str
@@ -98,6 +138,8 @@ class AttachmentResponse(BaseModel):
     size_bytes: int
     has_text: bool
     extracted_text: str | None
+    # Medicine names read off an uploaded prescription (text or photo) - asked about at intake.
+    extracted_medications: list[str] = Field(default_factory=list)
     uploaded_by: str
     created_at: datetime
 
@@ -310,6 +352,8 @@ class CaseListItem(BaseModel):
     appointment_start: datetime | None
     # The time is on the doctor's HMS calendar (the patient confirmed it), not just a default.
     appointment_booked: bool = False
+    # A referred visit: "Dr X, General Medicine".
+    referred_by: str | None = None
     created_at: datetime
     updated_at: datetime | None
 
@@ -372,6 +416,8 @@ class PatientVisitItem(BaseModel):
     follow_up_of: str | None = None
     follow_up_title: str | None = None
     follow_up_at: datetime | None = None
+    # A referred visit: who referred the patient ("Dr X, General Medicine") - never why.
+    referred_by: str | None = None
 
 
 class EmergencyAdviceResponse(BaseModel):
@@ -392,6 +438,7 @@ class PatientCaseResponse(BaseModel):
     consultation_mode: str | None
     appointment_reference: str | None
     has_letterhead: bool = False
+    referred_by: str | None = None
     created_at: datetime
 
 
@@ -426,6 +473,10 @@ class CaseDetailResponse(BaseModel):
     visit_type: str = "new"
     # The visit a follow-up is about, with its signed diagnosis, prescription and advice.
     previous_visit: PreviousVisitResponse | None = None
+    # A referred visit: the referral that opened it. The referring visit itself is readable by id.
+    referral: ReferralResponse | None = None
+    # Referrals this visit's doctor made to other departments, with where each one stands.
+    referrals_made: list[ReferralResponse] = Field(default_factory=list)
     review: ReviewResponse | None
     consultation_notes: list[ConsultationNoteResponse]
     final_summary: SummaryResponse | None

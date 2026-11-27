@@ -32,8 +32,10 @@ export function acceptedDiagnoses(summary: Summary | null | undefined): { condit
 /** Decision support in the style of Isabel DDx / Glass Health: a ranked differential drafted at
  * pre-screening, which the doctor accepts, rewords or dismisses item by item. Never shown to the
  * patient; only what the doctor accepts can be copied into the consultation they sign. */
-export function DiagnosisTab({ detail, doctorContext, onChanged, onOpenReport }: {
+export function DiagnosisTab({ detail, doctorContext, onChanged, onRegenerated, onOpenReport }: {
   detail: CaseDetail; doctorContext: string; onChanged: (summary: Summary) => void;
+  // Regenerating also reads uploads added since pre-screening, so the whole case is reloaded.
+  onRegenerated?: () => void;
   // Switch to the Review & visit tab, where accepted diagnoses fill the report.
   onOpenReport: () => void;
 }) {
@@ -61,6 +63,7 @@ export function DiagnosisTab({ detail, doctorContext, onChanged, onOpenReport }:
   const regenerate = () => run("regenerate", async () => {
     const s = await casesApi.regenerateDiagnosis(detail.case_id);
     toast.push({ tone: "success", message: "AI diagnosis updated" });
+    onRegenerated?.();
     return s;
   });
 

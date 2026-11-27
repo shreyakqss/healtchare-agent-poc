@@ -326,6 +326,7 @@ async def write_summary(step_input: StepInput) -> StepOutput:
             entries=[(e.kind, e.name, e.reaction_or_dose or "") for e in entries],
             documents=[(d["filename"], d["excerpt"]) for d in records.get("documents", [])],
             images=[i["filename"] for i in records.get("images", [])],
+            ai_reads=file_read_service.summary_lines(db, case_id),
             hms_record=hms_record,
         )
         try:
