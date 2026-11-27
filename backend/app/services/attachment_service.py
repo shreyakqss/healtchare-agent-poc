@@ -39,7 +39,8 @@ async def upload(db: Session, case: PatientCase, filename: str, content: bytes, 
     """Store the file, record it, flag a kind mismatch for the clinician (advisory only)
     and best-effort forward it to the linked HMS record. Never blocks the upload."""
     _assert_patient_upload_allowed(db, case)
-    stored = storage.store(case.id, filename, content, kind)
+    # PDF text extraction is CPU-bound and blocking: keep it off the event loop.
+    stored = await asyncio.to_thread(storage.store, case.id, filename, content, kind)
     row = MedicalAttachment(
         case_id=case.id, kind=kind, filename=stored.filename, mime_type=stored.mime_type,
         size_bytes=stored.size_bytes, storage_uri=stored.storage_uri, extracted_text=stored.extracted_text,

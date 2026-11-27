@@ -67,8 +67,8 @@ export const casesApi = {
     http.post<ProposedDiagnosis[]>(`/cases/${caseId}/ai-diagnosis/proposed`, { reply }),
   addDiagnosis: (caseId: string, d: ProposedDiagnosis) =>
     http.post<Summary>(`/cases/${caseId}/ai-diagnosis/differentials`, d),
-  decideDiagnosis: (caseId: string, index: number, decision: "accept" | "edit" | "dismiss", text?: string) =>
-    http.post<Summary>(`/cases/${caseId}/ai-diagnosis/decisions`, { index, decision, text }),
+  decideDiagnosis: (caseId: string, index: number, condition: string, decision: "accept" | "edit" | "dismiss", text?: string) =>
+    http.post<Summary>(`/cases/${caseId}/ai-diagnosis/decisions`, { index, condition, decision, text }),
 };
 
 export const hospitalApi = {

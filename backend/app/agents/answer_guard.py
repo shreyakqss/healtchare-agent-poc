@@ -36,4 +36,4 @@ async def check(scope: str, question: str, reference: str, answer: str) -> Patie
         f"Reference:\n<reference>\n{reference}\n</reference>\n\n"
         f"Proposed answer:\n<answer>\n{answer.strip()}\n</answer>"
     )
-    return await run_structured(_agent(), prompt, PatientAnswerReview)
+    return await run_structured(_agent(), prompt, PatientAnswerReview, interactive=True)

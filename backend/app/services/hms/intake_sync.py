@@ -90,6 +90,6 @@ def reviewed_payload(db: Session, case: PatientCase) -> dict[str, Any]:
         ),
         "consultation_notes": [
             {"notes": n.notes, "prescription": n.prescription, "follow_up_instructions": n.follow_up_instructions}
-            for n in notes
+            for n in notes[-1:]  # the latest version is the signed report
         ],
     }

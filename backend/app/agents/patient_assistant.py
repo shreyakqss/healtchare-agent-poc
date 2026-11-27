@@ -53,4 +53,4 @@ async def answer(
     transcript: list[dict[str, str]],
     asks_for: str | None,
 ) -> str:
-    return await stream_text(_agent(), _prompt(question, reference, transcript, asks_for))
+    return await stream_text(_agent(), _prompt(question, reference, transcript, asks_for), interactive=True)

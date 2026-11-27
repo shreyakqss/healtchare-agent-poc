@@ -75,7 +75,7 @@ def update_profile(payload: ProfileRequest, principal: PatientPrincipal, db: Ses
         city=payload.city.strip(), state=payload.state.strip(), postal_code=payload.postal_code.strip(),
         country=payload.country.strip(), contact_preference=payload.contact_preference.strip(),
     ))
-    logger.info("Patient profile updated (mrn=%s)", mrn)
+    logger.info("Patient profile updated")  # no identifiers in logs
     record = linked_record(principal, db)
     if record is None:
         raise Conflict("Your profile was saved but could not be read back. Please reload.")

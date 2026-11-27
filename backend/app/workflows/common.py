@@ -23,7 +23,8 @@ def step(name: str, executor: StepExecutor) -> Step:
     would mean a case reaching NEEDS_REVIEW without a routing recommendation, or COMPLETED
     without a care task. Every step here opens its own `db_session()` (rolled back on error)
     and every agent call already degrades to a documented fallback, so a raise is a real
-    failure: surface it, let `run_*` mark the case FAILED and audit the reason.
+    failure: surface it, let `run_*` audit the reason and mark the case FAILED (a failed
+    finalize leaves the signed case APPROVED so the release can be retried).
     """
     return Step(name=name, executor=executor, on_error="fail", max_retries=0)
 

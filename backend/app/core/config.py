@@ -55,6 +55,8 @@ class Settings(BaseSettings):
     LLM_BASE_URL: str = "https://api.openai.com/v1"
     LLM_MODEL: str = "gpt-4.1-mini"
     LLM_TIMEOUT_SECONDS: float = 120.0
+    # The patient is waiting on a live chat turn: fail fast to the existing fallback instead of hanging.
+    LLM_INTERACTIVE_TIMEOUT_SECONDS: float = 45.0
     # True only for reasoning models (gpt-5*, o-series); gpt-4.1* rejects reasoning_effort.
     LLM_SUPPORTS_EFFORT: bool = False
     LLM_EFFORT: str = "low"

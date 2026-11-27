@@ -31,6 +31,8 @@ pypdf==6.16.2
 PyJWT[crypto]==2.13.0
 cryptography==50.0.0
 
+tzdata==2025.2  # IANA zones for ZoneInfo where the OS has none (Windows); system zones take precedence
+
 # Dev
 pytest==9.1.1
 PyMySQL==1.1.2

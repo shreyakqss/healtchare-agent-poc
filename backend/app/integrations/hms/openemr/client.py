@@ -47,6 +47,7 @@ from app.integrations.hms.openemr.rest import (
     contact_preference_from_row,
     pid_of,
 )
+from app.integrations.hms.rendering import render_note
 from app.integrations.hms.schemas import (
     AppointmentRequest,
     AppointmentRequestResult,
@@ -116,24 +117,6 @@ def _document_filename(title: str, content_type: str) -> str:
     return f"{stem}.{ext}"
 
 
-def _render_note(title: str, sections: dict[str, Any]) -> bytes:
-    """Human-readable plain text for the chart. OpenEMR's upload guard declines content it
-    sniffs as JSON ("insecure patient document"), and staff read these notes, so structured
-    payloads are rendered rather than serialised."""
-    lines = [title, "=" * len(title), ""]
-    for key, value in sections.items():
-        label = key.replace("_", " ").capitalize()
-        if isinstance(value, list):
-            lines.append(f"{label}:")
-            lines.extend(f"  - {_render_item(item)}" for item in value) if value else lines.append("  (none)")
-        elif isinstance(value, dict):
-            lines.append(f"{label}:")
-            lines.extend(f"  {k}: {v}" for k, v in value.items())
-        else:
-            lines.append(f"{label}: {value if value not in (None, '') else '(none)'}")
-    return "\n".join(lines).encode("utf-8")
-
-
 def _rejection_detail(exc: httpx.HTTPStatusError) -> str:
     """A short, readable reason from an OpenEMR rejection - its validator map when there is
     one, else the status. Never the whole response body: it can echo submitted PHI."""
@@ -147,12 +130,6 @@ def _rejection_detail(exc: httpx.HTTPStatusError) -> str:
         if isinstance(body, dict) and body.get(key):
             return f"HTTP {exc.response.status_code} ({key})"
     return f"HTTP {exc.response.status_code}"
-
-
-def _render_item(item: Any) -> str:
-    if isinstance(item, dict):
-        return ", ".join(f"{k}={v}" for k, v in item.items() if v not in (None, ""))
-    return str(item)
 
 
 class FhirHMS:
@@ -555,12 +532,14 @@ class FhirHMS:
             user_id, pid, int(hospital.get("hms_facility_id") or 3), local_start.date(),
             local_start.time().replace(tzinfo=None), local_end.time().replace(tzinfo=None), "Office Visit", note,
         )
+        self._rest.invalidate_calendar()
         return str(event_id)
 
     def cancel_appointment(self, reference: str) -> None:
         from app.integrations.hms.openemr import provisioning
 
         provisioning.cancel_appointment(int(reference))
+        self._rest.invalidate_calendar()
 
     # --- write side (standard API; drafts only) --------------------------------------
 
@@ -579,7 +558,7 @@ class FhirHMS:
         event - in OpenEMR that would be a booking, which is outside the POC's scope."""
         if not request.patient_mrn:
             raise httpx.HTTPError("An appointment request needs a linked OpenEMR patient")
-        note = _render_note(APPOINTMENT_REQUEST_TITLE, {
+        note = render_note(APPOINTMENT_REQUEST_TITLE, {
             "status": "requested - to be scheduled by staff",
             "case_id": request.case_id, "patient": request.patient_name, "department": request.department_id,
             "practitioner": request.practitioner_id, "appointment_type": request.appointment_type_id,
@@ -625,7 +604,7 @@ class FhirHMS:
                 self._rest.create_medication(pid, entry["name"], entry.get("reaction_or_dose"))
         # The narrative, triage context and clinician note travel as one readable artifact,
         # so model output is never presented as a diagnosis.
-        self.push_document(mrn, "CareFlow reviewed intake", _render_note("CareFlow reviewed intake", payload), "text/plain")
+        self.push_document(mrn, "CareFlow reviewed intake", render_note("CareFlow reviewed intake", payload), "text/plain")
 
     def _record_visit(self, patient_uuid: str, pid: int, payload: dict) -> None:
         """Open an encounter for this visit and attach the clinician's note to it as a SOAP form.
