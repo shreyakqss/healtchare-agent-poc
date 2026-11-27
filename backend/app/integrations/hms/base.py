@@ -14,6 +14,7 @@ from app.integrations.hms.schemas import (
     HMSStatus,
     HMSWeeklyHours,
     PatientRegistration,
+    ReferralRecord,
     VerifiedIdentity,
 )
 
@@ -55,6 +56,9 @@ class HMSClient(Protocol):
         HMS's id for it, which `cancel_appointment` takes."""
         ...
     def cancel_appointment(self, reference: str) -> None: ...
+    def record_referral(self, referral: ReferralRecord) -> str:
+        """File a doctor-to-doctor referral on the patient's chart. Returns the HMS's id for it."""
+        ...
     def request_appointment(self, request: AppointmentRequest) -> AppointmentRequestResult: ...
     def list_requests(self, limit: int = 100) -> list[AppointmentRequestResult]: ...
 

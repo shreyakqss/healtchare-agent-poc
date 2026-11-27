@@ -1,7 +1,7 @@
 import { API_ROOT, http, readCookie, readSse, WORKSPACE_CASES } from "@/lib/api/client";
 import type {
   AdminDoctor, AdminDoctors, ChangeHoursRequest, DoctorDetails, UpdateDoctorRequest, DoctorPreview, HoursChangePreview, DoctorRemoval, DoctorRemovalCheck, NewDoctorRequest, AppointmentRequestResult, AssistantReply, Attachment, AttachmentSkipResponse, AuditEvent, CaseDetail,
-  CaseListItem, ConsultationNote, ConsultationNoteRequest, FinalizeRequest, HMSPractitioner, HMSStatus, HospitalConfig,
+  CaseListItem, ConsultationNote, ConsultationNoteRequest, FinalizeRequest, ReferralRequest, HMSPractitioner, HMSStatus, HospitalConfig,
   HospitalSummary, IdentityFormRequest, IntakeConfig, LinkedPatientRecord, MessageResponse, PastPatientItem, PatientCase, PatientVisitItem, PreviousVisit, VisitType,
   ProposedDiagnosis, ReportEditProposal, ReportSection, Review, ReviewRequest, Roster, SessionResponse, Slot, Summary, TurnEvent,
 } from "@/lib/api/types";
@@ -57,6 +57,7 @@ export const casesApi = {
   review: (caseId: string, body: ReviewRequest) => http.post<Review>(`/cases/${caseId}/review`, body),
   addNote: (caseId: string, body: ConsultationNoteRequest) => http.post<ConsultationNote>(`/cases/${caseId}/consultation-notes`, body),
   finalize: (caseId: string, body: FinalizeRequest) => http.post<CaseDetail>(`/cases/${caseId}/finalize`, body),
+  refer: (caseId: string, body: ReferralRequest) => http.post<CaseDetail>(`/cases/${caseId}/referrals`, body),
   assistantChat: (caseId: string, message: string, doctorContext: string) =>
     http.post<AssistantReply>(`/cases/${caseId}/assistant`, { message, doctor_context: doctorContext }),
   regenerateDiagnosis: (caseId: string) => http.post<Summary>(`/cases/${caseId}/ai-diagnosis`),

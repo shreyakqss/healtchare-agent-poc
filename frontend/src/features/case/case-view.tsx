@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { casesApi, type CaseDetail, type HospitalIdentity } from "@/lib/api";
+import { casesApi, type CaseDetail, type Department, type HospitalIdentity, type RosterDoctor } from "@/lib/api";
 import { Tabs } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { Icons } from "@/components/ui/icons";
@@ -16,8 +16,9 @@ import type { Me } from "@/features/doctor/use-doctor";
 
 type TabId = "overview" | "diagnosis" | "records" | "review" | "conversation";
 
-export function CaseView({ initialCase, doctorContext, me, hospital }: {
+export function CaseView({ initialCase, doctorContext, me, hospital, departments = [], doctors = [] }: {
   initialCase: CaseDetail; doctorContext: string; me: Me | null; hospital: HospitalIdentity | null;
+  departments?: Department[]; doctors?: RosterDoctor[];
 }) {
   const [detail, setDetail] = useState(initialCase);
   const [tab, setTab] = useState<TabId>("overview");
@@ -69,7 +70,7 @@ export function CaseView({ initialCase, doctorContext, me, hospital }: {
         {tab === "overview" && <OverviewTab detail={detail} onOpenDiagnosis={() => setTab("diagnosis")} />}
         {tab === "diagnosis" && <DiagnosisTab detail={detail} doctorContext={doctorContext} onChanged={(s) => setDetail({ ...detail, ai_diagnosis: s })} onOpenReport={() => setTab("review")} />}
         {tab === "records" && <RecordsTab detail={detail} />}
-        {tab === "review" && <ReviewTab detail={detail} me={me} onChanged={refresh} hospital={hospital} />}
+        {tab === "review" && <ReviewTab detail={detail} me={me} onChanged={refresh} hospital={hospital} departments={departments} doctors={doctors} />}
         {tab === "conversation" && <TranscriptTab detail={detail} />}
       </div>
     </div>

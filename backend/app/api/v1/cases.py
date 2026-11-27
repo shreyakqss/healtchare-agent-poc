@@ -29,6 +29,7 @@ from app.schemas.requests import (
     ConsultationNoteRequest,
     DoctorAssistantRequest,
     FinalizeRequest,
+    ReferralRequest,
     ReportAssistantRequest,
 )
 from app.schemas.responses import (
@@ -62,10 +63,11 @@ from app.services import (
     letterhead,
     past_patients,
     prescreen_trigger,
+    referral_service,
     report_service,
     workflow_jobs,
 )
-from app.services.clinician_identity import verify_clinician_async
+from app.services.clinician_identity import verify_clinician, verify_clinician_async
 
 router = APIRouter(prefix="/cases", tags=["cases"])
 PatientPrincipal = Annotated[CurrentPrincipal, Depends(require_roles("patient"))]
@@ -241,6 +243,26 @@ def add_consultation_note(
         payload,
     )
     return serializers.note_out(note)
+
+
+@router.post("/{case_id}/referrals", response_model=CaseDetailResponse, status_code=201)
+def refer_patient(
+    case_id: uuid.UUID,
+    payload: ReferralRequest,
+    principal: ClinicianPrincipal,
+    db: Session = Depends(get_db),
+):
+    """Refer the patient on to another department: opens a linked visit there, booked with the
+    asked-for (or earliest free) doctor. Signed with the referring doctor's HMS login."""
+    rate_limits.enforce("clinician.verify", principal.user_id)
+    require_hms_identity(principal, payload.doctor_username)
+    case = case_for_principal(db, case_id, principal, allow_patient=False)
+    identity = verify_clinician(payload.doctor_username, payload.doctor_password)
+    referral_service.create(db, case, referral_service.ReferralInput(
+        to_department_id=payload.to_department_id, to_doctor_id=payload.to_doctor_id,
+        reason=payload.reason, question=payload.question, urgency=payload.urgency,
+    ), identity)
+    return serializers.case_detail(db, case_repo.case_or_404(db, case_id))
 
 
 @router.post("/{case_id}/finalize", response_model=CaseDetailResponse)

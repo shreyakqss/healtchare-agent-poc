@@ -13,12 +13,13 @@ from sqlalchemy.orm import Session
 
 from app.agents import AgentUnavailable
 from app.agents.medication_extractor import extract as extract_medications
+from app.agents.medication_extractor import extract_from_file as extract_medications_from_file
 from app.core.errors import Conflict, Forbidden, Unprocessable
 from app.domain.lifecycle import TERMINAL
 from app.integrations.hms import get_hms
 from app.models import ClinicalDiscrepancy, MedicalAttachment, PatientCase
 from app.services import attachments as storage
-from app.services import audit, case_repo
+from app.services import audit, case_repo, file_read_service
 from app.services.hms import push_document_with_retry
 
 logger = logging.getLogger(__name__)
@@ -52,16 +53,14 @@ async def upload(db: Session, case: PatientCase, filename: str, content: bytes, 
     })
     db.flush()  # row.id is referenced by the records below
 
-    if kind == "prescription" and stored.extracted_text:
-        try:
-            candidates = (await extract_medications(stored.extracted_text)).medications
-        except AgentUnavailable as exc:
-            logger.warning("Medication extraction unavailable (%s)", type(exc).__name__)
-            candidates = []
+    if kind == "prescription":
+        # The intake assistant then asks the patient whether they take each one
+        # (case_repo.pending_medication_candidates); nothing becomes a fact without their answer.
+        candidates, source = await _prescription_medicines(stored.extracted_text, content, stored.mime_type)
         if candidates:
             row.extracted_medications = candidates
             audit.record(db, case.id, ACTOR_ATTACHMENTS, "attachment.medications_extracted",
-                         {"attachment_id": str(row.id), "count": len(candidates)})
+                         {"attachment_id": str(row.id), "count": len(candidates), "source": source})
 
     if storage.kind_mismatch_suspected(kind, stored.extracted_text):
         # Reuses ClinicalDiscrepancy (source_kind="document") rather than a new table.
@@ -92,6 +91,26 @@ async def upload(db: Session, case: PatientCase, filename: str, content: bytes, 
     db.commit()
     db.refresh(row)
     return row
+
+
+async def _prescription_medicines(text: str | None, content: bytes, mime_type: str) -> tuple[list[str], str]:
+    """Medicine names on an uploaded prescription: from its text, else - a phone photo or a scan -
+    read by the model from the image, inside the FILE_READ_* limits and the same 30s cap as file
+    reads. Never blocks the upload: a failure or a file outside the limits gives none."""
+    try:
+        if text:
+            return (await extract_medications(text)).medications, "text"
+        if not file_read_service.readable_media(mime_type):
+            return [], "none"
+        sendable, _ = file_read_service.prepare(content, mime_type)
+        result = await asyncio.wait_for(extract_medications_from_file(sendable, mime_type),
+                                        file_read_service.READ_TIMEOUT_SECONDS)
+        return result.medications, "image"
+    except file_read_service.Skip as skip:
+        logger.info("Prescription not read (%s)", skip)
+    except (AgentUnavailable, TimeoutError) as exc:
+        logger.warning("Medication extraction unavailable (%s)", type(exc).__name__)
+    return [], "none"
 
 
 def skip(db: Session, case: PatientCase, kind: str, reason: str | None) -> None:

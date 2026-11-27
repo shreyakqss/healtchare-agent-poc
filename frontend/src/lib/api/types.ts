@@ -49,7 +49,31 @@ export interface SessionResponse {
   previous_visit: PreviousVisit | null;
 }
 
-export type VisitType = "new" | "follow_up";
+export type VisitType = "new" | "follow_up" | "referral";
+
+/** A doctor-to-doctor referral (backend services/referral_service). Clinician-facing only. */
+export type ReferralUrgency = "routine" | "soon" | "urgent";
+export interface Referral {
+  id: string; source_case_id: string; case_id: string;
+  from_doctor_name: string; from_department_name: string | null;
+  to_department_id: string; to_department_name: string; to_doctor_name: string | null;
+  reason: string; question: string | null; urgency: ReferralUrgency;
+  /** Read from the visit it opened. */
+  status: "awaiting_time" | "booked" | "seen" | "completed" | "cancelled";
+  doctor_name: string | null; appointment_start: string | null;
+  outcome_diagnosis: string | null; outcome_advice: string | null; outcome_by: string | null;
+  hms_recorded: boolean; created_at: string;
+  /** On the referred visit only: the referring doctor's latest signed report. */
+  source_report?: {
+    doctor_name: string | null; signed_at: string; notes: string; diagnosis: string | null; prescription: string | null;
+    tests_ordered: string | null; advice: string | null; notes_for_doctors: string | null;
+  } | null;
+}
+export interface ReferralRequest {
+  doctor_username: string; doctor_password: string;
+  to_department_id: string; to_doctor_id?: string | null;
+  reason: string; question?: string | null; urgency: ReferralUrgency;
+}
 
 /** A completed visit as a follow-up carries it over: what the doctor signed and released. */
 export interface PreviousVisit {
@@ -121,6 +145,8 @@ export interface Entry { id: string; kind: "allergy" | "medication"; name: strin
 export interface Attachment {
   id: string; case_id: string; kind: string; filename: string; mime_type: string; size_bytes: number;
   has_text: boolean; extracted_text: string | null; uploaded_by: string; created_at: string;
+  /** Medicine names read off an uploaded prescription (text or photo), asked about at intake. */
+  extracted_medications?: string[];
 }
 export interface TriageRuleRef { code: string; priority: Priority; action: string; explanation: string; version: string }
 export interface Triage {
@@ -187,6 +213,8 @@ export interface CaseListItem {
   created_at: string; updated_at: string | null;
   /** A red-flag rule matched: the patient was told to seek emergency care now. */
   emergency?: boolean;
+  /** A referred visit: "Dr X, General Medicine". */
+  referred_by?: string | null;
 }
 export interface ActiveIntake extends SessionResponse {
   intake_complete: boolean;
@@ -241,6 +269,8 @@ export interface PatientVisitItem {
   case_id: string; status: CaseStatus; review_decision: ReviewDecision | null; visit_type?: VisitType;
   complaint?: string | null;
   follow_up_of?: string | null; follow_up_title?: string | null; follow_up_at?: string | null;
+  /** A referred visit: who referred the patient - never why. */
+  referred_by?: string | null;
   department_name: string | null; doctor_name: string | null;
   created_at: string; updated_at: string | null;
 }
@@ -278,7 +308,7 @@ export interface PatientCase {
   emergency?: EmergencyAdvice | null;
   routing: PatientRouting | null; final_summary: Record<string, unknown> | null;
   consultation_mode: "in_person" | "virtual" | null;
-  appointment_reference: string | null; has_letterhead?: boolean; created_at: string;
+  appointment_reference: string | null; has_letterhead?: boolean; referred_by?: string | null; created_at: string;
 }
 
 export interface CaseDetail {
@@ -290,6 +320,10 @@ export interface CaseDetail {
   triage: Triage | null; routing: Routing | null; discrepancies: Discrepancy[]; prescreening_summary: Summary | null; review: Review | null;
   ai_diagnosis?: Summary | null; file_reads?: Summary | null; report_draft?: Summary | null; assistant_messages?: AssistantMessage[];
   visit_type?: VisitType; previous_visit?: PreviousVisit | null;
+  /** A referred visit: the referral that opened it. */
+  referral?: Referral | null;
+  /** Referrals this visit's doctor made, with where each stands. */
+  referrals_made?: Referral[];
   consultation_notes: ConsultationNote[]; final_summary: Summary | null; care_tasks: CareTask[]; created_at: string;
 }
 
@@ -405,6 +439,8 @@ export interface DoctorPreview {
 /** One AI read of an uploaded image or scanned PDF (`file_reads` summary sections.reads[]). Clinician only. */
 export interface FileRead {
   attachment_id: string; filename: string; kind: string; status: "read" | "unavailable" | "skipped";
+  /** "file": the model looked at the image/scan; "text": summarised from the extracted text. */
+  source?: "file" | "text"; label?: string;
   note?: string; pages_read?: number; pages_total?: number;
   what_it_is?: string; findings?: string[]; impression?: string; limitations?: string;
 }

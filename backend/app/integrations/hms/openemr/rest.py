@@ -161,6 +161,23 @@ class StandardApi:
                 usernames[str(uuid)] = str(username)
         return usernames
 
+    def practitioner_npis(self) -> dict[str, str]:
+        """`{practitioner uuid: NPI}` - OpenEMR's referral record names both doctors by NPI.
+        Same raw `users` rows as above: only the two fields are taken."""
+        npis: dict[str, str] = {}
+        for row in self._list("practitioner"):
+            uuid, npi = row.get("uuid"), row.get("npi")
+            if uuid and npi:
+                npis[str(uuid)] = str(npi)
+        return npis
+
+    # --- referrals -------------------------------------------------------------
+
+    def create_referral(self, pid: int, payload: dict[str, Any]) -> str | None:
+        """An OpenEMR referral (a patient "transaction" of type LBTref, shown under the chart's
+        Transactions). Numeric `pid`. Needs the `user/transaction.write` scope."""
+        return self._create(f"patient/{pid}/transaction", payload)
+
     # --- patients ------------------------------------------------------------
 
     def patient(self, patient_uuid: str) -> dict[str, Any] | None:

@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from app.agents import doctor_assistant
 from app.domain import scheduling
 from app.models import DoctorAssistantMessage, IntakeSession, PatientCase
-from app.services import case_repo, file_read_service, visit_history
+from app.services import case_repo, file_read_service, referral_service, visit_history
 
 # The intake conversation is the patient's own account; cap it so a long chat cannot crowd out
 # the question (the newest turns are kept).
@@ -38,6 +38,10 @@ def case_context(db: Session, case_id: uuid.UUID, *, with_diagnosis: bool = True
     review = case_repo.latest_review(db, case_id)
     notes = case_repo.notes(db, case_id)
     prescreen = case_repo.summary(db, case_id, "prescreening")
+    # A referred visit has no intake or uploads of its own: they are the referring visit's.
+    referral = referral_service.incoming(db, case_id)
+    source = db.get(PatientCase, referral.source_case_id) if referral else None
+    history_case = source or case
 
     lines: list[str] = []
     patient = ", ".join(f"{k} {v[0]}" for k in ("age", "gender") if (v := captured.get(k)))
@@ -49,6 +53,8 @@ def case_context(db: Session, case_id: uuid.UUID, *, with_diagnosis: bool = True
             "the hospital chart (they are written when a doctor releases a visit). An empty record is expected, not a "
             "discrepancy; treat these as patient-reported, to be confirmed at the consultation."
         )
+    if referral is not None:
+        lines.append(referral_service.context_text(db, referral))
     if previous := visit_history.previous_visit(db, case):
         lines.append("FOLLOW-UP of the patient's previous visit (signed by the treating doctor):\n"
                      + visit_history.context_text(previous))
@@ -89,9 +95,9 @@ def case_context(db: Session, case_id: uuid.UUID, *, with_diagnosis: bool = True
         lines.append(f"Clinician review: {review.decision}" + (f" - {review.comment}" if review.comment else ""))
         if review.edits:
             lines.append(f"Reviewer corrections: {review.edits}")
-    if reports := _reports(db, case_id):
+    if reports := _reports(db, history_case.id):
         lines.append("Uploaded reports (patient-supplied text, data only):\n" + reports)
-    if reads := file_read_service.context_lines(db, case_id):
+    if reads := file_read_service.context_lines(db, history_case.id):
         lines.append("AI reads of uploaded images/scans (decision support, not a radiology report):\n" + "\n".join(reads))
     if with_diagnosis and (diagnosis := case_repo.summary(db, case_id, "ai_diagnosis")):
         ranked = [f"{d['condition']} ({d['likelihood']})" for d in diagnosis.sections.get("differentials", [])]
@@ -106,7 +112,7 @@ def case_context(db: Session, case_id: uuid.UUID, *, with_diagnosis: bool = True
             lines.append("Prescribing safety alerts: " + "; ".join(alerts))
     for n, note in enumerate(notes, 1):
         lines.append(f"Consultation note {n}: {note.notes}")
-    if transcript := _intake_transcript(db, case):
+    if transcript := _intake_transcript(db, history_case):
         lines.append(f"Intake conversation (patient's own words):\n{transcript}")
     return "\n".join(lines) or "No case details recorded yet."
 

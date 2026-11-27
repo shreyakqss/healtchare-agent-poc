@@ -100,7 +100,17 @@ tokens must never be exposed to browser code or storage.
   rule names one, and lists/holds that visit's doctor first (`routing.doctor_first`); the patient may still pick
   any of the department's doctors. Only what the doctor signed (diagnosis, prescription, tests, advice) is carried
   over - to the intake planner and the clinician agents/case view - never the AI differential or referral notes.
-- The hospital chart is written only at release (`OpenEMRClient.sync_reviewed_intake`): patient-stated allergies
+- Referrals (`services/referral_service`, `Referral`): a doctor who has signed a consultation report refers the
+  patient to another department (`POST /cases/{id}/referrals`, signed with their HMS password). It opens a linked
+  visit (`visit_type="referral"`, same owner and MRN) that starts at `NEEDS_REVIEW` and is booked straight away with
+  the asked-for or earliest free doctor - no accept step; the patient sees it under My visits and changes it like any
+  booking. The patient's statements/allergies/medicines are copied verbatim (new rows), priority comes from
+  `triage_engine` re-run on them (the referral's "how soon" is never a priority), and the referring visit's signed
+  report, uploads, file reads and intake are linked, not copied (`case_context`, "Referred by" card). The patient
+  sees who referred them, never why. Status is read from the linked visit, and the receiving doctor's signed
+  diagnosis/advice is shown back on the referring visit. One open referral per department per visit.
+- The hospital chart is written only at release (`OpenEMRClient.sync_reviewed_intake`), except the referral record
+  (OpenEMR LBTref transaction, best effort, needs `user/transaction.*` scopes) written when a referral is signed: patient-stated allergies
   and medicines, and the medical problems the doctor signed under "Past history" (`intake_sync.signed_problems`) -
   never raw intake history facts. Anything already on the chart is skipped. Until a visit is released the chart is
   legitimately empty; `case_context` says so and the agents must not report that as a discrepancy.

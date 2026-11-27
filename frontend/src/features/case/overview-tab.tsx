@@ -1,5 +1,5 @@
 import Link from "next/link";
-import type { AIDiagnosisSections, CaseDetail, PreviousVisit } from "@/lib/api";
+import type { AIDiagnosisSections, CaseDetail, PreviousVisit, Referral } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardBody, CardHeader, SectionTitle } from "@/components/ui/card";
 import { Badge, PriorityBadge } from "@/components/ui/badge";
@@ -8,6 +8,7 @@ import { KeyValue, Table, Td, Th } from "@/components/ui/data";
 import { Icons } from "@/components/ui/icons";
 import { FIELD_LABEL } from "@/lib/constants";
 import { formatDate, formatDateTime, titleCase } from "@/lib/utils";
+import { AttachedDocuments } from "@/features/case/attached-documents";
 
 function str(v: unknown): string | null {
   return typeof v === "string" && v.trim() ? v : null;
@@ -40,7 +41,9 @@ export function OverviewTab({ detail, onOpenDiagnosis }: { detail: CaseDetail; o
     <div className="grid gap-5 lg:grid-cols-5">
       <div className="space-y-5 lg:col-span-3">
         <WorkingDiagnosis detail={detail} onOpen={onOpenDiagnosis} />
+        {detail.referral ? <ReferredFromCard referral={detail.referral} /> : null}
         {detail.previous_visit ? <PreviousVisitCard visit={detail.previous_visit} /> : null}
+        <AttachedDocuments detail={detail} />
         <Card>
           <CardHeader
             title="Clinician briefing"
@@ -49,7 +52,7 @@ export function OverviewTab({ detail, onOpenDiagnosis }: { detail: CaseDetail; o
           />
           <CardBody>
             {!s ? (
-              <EmptyState icon={<Icons.file size={20} />} title="No briefing yet" description="Pre-screening has not run for this visit." />
+              <EmptyState icon={<Icons.file size={20} />} title="No briefing yet" description={detail.referral ? "A referred visit has no intake of its own: the history is in the referral above and on the referring visit." : "Pre-screening has not run for this visit."} />
             ) : (
               <div className="space-y-5">
                 <div>
@@ -176,6 +179,49 @@ export function OverviewTab({ detail, onOpenDiagnosis }: { detail: CaseDetail; o
 
 function lines(text: string | null): string[] {
   return (text ?? "").split("\n").map((l) => l.trim()).filter(Boolean);
+}
+
+/** A referred visit: who sent the patient and why, with the referring doctor's signed report. */
+function ReferredFromCard({ referral }: { referral: Referral }) {
+  const r = referral.source_report;
+  return (
+    <Card className="border-brand-ring">
+      <CardHeader
+        title={<span className="flex items-center gap-2"><Icons.arrowRight size={16} className="text-brand" />Referred by {referral.from_doctor_name}</span>}
+        description={`${referral.from_department_name ? `${referral.from_department_name}, ` : ""}on ${formatDate(referral.created_at)}.`}
+        action={<Link href={`/cases/${referral.source_case_id}`} className="text-sm font-medium text-brand hover:underline">Open referring visit</Link>}
+      />
+      <CardBody className="space-y-5">
+        <div className="space-y-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <SectionTitle>Reason for referral</SectionTitle>
+            {referral.urgency !== "routine" ? (
+              <Badge tone={referral.urgency === "urgent" ? "danger" : "warning"}>{referral.urgency === "urgent" ? "Urgent" : "Within a week"}</Badge>
+            ) : null}
+          </div>
+          <p className="text-sm leading-6">{referral.reason}</p>
+          {referral.question ? (
+            <p className="rounded-md bg-brand-soft p-3 text-sm leading-6"><span className="font-medium">Question for you:</span> {referral.question}</p>
+          ) : null}
+        </div>
+        {r ? (
+          <div className="space-y-3 border-t border-line pt-4">
+            <SectionTitle>{r.doctor_name ?? "Referring doctor"}&rsquo;s signed report</SectionTitle>
+            <div className="grid gap-5 sm:grid-cols-2">
+              <div><SectionTitle>Diagnosis</SectionTitle><div className="mt-1.5"><Bullets items={lines(r.diagnosis)} /></div></div>
+              <div><SectionTitle>Prescription</SectionTitle><div className="mt-1.5"><Bullets items={lines(r.prescription)} /></div></div>
+              <div><SectionTitle>Tests ordered</SectionTitle><div className="mt-1.5"><Bullets items={lines(r.tests_ordered)} /></div></div>
+              <div><SectionTitle>Advice</SectionTitle><div className="mt-1.5"><Bullets items={lines(r.advice)} /></div></div>
+              <div className="sm:col-span-2"><SectionTitle>Consultation notes</SectionTitle><p className="mt-1.5 whitespace-pre-line text-sm leading-6">{r.notes}</p></div>
+              {r.notes_for_doctors ? (
+                <div className="sm:col-span-2"><SectionTitle>Notes for other doctors</SectionTitle><p className="mt-1.5 whitespace-pre-line text-sm leading-6">{r.notes_for_doctors}</p></div>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
+      </CardBody>
+    </Card>
+  );
 }
 
 /** A follow-up: what the doctor signed at the visit it follows up, so the history is in view. */

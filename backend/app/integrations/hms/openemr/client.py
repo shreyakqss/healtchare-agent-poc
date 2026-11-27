@@ -59,6 +59,7 @@ from app.integrations.hms.schemas import (
     HMSStatus,
     HMSWeeklyHours,
     PatientRegistration,
+    ReferralRecord,
     VerifiedIdentity,
 )
 
@@ -573,6 +574,30 @@ class FhirHMS:
         if not self._rest.upload_document(pid, filename, content, content_type):
             raise httpx.HTTPError("OpenEMR did not accept the document upload")
         return f"openemr:patient/{pid}/document/{filename}"
+
+    # OpenEMR's referral risk levels for CareFlow's "how soon".
+    REFERRAL_RISK = {"routine": "Low", "soon": "Medium", "urgent": "High"}
+
+    def record_referral(self, referral: ReferralRecord) -> str:
+        """An LBTref transaction on the chart, the record OpenEMR's own Referral form writes:
+        referring and receiving doctor by NPI, reason, diagnosis, risk. Raises httpx.HTTPError."""
+        pid = self._pid(self._require_patient(referral.patient_mrn))
+        npis = self._rest.practitioner_npis()
+        payload = {
+            "type": "LBTref",
+            "groupname": "Default",
+            "title": "Referral",
+            "message": f"Referral to {referral.to_department}",
+            "body": referral.reason,
+            "referDiagnosis": referral.diagnosis or "",
+            "riskLevel": self.REFERRAL_RISK.get(referral.urgency, "Low"),
+            "referralDate": referral.referred_on.isoformat(),
+            "referByNpi": npis.get(referral.from_practitioner_id, ""),
+            "referToNpi": npis.get(referral.to_practitioner_id or "", ""),
+            "includeVitals": "0",
+        }
+        reference = self._rest.create_referral(pid, payload)
+        return f"openemr:patient/{pid}/transaction/{reference or ''}".rstrip("/")
 
     def request_appointment(self, request: AppointmentRequest) -> AppointmentRequestResult:
         """File the request on the chart for scheduling staff. Never creates a calendar

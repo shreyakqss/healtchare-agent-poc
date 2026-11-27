@@ -24,6 +24,7 @@ from app.models import (
     MedicalAttachment,
     PatientCase,
     PatientFact,
+    Referral,
     RoutingRecommendation,
     TriageResult,
     TriageRule,
@@ -45,6 +46,7 @@ from app.schemas.responses import (
     PatientRoutingResponse,
     PatientVisitItem,
     PreviousVisitResponse,
+    ReferralResponse,
     ReviewResponse,
     RoutingResponse,
     SessionResponse,
@@ -60,6 +62,7 @@ from app.services import (
     doctor_assistant_service,
     hospital_config,
     letterhead,
+    referral_service,
     slot_hold_service,
     visit_history,
 )
@@ -93,7 +96,8 @@ def _identity_done(db: Session, case: PatientCase) -> bool:
 def attachment_out(a: MedicalAttachment) -> AttachmentResponse:
     return AttachmentResponse(
         id=str(a.id), case_id=str(a.case_id), kind=a.kind, filename=a.filename, mime_type=a.mime_type, size_bytes=a.size_bytes,
-        has_text=bool(a.extracted_text), extracted_text=a.extracted_text, uploaded_by=a.uploaded_by, created_at=a.created_at,
+        has_text=bool(a.extracted_text), extracted_text=a.extracted_text,
+        extracted_medications=list(a.extracted_medications or []), uploaded_by=a.uploaded_by, created_at=a.created_at,
     )
 
 
@@ -250,6 +254,27 @@ def audit_out(e: AuditEvent) -> AuditEventResponse:
     return AuditEventResponse(id=str(e.id), actor=e.actor, action=e.action, payload=e.payload or {}, created_at=e.created_at)
 
 
+def referral_out(db: Session, r: Referral | None, with_source: bool = False) -> ReferralResponse | None:
+    if r is None:
+        return None
+    return ReferralResponse(
+        source_report=referral_service.source_report(db, r) if with_source else None,
+        id=str(r.id), source_case_id=str(r.source_case_id), case_id=str(r.case_id),
+        from_doctor_name=r.from_doctor_name, from_department_name=r.from_department_name,
+        to_department_id=r.to_department_id, to_department_name=r.to_department_name,
+        to_doctor_name=r.to_doctor_name, reason=r.reason, question=r.question, urgency=r.urgency,
+        hms_recorded=bool(r.hms_reference), created_at=r.created_at, **referral_service.state(db, r),
+    )
+
+
+def _referred_by(db: Session, case_ids: list[uuid.UUID]) -> dict[uuid.UUID, str | None]:
+    """"Dr X, General Medicine" per referred visit - who referred, never why."""
+    if not case_ids:
+        return {}
+    rows = db.query(Referral).filter(Referral.case_id.in_(case_ids)).all()
+    return {r.case_id: referral_service.referred_by(r) for r in rows}
+
+
 def case_detail(db: Session, case: PatientCase) -> CaseDetailResponse:
     session = case_repo.session_for(db, case)
     return CaseDetailResponse(
@@ -277,6 +302,8 @@ def case_detail(db: Session, case: PatientCase) -> CaseDetailResponse:
                             for m in doctor_assistant_service.history(db, case.id)],
         visit_type=case.visit_type,
         previous_visit=previous_visit_out(visit_history.previous_visit(db, case)),
+        referral=referral_out(db, referral_service.incoming(db, case.id), with_source=True),
+        referrals_made=[referral_out(db, r) for r in referral_service.outgoing(db, case.id)],
         review=review_out(case_repo.latest_review(db, case.id)),
         consultation_notes=[note_out(n) for n in case_repo.notes(db, case.id)],
         final_summary=summary_out(case_repo.summary(db, case.id, "final_visit")),
@@ -304,6 +331,7 @@ def patient_case_detail(db: Session, case: PatientCase) -> PatientCaseResponse:
         consultation_mode=notes[-1].consultation_mode if notes else None,
         appointment_reference=tasks[0].hms_reference if tasks else None,
         has_letterhead=letterhead.exists(case.hospital_id),
+        referred_by=referral_service.referred_by(referral_service.incoming(db, case.id)),
         created_at=case.created_at,
     )
 
@@ -376,6 +404,7 @@ def patient_case_list(db: Session, cases: list[PatientCase]) -> list[PatientVisi
         .all()
     )
     parents: dict[uuid.UUID, visit_history.PreviousVisit] = {}
+    referred = _referred_by(db, case_ids)
     items = []
     for case in cases:
         session = sessions[case.session_id]
@@ -393,6 +422,7 @@ def patient_case_list(db: Session, cases: list[PatientCase]) -> list[PatientVisi
                 **_follow_up_fields(db, case, parents),
                 department_name=case_routing.department_name if case_routing else None,
                 doctor_name=case_routing.doctor_name if case_routing else None,
+                referred_by=referred.get(case.id),
                 created_at=case.created_at,
                 updated_at=updated.get(case.id),
             )
@@ -450,6 +480,7 @@ def case_list(db: Session, cases: list[PatientCase] | None = None) -> list[CaseL
         .all()
     )
     required_fields = hospital_config.required_intake_fields()
+    referred = _referred_by(db, case_ids)
     for case in rows:
         session = sessions.get(case.session_id)
         case_triage = triage.get(case.id)
@@ -476,6 +507,7 @@ def case_list(db: Session, cases: list[PatientCase] | None = None) -> list[CaseL
             emergency=case.emergency_flagged_at is not None,
             appointment_start=_appointment_start(case_routing, task),
             appointment_booked=case.hms_appointment_id is not None,
+            referred_by=referred.get(case.id),
             created_at=case.created_at, updated_at=updated.get(case.id),
         ))
     return items

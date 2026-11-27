@@ -111,7 +111,7 @@ export function VisitsPanel({ currentCaseId, currentVisitType = "new", currentPr
             return (
               <li key={visit.case_id} className={cn(
                 "overflow-hidden rounded-lg border border-line bg-surface shadow-card",
-                visit.visit_type === "follow_up" && "border-l-4 border-l-brand",
+                (visit.visit_type === "follow_up" || visit.visit_type === "referral") && "border-l-4 border-l-brand",
               )}>
                 <VisitHeader visit={visit} current={visit.case_id === currentCaseId} open={isOpen}
                   onToggle={() => (isOpen ? setOpen(null) : void load(visit.case_id))} />
@@ -148,6 +148,7 @@ function VisitHeader({ visit, current, open, onToggle }: {
   visit: PatientVisitItem; current: boolean; open: boolean; onToggle: () => void;
 }) {
   const followUp = visit.visit_type === "follow_up";
+  const referred = visit.visit_type === "referral";
   const stage = STAGE[visit.status];
   const where = [visit.department_name, visit.doctor_name].filter(Boolean).join(" · ");
   return (
@@ -155,14 +156,21 @@ function VisitHeader({ visit, current, open, onToggle }: {
       className="flex w-full items-start justify-between gap-3 px-4 py-3.5 text-left hover:bg-sunken">
       <span className="min-w-0 space-y-1">
         <span className="flex flex-wrap items-center gap-2">
-          <Badge tone={followUp ? "brand" : "neutral"}>
-            {followUp ? <><Icons.refresh size={11} /> Follow-up</> : <><Icons.plus size={11} /> New visit</>}
+          <Badge tone={followUp || referred ? "brand" : "neutral"}>
+            {followUp ? <><Icons.refresh size={11} /> Follow-up</>
+              : referred ? <><Icons.arrowRight size={11} /> Referral</>
+              : <><Icons.plus size={11} /> New visit</>}
           </Badge>
           {current ? <Badge tone="info" dot>Current</Badge> : stage ? <Badge tone={stage.tone}>{stage.label}</Badge> : null}
         </span>
         <span className="block truncate text-sm font-semibold">
           {visit.complaint ?? (current ? "Visit in progress" : "Visit")}
         </span>
+        {referred && visit.referred_by ? (
+          <span className="block text-xs text-fg-muted">
+            Referred by <span className="font-medium text-fg">{visit.referred_by}</span>
+          </span>
+        ) : null}
         {followUp && visit.follow_up_title ? (
           <span className="block text-xs text-fg-muted">
             Follow-up to <span className="font-medium text-fg">{visit.follow_up_title}</span>

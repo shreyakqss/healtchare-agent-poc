@@ -94,6 +94,18 @@ class ConsultationNoteRequest(BaseModel):
     patient_report: str | None = None
 
 
+class ReferralRequest(BaseModel):
+    """Signed like a consultation note: the referring doctor's HMS login."""
+
+    doctor_username: str = Field(min_length=1, max_length=64)
+    doctor_password: str = Field(min_length=1)
+    to_department_id: str = Field(min_length=1, max_length=64)
+    to_doctor_id: str | None = Field(default=None, max_length=64)
+    reason: str = Field(min_length=3, max_length=2000)
+    question: str | None = Field(default=None, max_length=2000)
+    urgency: Literal["routine", "soon", "urgent"] = "routine"
+
+
 class AppointmentSlotRequest(BaseModel):
     slot_id: str = Field(min_length=1, max_length=64)
 
