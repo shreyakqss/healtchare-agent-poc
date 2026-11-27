@@ -129,29 +129,46 @@ async def _summarise_one(a: MedicalAttachment, reason: str) -> dict:
     return {**base, "status": "read", **result.model_dump()}
 
 
-async def read_case(db: Session, case_id: uuid.UUID, actor: str) -> ClinicalSummary | None:
+async def read_case(db: Session, case_id: uuid.UUID, actor: str, *, only_new: bool = False) -> ClinicalSummary | None:
     """Read every attachment once: images and scans by the model looking at them (at most
     FILE_READ_MAX_FILES), typed documents summarised from their text (at most MAX_TEXT_DOCS).
-    None when nothing is attached."""
+    None when there is nothing (new) to read.
+
+    `only_new` (the doctor regenerating the AI diagnosis): keep the earlier reads and read only
+    what they do not cover - files uploaded after pre-screening, and ones whose read failed -
+    within what is left of the caps. A new summary row holds the merged reads."""
     files, texts = unread(db, case_id), with_text(db, case_id)
+    earlier: list[dict] = []
+    if only_new:
+        previous = case_repo.summary(db, case_id, KIND)
+        earlier = [r for r in ((previous.sections.get("reads") if previous else None) or [])
+                   if r.get("status") != "unavailable"]
+        covered = {r["attachment_id"] for r in earlier}
+        files = [a for a in files if str(a.id) not in covered]
+        texts = [a for a in texts if str(a.id) not in covered]
     if not files and not texts:
         return None
-    limit = settings.FILE_READ_MAX_FILES
+    used_files = sum(1 for r in earlier if r.get("source") != "text" and r.get("status") == "read")
+    used_texts = sum(1 for r in earlier if r.get("source") == "text" and r.get("status") == "read")
+    limit = max(settings.FILE_READ_MAX_FILES - used_files, 0)
+    text_limit = max(MAX_TEXT_DOCS - used_texts, 0)
     reason = "; ".join(f.value for f in case_repo.facts(db, case_id) if f.kind == "reason_for_visit")
     reads = list(await asyncio.gather(
         *(_read_one(a, reason) for a in files[:limit]),
-        *(_summarise_one(a, reason) for a in texts[:MAX_TEXT_DOCS]),
+        *(_summarise_one(a, reason) for a in texts[:text_limit]),
     ))
     reads += [
         {"attachment_id": str(a.id), "filename": a.filename, "kind": a.kind, "status": "skipped",
-         "note": f"Not read: the AI reads at most {limit} files per visit."}
+         "note": f"Not read: the AI reads at most {settings.FILE_READ_MAX_FILES} files per visit."}
         for a in files[limit:]
     ]
     reads += [
         {"attachment_id": str(a.id), "filename": a.filename, "kind": a.kind, "status": "skipped", "source": "text",
          "note": f"Not summarised: at most {MAX_TEXT_DOCS} documents per visit; the text is still on file."}
-        for a in texts[MAX_TEXT_DOCS:]
+        for a in texts[text_limit:]
     ]
+    new_count = len(reads)
+    reads = earlier + reads
     done = sum(1 for r in reads if r["status"] == "read")
     summary = ClinicalSummary(
         case_id=case_id, kind=KIND, sections={"label": LABEL, "reads": reads},
@@ -160,7 +177,7 @@ async def read_case(db: Session, case_id: uuid.UUID, actor: str) -> ClinicalSumm
     db.add(summary)
     # Counts only: the read itself is clinical content and lives on the summary.
     audit.record(db, case_id, actor, "file_read.completed", {
-        "files": len(reads), "read": done,
+        "files": len(reads), "read": done, "new": new_count, "only_new": only_new,
         "skipped": sum(1 for r in reads if r["status"] == "skipped"),
         "unavailable": sum(1 for r in reads if r["status"] == "unavailable"),
     })

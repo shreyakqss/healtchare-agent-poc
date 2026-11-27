@@ -222,3 +222,31 @@ def test_full_journey_with_real_models(client):
     assert back["status"] == "completed"
 
     print("\nLIVE E2E REPORT\n" + "\n".join(REPORT))
+
+
+def test_late_upload_is_read_when_the_doctor_regenerates(client):
+    """An X-ray added after pre-screening reaches the AI differential on Regenerate."""
+    sid, cid = new_identified_session(client)
+    r = client.post(f"{BASE}/intake-sessions/{sid}/messages",
+                    json={"content": "fever and cough with yellow phlegm for five days"}).json()
+    for _ in range(20):
+        if r["intake_complete"]:
+            break
+        r = client.post(f"{BASE}/intake-sessions/{sid}/messages", json={"content": answer(r["reply"])}).json()
+    assert r["intake_complete"]
+    detail = wait_for_status(client, cid, "NEEDS_REVIEW", timeout_s=300)
+    assert not (detail.get("file_reads") or {}).get("sections", {}).get("reads")  # nothing uploaded yet
+
+    with open(FILES / "chest_xray_synthetic.png", "rb") as fh:
+        up = client.post(f"{BASE}/cases/{cid}/attachments", files={"file": ("late_xray.png", fh, "image/png")},
+                         data={"kind": "radiology", "uploaded_by": "patient"})
+    assert up.status_code == 201, up.text
+    diag = _timed("regenerate with a late upload", lambda: client.post(f"{BASE}/cases/{cid}/ai-diagnosis"))
+    assert diag.status_code == 200, diag.text
+    reads = client.get(f"{BASE}/cases/{cid}").json()["file_reads"]["sections"]["reads"]
+    late = next(r for r in reads if r["filename"] == "late_xray.png")
+    log(f"late upload read on regenerate: {late['status']} - {late.get('impression')}")
+    assert late["status"] == "read"
+    text = str(diag.json()["sections"]).lower()
+    log("differential after the late X-ray: " + "; ".join(d["condition"] for d in diag.json()["sections"]["differentials"]))
+    assert "x-ray" in text or "opacity" in text or "consolidation" in text, text[:500]

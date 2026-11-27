@@ -87,6 +87,8 @@ tokens must never be exposed to browser code or storage.
   A prescription uploaded during intake has its medicine names read at upload - from the text, or from a photo/scan
   by the model inside the same limits and 30s cap - and the intake assistant asks the patient whether they take
   them; only the patient's answer creates medication entries.
+  Regenerating the AI diagnosis first reads uploads its reads do not cover (added after pre-screening, or whose
+  read failed) within what is left of the caps (`read_case(only_new=True)`); earlier reads are kept, not redone.
 - The consultation report (`services/report_service`, `agents/report_writer`) may be AI-drafted and AI-edited, but
   only as proposals returned to the doctor's form: nothing is stored until the doctor signs with their HMS password,
   the AI never writes examination findings, and the audit records which sections were still AI-written at signing.

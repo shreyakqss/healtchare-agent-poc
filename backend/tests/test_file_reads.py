@@ -174,3 +174,35 @@ def test_photographed_prescription_medicines_are_read_from_the_image(monkeypatch
         raise AgentUnavailable("down")
     monkeypatch.setattr(attachment_service, "extract_medications_from_file", down)
     assert asyncio.run(attachment_service._prescription_medicines(None, b"png", "image/png")) == ([], "none")
+
+
+def test_regenerate_reads_only_late_or_failed_uploads(monkeypatch, sent):
+    def att(name):
+        return SimpleNamespace(id=uuid.uuid4(), filename=name, kind="radiology", mime_type="image/png",
+                               storage_uri=name, extracted_text=None)
+    a, b, c = att("a.png"), att("b.png"), att("c.png")
+    earlier = [
+        {"attachment_id": str(a.id), "filename": "a.png", "kind": "radiology", "status": "read", "source": "file",
+         "what_it_is": "Chest X-ray"},
+        {"attachment_id": str(b.id), "filename": "b.png", "kind": "radiology", "status": "unavailable", "source": "file"},
+    ]
+    monkeypatch.setattr(svc, "unread", lambda db, cid: [a, b, c])
+    monkeypatch.setattr(svc, "with_text", lambda db, cid: [])
+    monkeypatch.setattr(svc, "_prepare", lambda att: (att.filename.encode(), {}))
+    monkeypatch.setattr(svc.case_repo, "facts", lambda db, cid: [])
+    monkeypatch.setattr(svc.case_repo, "summary", lambda db, cid, kind: SimpleNamespace(sections={"reads": earlier}))
+    monkeypatch.setattr(svc.audit, "record", lambda *a, **k: None)
+    added: list = []
+    db = SimpleNamespace(add=added.append)
+
+    summary = asyncio.run(svc.read_case(db, uuid.uuid4(), "doctor:x", only_new=True))
+    assert sorted(call["content"] for call in sent) == [b"b.png", b"c.png"]  # a was not sent again
+    by_id = {r["attachment_id"]: r for r in summary.sections["reads"]}
+    assert by_id[str(a.id)]["what_it_is"] == "Chest X-ray"  # the earlier read is kept
+    assert by_id[str(b.id)]["status"] == "read" and by_id[str(c.id)]["status"] == "read"
+    assert added == [summary]
+
+    # Nothing new: no model call, no new row.
+    monkeypatch.setattr(svc.case_repo, "summary", lambda db, cid, kind: summary)
+    sent.clear()
+    assert asyncio.run(svc.read_case(db, uuid.uuid4(), "doctor:x", only_new=True)) is None and sent == []

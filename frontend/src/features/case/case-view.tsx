@@ -68,7 +68,7 @@ export function CaseView({ initialCase, doctorContext, me, hospital, departments
         key={tab}
       >
         {tab === "overview" && <OverviewTab detail={detail} onOpenDiagnosis={() => setTab("diagnosis")} />}
-        {tab === "diagnosis" && <DiagnosisTab detail={detail} doctorContext={doctorContext} onChanged={(s) => setDetail({ ...detail, ai_diagnosis: s })} onOpenReport={() => setTab("review")} />}
+        {tab === "diagnosis" && <DiagnosisTab detail={detail} doctorContext={doctorContext} onChanged={(s) => setDetail({ ...detail, ai_diagnosis: s })} onRegenerated={() => void refresh()} onOpenReport={() => setTab("review")} />}
         {tab === "records" && <RecordsTab detail={detail} />}
         {tab === "review" && <ReviewTab detail={detail} me={me} onChanged={refresh} hospital={hospital} departments={departments} doctors={doctors} />}
         {tab === "conversation" && <TranscriptTab detail={detail} />}
