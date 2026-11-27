@@ -598,18 +598,26 @@ class FhirHMS:
         """Write clinician-approved intake as chart rows plus a faithful JSON note.
 
         Only ever called from finalisation, after a clinician approved the case and
-        recorded consultation notes. Patient-stated rows only - HMS imports are not
-        echoed back to the HMS.
+        recorded consultation notes. Patient-stated allergies and medicines (HMS imports are
+        not echoed back), and the problems the doctor signed under Past history; anything
+        already on the chart is skipped.
         """
         patient = self._require_patient(mrn)
         patient_uuid = patient["id"]
         pid = self._pid(patient)
         self._record_visit(patient_uuid, pid, payload)
-        for fact in payload.get("facts", []):
-            if fact.get("source") == "patient" and fact.get("kind") in {"history", "condition"}:
-                self._rest.create_medical_problem(patient_uuid, fact["value"])
+        # Already on the chart (an earlier visit, or entered in OpenEMR): not written twice.
+        current = self.get_patient(mrn)
+        on_chart = {
+            kind: {x.strip().lower() for x in (getattr(current, attr, None) or [])}
+            for kind, attr in (("problem", "conditions"), ("allergy", "allergies"), ("medication", "medications"))
+        }
+        # Problems come from the Past history the doctor signed, never raw intake facts.
+        for title in payload.get("problems", []):
+            if title.lower() not in on_chart["problem"]:
+                self._rest.create_medical_problem(patient_uuid, title)
         for entry in payload.get("entries", []):
-            if entry.get("source") != "patient":
+            if entry.get("source") != "patient" or entry["name"].strip().lower() in on_chart.get(entry.get("kind"), set()):
                 continue
             if entry.get("kind") == "allergy":
                 self._rest.create_allergy(patient_uuid, entry["name"], entry.get("reaction_or_dose"))

@@ -36,6 +36,9 @@ INSTRUCTIONS = [
     "If something the patient said could be an emergency (severe breathing difficulty, drooling or unable to "
     "swallow saliva, confusion, chest pain with sweating, blood in vomit), make the question tell them to seek "
     "emergency care now.",
+    "On a follow-up visit, first ask about anything the previous visit asked the patient to bring or do: results "
+    "of advised tests (e.g. the urine culture report), whether the prescribed medicines were completed, and any "
+    "side effects, unless already answered.",
     "Set done to true when the doctor already has enough to form a differential, or nothing further would change it.",
     "Use plain warm language; markdown **bold** is allowed for one key word. Never use an em dash.",
 ]

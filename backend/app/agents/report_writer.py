@@ -22,6 +22,8 @@ COMMON = [
     "Only advice and follow-up are written for the patient, in short plain-language lines.",
     "Never invent examination findings, vitals or results. Examination is the doctor's alone.",
     "Respect recorded allergies and intolerances and current medications (interactions).",
+    "Something merely absent from the hospital record is never a discrepancy or a safety alert: "
+    "patient-reported allergies are real until disproved; confirm their reaction type, nothing more.",
     "Never use an em dash; use a comma, period or parenthesis instead.",
     "Every section is plain text printed on the clinic's letterhead: one item per line, no markdown at all - "
     "no tables, pipes, headings, bold, italics, bullets or numbering symbols.",

@@ -329,7 +329,13 @@ async def draft_report(step_input: StepInput) -> StepOutput:
         if cached := completed_step(db, step_input, "draft_report"):
             return StepOutput(content=cached)
         try:
-            await report_service.write_draft(db, case_id, "system:report_writer")
+            try:
+                await report_service.write_draft(db, case_id, "system:report_writer")
+            except AgentUnavailable as first:
+                # One retry: a slow or dropped model call is usually transient, and an empty form
+                # costs the doctor far more than a second attempt.
+                logger.info("Report writer retry after %s", type(first).__name__)
+                await report_service.write_draft(db, case_id, "system:report_writer")
             result = {"generated_by": "llm"}
         except AgentUnavailable as exc:
             logger.warning("Report writer unavailable (%s)", type(exc).__name__)

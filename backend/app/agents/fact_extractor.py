@@ -44,7 +44,15 @@ INSTRUCTIONS = [
     'Example - "I have asthma, I take a salbutamol inhaler twice a day and I\'m allergic to penicillin" -> '
     'facts: [history "asthma"]; allergies_medications: [medication "salbutamol inhaler" (twice a day), '
     'allergy "penicillin"].',
-    "Every medicine named goes in allergies_medications as a medication; every allergy as an allergy.",
+    "Every medicine the patient currently takes goes in allergies_medications as a medication; every allergy as "
+    "an allergy.",
+    "A side effect or intolerance (nausea, upset stomach, drowsiness, headache from a medicine) is NOT an allergy: "
+    "record it as a symptom fact in the patient's words, e.g. 'nausea with nitrofurantoin'. Only a reaction the "
+    "patient calls an allergy, or an immune-type reaction (rash, hives, swelling, breathing difficulty), is an allergy.",
+    "An allergy's reaction (e.g. 'rash' from co-trimoxazole) goes only in that allergy entry's reaction_or_dose, "
+    "never also as a symptom fact: it is a past reaction, not a current complaint.",
+        "A medicine the patient has finished or stopped is not a current medication: record it as a history fact, "
+    "e.g. 'completed nitrofurantoin course'.",
     "A vague reference to medications without naming any ('just the prescribed ones', 'whatever the doctor "
     "gave me', 'my usual') is not a medication name - never invent an entry from it. Leave allergies_medications "
     "empty for that reply; the assistant will ask which ones by name.",

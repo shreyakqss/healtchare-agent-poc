@@ -586,7 +586,9 @@ def test_sync_reviewed_intake_writes_patient_stated_rows_only():
     hms = _client()
     calls = []
     payload = {
-        "facts": [{"kind": "history", "value": "asthma", "source": "patient"}, {"kind": "history", "value": "imported", "source": "hms"}],
+        "facts": [{"kind": "history", "value": "asthma", "source": "patient"}, {"kind": "history", "value": "imported", "source": "hms"},
+                  {"kind": "history", "value": "last period 2 weeks ago", "source": "patient"}],
+        "problems": ["asthma"],
         "entries": [{"kind": "allergy", "name": "penicillin", "reaction_or_dose": "rash", "source": "patient"},
                     {"kind": "medication", "name": "inhaler", "reaction_or_dose": None, "source": "patient"}],
     }

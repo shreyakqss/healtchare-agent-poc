@@ -92,6 +92,10 @@ tokens must never be exposed to browser code or storage.
   rule names one, and lists/holds that visit's doctor first (`routing.doctor_first`); the patient may still pick
   any of the department's doctors. Only what the doctor signed (diagnosis, prescription, tests, advice) is carried
   over - to the intake planner and the clinician agents/case view - never the AI differential or referral notes.
+- The hospital chart is written only at release (`OpenEMRClient.sync_reviewed_intake`): patient-stated allergies
+  and medicines, and the medical problems the doctor signed under "Past history" (`intake_sync.signed_problems`) -
+  never raw intake history facts. Anything already on the chart is skipped. Until a visit is released the chart is
+  legitimately empty; `case_context` says so and the agents must not report that as a discrepancy.
 - Reviewer edits go to `ClinicalReview.edits`; `PatientFact` rows are never rewritten. HMS imports are
   `source=hms`; patient statements are `source=patient`.
 - Uploaded document text may ground patient answers but never becomes a fact or reaches `triage_engine.evaluate()`.

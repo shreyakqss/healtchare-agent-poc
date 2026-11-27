@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.agents import doctor_assistant
 from app.domain import scheduling
-from app.models import DoctorAssistantMessage, PatientCase
+from app.models import DoctorAssistantMessage, IntakeSession, PatientCase
 from app.services import case_repo, visit_history
 
 # The intake conversation is the patient's own account; cap it so a long chat cannot crowd out
@@ -43,6 +43,12 @@ def case_context(db: Session, case_id: uuid.UUID, *, with_diagnosis: bool = True
     patient = ", ".join(f"{k} {v[0]}" for k in ("age", "gender") if (v := captured.get(k)))
     if patient:
         lines.append(f"Patient: {patient}")
+    if not _has_released_visit(db, case):
+        lines.append(
+            "Hospital record: no released visit yet, so patient-reported allergies, medicines and history are not on "
+            "the hospital chart (they are written when a doctor releases a visit). An empty record is expected, not a "
+            "discrepancy; treat these as patient-reported, to be confirmed at the consultation."
+        )
     if previous := visit_history.previous_visit(db, case):
         lines.append("FOLLOW-UP of the patient's previous visit (signed by the treating doctor):\n"
                      + visit_history.context_text(previous))
@@ -101,6 +107,19 @@ def case_context(db: Session, case_id: uuid.UUID, *, with_diagnosis: bool = True
     if transcript := _intake_transcript(db, case):
         lines.append(f"Intake conversation (patient's own words):\n{transcript}")
     return "\n".join(lines) or "No case details recorded yet."
+
+
+def _has_released_visit(db: Session, case: PatientCase) -> bool:
+    """Whether any other visit of this hospital record has been released (and so written to it)."""
+    if not case.hms_patient_id:
+        return False
+    return (
+        db.query(PatientCase.id)
+        .join(IntakeSession, IntakeSession.id == PatientCase.session_id)
+        .filter(PatientCase.hms_patient_id == case.hms_patient_id, PatientCase.id != case.id,
+                IntakeSession.status == "COMPLETED")
+        .first()
+    ) is not None
 
 
 def _reports(db: Session, case_id: uuid.UUID) -> str:

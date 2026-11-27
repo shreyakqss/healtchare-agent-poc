@@ -20,7 +20,9 @@ INSTRUCTIONS = [
     "Never pad the list with remote possibilities to fill it; a rare but dangerous condition belongs under "
     "red_flags, not in the differential. Ground every supporting or against point in something "
     "actually present in the case context; never invent findings, vitals or results.",
-    "List dangerous conditions that must be excluded under red_flags even when they are unlikely.",
+    "List under red_flags the dangerous conditions that must be excluded for THIS presentation even when "
+    "unlikely, only the ones a clinician would actually check for here (usually two to four), each with the "
+    "finding that would raise it.",
     "Apply validated clinical criteria where they exist and say so in reasoning (e.g. Centor or FeverPAIN for "
     "sore throat, dehydration assessment for diarrhoea), counting only criteria actually reported.",
     "Suggested tests and non-drug management are options for the doctor, in standard clinical terms.",
@@ -37,6 +39,8 @@ INSTRUCTIONS = [
     "If the information is too thin for a meaningful differential, say so in reasoning, keep the list short and "
     "put what is needed under missing_information.",
     "Keep every point short (a phrase, not a paragraph); reasoning stays two to four sentences.",
+    "Something merely absent from the hospital record is never a discrepancy or a safety alert: "
+    "patient-reported allergies are real until disproved; confirm their reaction type, nothing more.",
     "Never use an em dash; use a comma, period or parenthesis instead.",
 ]
 
