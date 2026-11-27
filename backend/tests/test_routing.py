@@ -182,3 +182,36 @@ def test_rationale_shows_ai_reason_and_rules_alternative():
     d2 = route([F("symptom", "chest pain")], AI_CLINIC, "high")
     d2.ai_status = "unavailable"
     assert "AI router was unavailable" in d2.rationale
+
+
+TIE_CONFIG = {
+    "departments": [{"id": "general", "name": "General", "default": True},
+                    {"id": "pulmo", "name": "Pulmonology"}, {"id": "cardio", "name": "Cardiology"},
+                    {"id": "derm", "name": "Dermatology"}],
+    "doctors": [{"id": "g1", "name": "Dr G", "department_id": "general"},
+                {"id": "p1", "name": "Dr P", "department_id": "pulmo"},
+                {"id": "c1", "name": "Dr C", "department_id": "cardio"}],
+    "specialty_map": {"cardio": ["breathlessness", "heart failure"], "pulmo": ["breathlessness", "asthma"],
+                      "derm": ["rash"]},
+    "appointment_types": [{"id": "routine_followup", "label": "Routine"}],
+}
+
+
+def test_history_breaks_a_tie_only():
+    # Breathlessness matches both; a history of asthma tips it to Pulmonology (Cardiology comes first otherwise).
+    tied = route([F("symptom", "breathlessness")], TIE_CONFIG, "low")
+    assert tied.department["id"] == "cardio"
+    d = route([F("symptom", "breathlessness"), F("history", "asthma")], TIE_CONFIG, "low")
+    assert d.department["id"] == "pulmo"
+
+
+def test_history_alone_never_routes():
+    d = route([F("symptom", "knee pain"), F("history", "asthma")], TIE_CONFIG, "low")
+    assert d.department["id"] == "general" and d.basis == "default"
+
+
+def test_department_without_doctors_falls_back_to_default():
+    d = route([F("symptom", "itchy rash")], TIE_CONFIG, "low")
+    assert d.department["id"] == "general" and d.unstaffed == "Dermatology" and d.doctors
+    assert "Dermatology has no doctor rostered, so General sees the case" in d.rationale
+    assert d.rationale.startswith("Routed to Dermatology")

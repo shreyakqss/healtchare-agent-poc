@@ -3,9 +3,9 @@ import { FIELD_LABEL } from "@/lib/constants";
 import { Icons } from "@/components/ui/icons";
 import { cn, progressWidth } from "@/lib/utils";
 
-export function IntakeProgress({ requiredFields, missingFields, capturedFields, complete, fallbackMode }: {
+export function IntakeProgress({ requiredFields, missingFields, capturedFields, complete, documentsPending, fallbackMode }: {
   requiredFields: string[]; missingFields: string[] | null; capturedFields: Record<string, string[]>;
-  complete: boolean; fallbackMode: boolean;
+  complete: boolean; documentsPending: number; fallbackMode: boolean;
 }) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const started = missingFields !== null;
@@ -74,7 +74,15 @@ export function IntakeProgress({ requiredFields, missingFields, capturedFields, 
           })}
           {!requiredFields.length ? <li className="text-sm text-fg-muted">Checklist unavailable.</li> : null}
         </ul>
-        {complete ? <p className="mt-3 text-xs text-success">All set. Your answers are with the care team.</p> : null}
+        {/* The case reaches the care team only once required documents are added or skipped too. */}
+        {complete && documentsPending > 0 ? (
+          <p className="mt-3 text-xs text-fg-muted">
+            Questions done. Add or skip the {documentsPending === 1 ? "document" : `${documentsPending} documents`} asked
+            for, and your case goes to the care team.
+          </p>
+        ) : complete ? (
+          <p className="mt-3 text-xs text-success">All set. Your answers are with the care team.</p>
+        ) : null}
       </section>
 
       {anyCaptured ? (

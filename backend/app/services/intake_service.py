@@ -86,6 +86,13 @@ CLOSING_WITH_GAPS = (
     "Thank you - I will pass on what you have told me. Anything still missing will be picked up "
     "by the clinician who reviews your case."
 )
+# Consecutive turns the model could not understand before intake closes with what it has, so a
+# patient is never stuck on "try again" while the model is down.
+MAX_FAILED_TURNS = 3
+CLOSING_ASSISTANT_DOWN = (
+    "Sorry, the assistant is having trouble right now, so I will stop the questions here and pass on "
+    "what you have told me. The clinician who reviews your case will ask about anything still missing."
+)
 GREETING = (
     "Hello, I am the clinic's intake assistant. Tell me what brings you in today, in your own words. "
     "I will ask a few short questions and a clinician will review everything before any decision is made."
@@ -383,6 +390,29 @@ def _settle_last_question(
     db.commit()
 
 
+def _close_unasked(db: Session, case: PatientCase, turn_index: int) -> list[str]:
+    """Intake is ending with required fields still open: close each with NOT_ASKED so the case
+    passes the completeness gate and reaches a clinician (pre-screening still lists them as not
+    collected). Returns the fields closed."""
+    open_fields = case_repo.missing_clinical_fields(db, case.id)
+    for field in open_fields:
+        if field in intake_fields.ENTRY_FIELDS:
+            db.add(AllergyMedication(case_id=case.id, kind=field, name=intake_fields.NOT_ASKED, source_turn=turn_index))
+        else:
+            db.add(PatientFact(case_id=case.id, kind=field, value=intake_fields.NOT_ASKED, source_turn=turn_index))
+    return open_fields
+
+
+def _failed_streak(db: Session, session: IntakeSession) -> int:
+    """How many of the latest assistant turns in a row were 'could not process that message'."""
+    streak = 0
+    for m in reversed([m for m in case_repo.messages(db, session.id) if m.role == "assistant"]):
+        if m.content != UNDERSTANDING_UNAVAILABLE:
+            break
+        streak += 1
+    return streak
+
+
 def _clinic_term(proposed: str, vocabulary: list[str]) -> str:
     """Keep the label only when it is a term the clinic actually configured.
 
@@ -610,6 +640,8 @@ async def _process_turn(db: Session, session: IntakeSession, case: PatientCase, 
 
     if emergency is not None:
         reply, complete, planner_mode = emergency_stop(), True, "emergency"
+    elif extraction is None and _failed_streak(db, session) + 1 >= MAX_FAILED_TURNS:
+        reply, complete, planner_mode = CLOSING_ASSISTANT_DOWN, True, "fallback"
     elif extraction is None:
         reply, complete, planner_mode = UNDERSTANDING_UNAVAILABLE, False, "fallback"
         yield TurnEvent(type="token", text=reply)
@@ -681,6 +713,10 @@ async def _process_turn(db: Session, session: IntakeSession, case: PatientCase, 
                 yield TurnEvent(type="token", text=reply)
                 reply_streamed = True
 
+    # Whatever ended intake (question cap, model down), a case that closes with fields open must
+    # still reach a clinician: the completeness gate would otherwise hold it forever.
+    # `outstanding` stays as it was: the patient's checklist still shows those fields as not collected.
+    unasked = _close_unasked(db, case, turn_index) if complete and emergency is None else []
     if complete and not reply_streamed:
         yield TurnEvent(type="token", text=reply)
     if emergency is not None:
@@ -704,6 +740,7 @@ async def _process_turn(db: Session, session: IntakeSession, case: PatientCase, 
             "planner": planner_mode,
             "asks_field": asks_field,
             "intake_complete": complete,
+            "closed_unasked": unasked,
         },
     )
     db.commit()
@@ -719,6 +756,6 @@ async def _process_turn(db: Session, session: IntakeSession, case: PatientCase, 
             missing_fields=outstanding,
             intake_complete=complete,
             transcript=_transcript(db, session.id),
-            captured_fields=case_repo.captured_fields(db, case.id),
+            captured_fields=case_repo.captured_for_display(db, case.id),
         ),
     )

@@ -15,6 +15,8 @@ from typing import Any, Protocol
 # Only the current complaint routes a visit: a past condition ("asthma") must not pull a knee-pain
 # visit to Pulmonology. Denied symptoms (`negative`) never match.
 ROUTING_KINDS = {"symptom", "reason_for_visit"}
+# Past conditions: a tie-break between departments the complaint already matched, nothing more.
+HISTORY_KINDS = {"history", "condition"}
 
 
 def _text(facts: list[Fact], kinds: set[str]) -> str:
@@ -53,13 +55,20 @@ class RoutingDecision:
     ai_status: str = ""  # "used" | "protected" | "invalid" | "unavailable"
     ai_reason: str = ""
     rules_department: str = ""  # what the keyword rules chose, when the AI's pick was used instead
+    unstaffed: str = ""  # the department first chosen, when it had no doctor and the default took over
+
+    @property
+    def _staffing(self) -> str:
+        return (f" {self.unstaffed} has no doctor rostered, so {self.department['name']} sees the case."
+                if self.unstaffed else "")
 
     @property
     def rationale(self) -> str:
         if self.basis == "ai":
             note = f" Clinic keyword rules suggested {self.rules_department}." if self.rules_department else ""
             base = (
-                f"Routed to {self.department['name']} by the AI router: {self.ai_reason.rstrip('.')}.{note} "
+                f"Routed to {self.unstaffed or self.department['name']} by the AI router: "
+                f"{self.ai_reason.rstrip('.')}.{note}{self._staffing} "
                 f"Appointment type: {self.appointment_type['label']}. Advisory only - staff may accept or override."
             )
             return self._with_assignment(base)
@@ -79,7 +88,7 @@ class RoutingDecision:
             "unavailable": " The AI router was unavailable, so the keyword rules decided.",
         }.get(self.ai_status, "")
         base = (
-            f"Routed to {self.department['name']} because {why}.{ai_note} "
+            f"Routed to {self.unstaffed or self.department['name']} because {why}.{self._staffing}{ai_note} "
             f"Appointment type: {self.appointment_type['label']}. "
             "Advisory only - staff may accept or override."
         )
@@ -192,14 +201,18 @@ def route(
         facts = list(facts)
         complaint = _text(facts, ROUTING_KINDS)
         reason = _text(facts, {"reason_for_visit"})
-        best_score = 0
+        history = _text(facts, HISTORY_KINDS)
+        best: tuple[int, int] = (0, 0)
         # The department with the most of its keywords in the current complaint wins (a match in
-        # the stated reason for the visit counts double); a tie keeps the specialty_map order.
+        # the stated reason for the visit counts double). Past history only breaks a tie between
+        # departments the complaint already matched - it never routes a visit on its own; a tie
+        # it does not break keeps the specialty_map order.
         for dep_id, keywords in (config.get("specialty_map") or {}).items():
             hits = [kw for kw in keywords if _mentions(complaint, kw)]
-            score = len(hits) + sum(1 for kw in hits if _mentions(reason, kw))
-            if hits and dep_id in by_id and score > best_score:
-                department, matched, basis, best_score = by_id[dep_id], hits, "keywords", score
+            score = (len(hits) + sum(1 for kw in hits if _mentions(reason, kw)),
+                     sum(1 for kw in keywords if _mentions(history, kw)))
+            if hits and dep_id in by_id and score > best:
+                department, matched, basis, best = by_id[dep_id], hits, "keywords", score
         infection = config.get("infection_routing") or {}
         signs = [s for s in infection.get("signs") or [] if _mentions(complaint, s)]
         if department is not None and signs and department["id"] in (infection.get("departments") or []):
@@ -208,7 +221,16 @@ def route(
     if department is None:
         department = default_department
 
-    doctors = [d for d in config.get("doctors") or [] if d.get("department_id") == department["id"]]
+    def rostered(dep: dict[str, Any]) -> list[dict[str, Any]]:
+        return [d for d in config.get("doctors") or [] if d.get("department_id") == dep["id"]]
+
+    doctors = rostered(department)
+    unstaffed = ""
+    # A department nobody is rostered in would leave the patient with no time to book: the
+    # default department sees the case instead (when it has a doctor), and the rationale says so.
+    if not doctors and department["id"] != default_department["id"] and rostered(default_department):
+        unstaffed, department = department["name"], default_department
+        doctors = rostered(department)
     # A placeholder until the caller, which can see calendars and case loads, assigns the
     # doctor with the earliest free time (see workflows/prescreen.navigate_care).
     doctor = doctors[0] if doctors else None
@@ -218,4 +240,4 @@ def route(
         (a for a in config.get("appointment_types") or [] if a["id"] == type_id),
         {"id": type_id, "label": type_id.replace("_", " ").title()},
     )
-    return RoutingDecision(department, doctor, appointment_type, matched, basis, doctors)
+    return RoutingDecision(department, doctor, appointment_type, matched, basis, doctors, unstaffed=unstaffed)

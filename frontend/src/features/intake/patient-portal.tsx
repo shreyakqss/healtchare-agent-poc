@@ -228,7 +228,7 @@ export function PatientPortal({
         {showProgress ? <aside className="lg:sticky lg:top-20 lg:self-start" aria-label="Intake progress">
           <div className="rounded-lg border border-line bg-surface p-5 shadow-card">
             <IntakeProgress requiredFields={initialRequiredFields} missingFields={state.missingFields} capturedFields={state.capturedFields}
-              complete={state.complete} fallbackMode={initialApiOnline && !initialLlmConfigured} />
+              complete={state.complete} documentsPending={pendingKinds.length} fallbackMode={initialApiOnline && !initialLlmConfigured} />
           </div>
         </aside> : null}
       </div>

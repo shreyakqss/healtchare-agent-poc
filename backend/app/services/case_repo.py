@@ -242,6 +242,32 @@ def missing_fields(db: Session, case_id: uuid.UUID) -> list[str]:
     )
 
 
+def unasked_fields(db: Session, case_id: uuid.UUID) -> list[str]:
+    """Required fields closed only because intake ended before they were asked (NOT_ASKED)."""
+    closed = {f.kind for f in facts(db, case_id) if f.value == intake_fields.NOT_ASKED}
+    closed |= {e.kind for e in entries(db, case_id) if e.name == intake_fields.NOT_ASKED}
+    return [f for f in hospital_config.required_intake_fields() if f in closed]
+
+
+def field_notes(db: Session, case_id: uuid.UUID) -> dict[str, str]:
+    """For a field closed by a sentinel and nothing else (a denial, a decline, never asked), how
+    to show it: "No known allergies (NKA)", "Declined to answer", "Not asked" - never a blank."""
+    real = captured_fields(db, case_id)
+    notes: dict[str, str] = {}
+    rows = [(f.kind, f.value) for f in facts(db, case_id)] + [(e.kind, e.name) for e in entries(db, case_id)]
+    for kind, value in rows:
+        if value in intake_fields.PLACEHOLDERS and kind not in real:
+            notes[kind] = intake_fields.display(kind, value)
+    return notes
+
+
+def captured_for_display(db: Session, case_id: uuid.UUID) -> dict[str, list[str]]:
+    """captured_fields for the patient's checklist: a field closed without a value shows its
+    label ("No known allergies (NKA)", "Not asked") instead of a blank tick. Display only -
+    agents read captured_fields, which never carries a sentinel."""
+    return {**{k: [v] for k, v in field_notes(db, case_id).items()}, **captured_fields(db, case_id)}
+
+
 def pending_attachment_kinds(db: Session, case_id: uuid.UUID) -> list[str]:
     """Required attachment kinds neither uploaded nor explicitly skipped."""
     required = hospital_config.required_attachment_kinds()

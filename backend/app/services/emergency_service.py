@@ -42,6 +42,8 @@ def render_note(db: Session, case: PatientCase, rule_codes: list[str]) -> str:
     tz_name = hospital_config.hospital().get("timezone") or "UTC"
     when = _local(case.emergency_flagged_at or utcnow(), tz_name)
     captured = case_repo.captured_fields(db, case.id)
+    # "No known allergies (NKA)" when the patient denied them; "(not given)" only when never answered.
+    notes = case_repo.field_notes(db, case.id)
     lines = [
         NOTE_TITLE, "=" * len(NOTE_TITLE), "",
         f"Flagged: {when} ({tz_name})",
@@ -54,11 +56,11 @@ def render_note(db: Session, case: PatientCase, rule_codes: list[str]) -> str:
     for label, kind in (("Age", "age"), ("Gender", "gender"), ("Reason for visit", "reason_for_visit"),
                         ("Symptoms", "symptom"), ("Duration", "duration"), ("History", "history")):
         values = [v for v in captured.get(kind) or [] if v not in PLACEHOLDERS]
-        lines.append(f"{label}: {', '.join(values) if values else '(not given)'}")
+        lines.append(f"{label}: {', '.join(values) if values else notes.get(kind, '(not given)')}")
     entries = [e for e in case_repo.clinical_entries(db, case.id) if e.name not in PLACEHOLDERS]
     for kind, label in (("medication", "Medications"), ("allergy", "Allergies")):
         named = [e.name + (f" ({e.reaction_or_dose})" if e.reaction_or_dose else "") for e in entries if e.kind == kind]
-        lines.append(f"{label}: {', '.join(named) if named else '(not given)'}")
+        lines.append(f"{label}: {', '.join(named) if named else notes.get(kind, '(not given)')}")
     session = case_repo.session_for(db, case)
     chat = [f"  {m.role}: {m.content}" for m in case_repo.messages(db, session.id) if m.turn_index > 0]
     lines += ["", "Intake conversation:", *(chat or ["  (none)"]), "", f"CareFlow case: {case.id}"]

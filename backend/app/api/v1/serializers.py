@@ -71,8 +71,10 @@ def session_out(db: Session, session: IntakeSession, case: PatientCase) -> Sessi
     return SessionResponse(
         session_id=str(session.id), case_id=str(case.id), status=session.status,
         consent_status=session.consent_status, demographics=case_repo.demographics(db, case.id),
-        hms_linked=bool(case.hms_patient_id), missing_fields=case_repo.missing_fields(db, case.id),
-        captured_fields=case_repo.captured_fields(db, case.id),
+        hms_linked=bool(case.hms_patient_id),
+        # Fields closed as "Not asked" stay unticked on the patient's checklist.
+        missing_fields=case_repo.missing_fields(db, case.id) + case_repo.unasked_fields(db, case.id),
+        captured_fields=case_repo.captured_for_display(db, case.id),
         required_attachment_kinds=hospital_config.required_attachment_kinds(),
         pending_attachment_kinds=case_repo.pending_attachment_kinds(db, case.id),
         past_attachments=[attachment_out(a) for a in case_repo.past_attachments(db, case.id)],
@@ -261,7 +263,7 @@ def case_detail(db: Session, case: PatientCase) -> CaseDetailResponse:
         allergies_medications=[EntryResponse(id=str(e.id), kind=e.kind, name=e.name, reaction_or_dose=e.reaction_or_dose, source=e.source, source_turn=e.source_turn)
                                for e in case_repo.entries(db, case.id)],
         attachments=[attachment_out(a) for a in case_repo.attachments(db, case.id)],
-        missing_fields=case_repo.missing_fields(db, case.id),
+        missing_fields=case_repo.missing_fields(db, case.id) + case_repo.unasked_fields(db, case.id),
         required_attachment_kinds=hospital_config.required_attachment_kinds(),
         pending_attachment_kinds=case_repo.pending_attachment_kinds(db, case.id),
         triage=triage_out(db, case_repo.latest_triage(db, case.id)),

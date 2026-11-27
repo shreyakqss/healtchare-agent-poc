@@ -336,7 +336,7 @@ async def write_summary(step_input: StepInput) -> StepOutput:
             sections, generated_by = _plain_sections(facts, entries), "fallback"
 
         missing = list(sections.get("missing_information", []))
-        for field in case_repo.missing_fields(db, case_id):
+        for field in [*case_repo.missing_fields(db, case_id), *case_repo.unasked_fields(db, case_id)]:
             label = f"Required intake field not collected: {field.replace('_', ' ')}"
             if label not in missing:
                 missing.append(label)

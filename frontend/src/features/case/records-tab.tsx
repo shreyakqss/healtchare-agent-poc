@@ -10,7 +10,18 @@ import { Icons } from "@/components/ui/icons";
 import { FIELD_LABEL } from "@/lib/constants";
 import { bytes, cn, formatDateTime, titleCase } from "@/lib/utils";
 
-const SENTINELS = new Set(["None reported by patient", "Declined to answer", "Answered - see the intake transcript"]);
+// The intake sentinels (backend app/domain/intake_fields.py) and how they read - same mapping as
+// intake_fields.display(), so a denial shows as "NKA", never as raw sentinel text.
+function sentinelLabel(kind: string, v: string): string | null {
+  switch (v) {
+    case "None reported by patient":
+      return kind === "allergy" ? "No known allergies (NKA)" : kind === "medication" ? "No current medicines" : "None reported";
+    case "Declined to answer": return "Declined to answer";
+    case "Answered - see the intake transcript": return "Answered, see the intake conversation";
+    case "Not asked - intake ended first": return "Not asked (intake ended first)";
+    default: return null;
+  }
+}
 
 function Source({ source, turn }: { source: "patient" | "hms"; turn: number }) {
   return source === "hms"
@@ -18,8 +29,9 @@ function Source({ source, turn }: { source: "patient" | "hms"; turn: number }) {
     : <span className="text-xs text-fg-muted">Patient · turn {turn}</span>;
 }
 
-function Value({ v }: { v: string }) {
-  return SENTINELS.has(v) ? <span className="italic text-fg-subtle">{v}</span> : <>{v}</>;
+function Value({ kind, v }: { kind: string; v: string }) {
+  const label = sentinelLabel(kind, v);
+  return label ? <span className="text-fg-muted">{label}</span> : <>{v}</>;
 }
 
 function groupFacts(facts: Fact[]): Array<[string, Fact[]]> {
@@ -152,7 +164,7 @@ export function RecordsTab({ detail }: { detail: CaseDetail }) {
               {entries.map((e) => (
                 <tr key={e.id}>
                   <Td><Badge tone={e.kind === "allergy" ? "danger" : "neutral"}>{titleCase(e.kind)}</Badge></Td>
-                  <Td className="text-sm"><Value v={e.name} /></Td>
+                  <Td className="text-sm"><Value kind={e.kind} v={e.name} /></Td>
                   <Td className="text-sm text-fg-muted">{e.reaction_or_dose ?? "–"}</Td>
                   <Td><Source source={e.source} turn={e.source_turn} /></Td>
                 </tr>
@@ -173,7 +185,7 @@ export function RecordsTab({ detail }: { detail: CaseDetail }) {
                 facts.map((f, i) => (
                   <tr key={f.id}>
                     <Td className="text-sm text-fg-muted">{i === 0 ? (FIELD_LABEL[kind] ?? titleCase(kind)) : <span className="sr-only">{FIELD_LABEL[kind] ?? titleCase(kind)}</span>}</Td>
-                    <Td className="text-sm"><Value v={f.value} /></Td>
+                    <Td className="text-sm"><Value kind={f.kind} v={f.value} /></Td>
                     <Td><Source source={f.source} turn={f.source_turn} /></Td>
                     <Td className="tabular text-right text-xs text-fg-muted">{Math.round(f.confidence * 100)}%</Td>
                   </tr>

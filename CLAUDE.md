@@ -149,7 +149,10 @@ Every status write goes through `services/lifecycle.transition()`; every state c
   interviewer says the doctor has enough, or closes intake if the model is down. Denied symptoms are `negative`
   facts (pertinent negatives) - never matched by routing or triage.
 - The intake loop closes a field the patient denied with a sentinel row (`app/domain/intake_fields.py`). Never
-  write `NONE_REPORTED` for an answer that was not a denial.
+  write `NONE_REPORTED` for an answer that was not a denial. When intake ends with fields open (question cap, or
+  `MAX_FAILED_TURNS` model failures in a row) they close as `NOT_ASKED` so the case still reaches pre-screening,
+  which lists them as not collected. Sentinels are shown via `intake_fields.display()` ("No known allergies (NKA)",
+  "Not asked"), never raw and never as a blank.
 - A new visit's department is the AI router's pick (`agents/department_router`, clinical facts only, the
   clinic's `ai_routing.policy` lines) when `routing.accept_ai_pick` accepts it: a configured department, at
   least one cited fact really on the case, and an `ai_routing.protected` department (Cardiology) keeps a
@@ -158,7 +161,8 @@ Every status write goes through `services/lifecycle.transition()`; every state c
   to the model. The rationale names the AI reason and the rules' alternative; the audit records both.
 - Keyword routing (`domain/routing.route`) matches whole words in the current complaint only (`symptom`,
   `reason_for_visit`; never history or negatives), and the department with the most keyword hits wins (reason
-  for visit counts double, ties keep `specialty_map` order). `infection_routing` sends fever with
+  for visit counts double; past history only breaks a tie between departments the complaint matched, then
+  `specialty_map` order). A department with no doctor rostered hands the case to the default one. `infection_routing` sends fever with
   pulmonology/orthopedics/dermatology symptoms to the default department. A triage rule's `specialty_hint`
   overrides all of it, so only give one to a rule whose symptoms belong to a single specialty.
 - `scripts/seed.py` prints ASCII only (Windows console is cp1252).
