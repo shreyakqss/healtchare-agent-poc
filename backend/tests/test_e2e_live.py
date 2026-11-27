@@ -109,9 +109,10 @@ def test_full_journey_with_real_models(client):
                              ("lab_report_scanned.pdf", "lab_report", "application/pdf"),
                              ("prescription_photo.png", "prescription", "image/png")):
         with open(FILES / name, "rb") as fh:
-            up = _timed(f"upload {name}", lambda: client.post(
-                f"{BASE}/cases/{cid}/attachments", files={"file": (name, fh, mime)},
-                data={"kind": kind, "uploaded_by": "patient"}))
+            started = time.perf_counter()
+            up = client.post(f"{BASE}/cases/{cid}/attachments", files={"file": (name, fh, mime)},
+                             data={"kind": kind, "uploaded_by": "patient"})
+            log(f"upload {name}: {time.perf_counter() - started:.1f}s")
         assert up.status_code == 201, up.text
         if kind == "prescription":
             meds = up.json()["extracted_medications"]

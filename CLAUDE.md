@@ -81,6 +81,12 @@ tokens must never be exposed to browser code or storage.
   whole (no chunking/RAG), so `FILE_READ_*` settings are checked first: at most 5 files a visit, images up to
   7.5 MB, PDFs cut to their first 10 pages, encrypted PDFs skipped - a file outside them is `skipped` with a reason
   and costs nothing.
+  Typed documents (extracted text) get an AI summary too (`source="text"`, labelled "AI summary of the document
+  text", at most 8, text cut to 8000 chars); every read reaches the briefing (`summary_lines`) and the doctor's
+  "Attached documents" card, but only image/scan reads are added to the agents' context (typed text already is).
+  A prescription uploaded during intake has its medicine names read at upload - from the text, or from a photo/scan
+  by the model inside the same limits and 30s cap - and the intake assistant asks the patient whether they take
+  them; only the patient's answer creates medication entries.
 - The consultation report (`services/report_service`, `agents/report_writer`) may be AI-drafted and AI-edited, but
   only as proposals returned to the doctor's form: nothing is stored until the doctor signs with their HMS password,
   the AI never writes examination findings, and the audit records which sections were still AI-written at signing.
