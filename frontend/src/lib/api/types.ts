@@ -160,7 +160,7 @@ export interface PatientRouting {
 /** Days (mon, tue, ...) sharing the same hours, e.g. times [["10:00", "13:00"], ["16:00", "19:00"]]. */
 export interface WeeklyHours { days: string[]; times: [string, string][] }
 export interface Summary {
-  id: string; kind: "prescreening" | "final_visit" | "ai_diagnosis" | "report_draft"; sections: Record<string, unknown>;
+  id: string; kind: "prescreening" | "final_visit" | "ai_diagnosis" | "report_draft" | "file_reads"; sections: Record<string, unknown>;
   evidence: unknown[]; missing_information: string[]; generated_by: "llm" | "fallback" | "doctor"; created_at: string;
 }
 export interface Review { id: string; decision: ReviewDecision; reviewer_id: string; reviewer_role: string; edits: Record<string, string>; comment: string | null; created_at: string }
@@ -288,7 +288,7 @@ export interface CaseDetail {
   facts: Fact[]; allergies_medications: Entry[]; attachments: Attachment[]; missing_fields: string[];
   required_attachment_kinds: string[]; pending_attachment_kinds: string[];
   triage: Triage | null; routing: Routing | null; discrepancies: Discrepancy[]; prescreening_summary: Summary | null; review: Review | null;
-  ai_diagnosis?: Summary | null; report_draft?: Summary | null; assistant_messages?: AssistantMessage[];
+  ai_diagnosis?: Summary | null; file_reads?: Summary | null; report_draft?: Summary | null; assistant_messages?: AssistantMessage[];
   visit_type?: VisitType; previous_visit?: PreviousVisit | null;
   consultation_notes: ConsultationNote[]; final_summary: Summary | null; care_tasks: CareTask[]; created_at: string;
 }
@@ -400,4 +400,11 @@ export interface HoursChangePreview {
 }
 export interface DoctorPreview {
   problems: string[]; clinic: { id: string; name: string }; hours: WeeklyHours[]; blocks: number; hours_until: string | null;
+}
+
+/** One AI read of an uploaded image or scanned PDF (`file_reads` summary sections.reads[]). Clinician only. */
+export interface FileRead {
+  attachment_id: string; filename: string; kind: string; status: "read" | "unavailable" | "skipped";
+  note?: string; pages_read?: number; pages_total?: number;
+  what_it_is?: string; findings?: string[]; impression?: string; limitations?: string;
 }

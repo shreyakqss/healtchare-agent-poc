@@ -205,3 +205,23 @@ class VisitSummary(BaseModel):
     doctor_notes_summary: str
     follow_up_instructions: list[str] = Field(default_factory=list)
     patient_friendly_summary: str = Field(description="Two or three plain sentences the patient can read.")
+
+
+class DepartmentPick(BaseModel):
+    department_id: str = Field(description="One department id from the clinic's list, exactly as given.")
+    reason: str = Field(description="One short clinical phrase for the doctor, e.g. 'Fever with cough, likely chest infection'.")
+    facts_used: list[str] = Field(
+        default_factory=list, description="The patient facts the choice rests on, copied word for word from the list."
+    )
+
+
+class FileRead(BaseModel):
+    """The AI's read of one uploaded image or scanned document, for the treating doctor only."""
+
+    what_it_is: str = Field(description="What the file shows, e.g. 'Chest X-ray, PA view' or 'Scanned CBC report'.")
+    findings: list[str] = Field(
+        default_factory=list,
+        description="Short lines on what is visible, or the key values read from a report with units and flags.",
+    )
+    impression: str = Field(description="One line on what the findings may suggest; empty when nothing stands out.")
+    limitations: str = Field(description="One line on image quality or what cannot be judged; empty when none.")

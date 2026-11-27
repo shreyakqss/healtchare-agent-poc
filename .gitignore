@@ -12,3 +12,5 @@ data/
 .creds
 /features
 .openemr-test-patients
+# Synthetic upload samples for demos (X-ray, scanned PDFs) - local only
+/test-files

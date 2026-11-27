@@ -1,7 +1,8 @@
-"""Pre-screening: records -> urgency (rules) -> routing -> summary -> AI differential -> report draft -> NEEDS_REVIEW."""
+"""Pre-screening: records -> urgency (rules) -> routing -> AI file reads -> summary -> AI differential -> report draft -> NEEDS_REVIEW."""
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 
@@ -9,7 +10,7 @@ from agno.run.base import RunStatus
 from agno.workflow import Workflow
 from agno.workflow.types import StepInput, StepOutput
 
-from app.agents import AgentUnavailable
+from app.agents import AgentUnavailable, department_router
 from app.agents.discrepancy_checker import check as check_discrepancies_llm
 from app.agents.schemas import DiscrepancyResult
 from app.agents.summary_writer import SummaryInputs, write_prescreening
@@ -26,6 +27,7 @@ from app.services import (
     case_repo,
     doctor_load,
     emergency_service,
+    file_read_service,
     hospital_config,
     lifecycle,
     report_service,
@@ -172,9 +174,47 @@ async def evaluate_urgency(step_input: StepInput) -> StepOutput:
     return StepOutput(content=result)
 
 
+AI_ROUTER_TIMEOUT_SECONDS = 25
+AI_ROUTER_KINDS = {"reason_for_visit", "symptom", "negative", "duration", "history", "condition", "age", "gender"}
+
+
+async def _ai_department(lines: list[str], config) -> tuple[str, str, list[str]] | None:
+    """The AI router's (department id, reason, facts used), or None when it is down."""
+    policy = (config.get("ai_routing") or {}).get("policy") or []
+    try:
+        # A short budget: the keyword rules are a fine answer, a stuck booking is not.
+        pick = await asyncio.wait_for(
+            department_router.pick(lines, config.get("departments") or [], policy), AI_ROUTER_TIMEOUT_SECONDS,
+        )
+    except (AgentUnavailable, TimeoutError) as exc:
+        logger.warning("AI router unavailable (%s); keyword rules decide", exc)
+        return None
+    return pick.department_id, pick.reason, pick.facts_used
+
+
+def _apply_ai(decision, ai, facts, config, priority):
+    """The keyword decision, replaced by the AI router's department when the code checks accept it."""
+    if ai is None:
+        decision.ai_status = "unavailable"
+        return decision
+    pick_id, reason, facts_used = ai
+    status = routing_rules.accept_ai_pick(decision, pick_id, facts_used, facts, config)
+    if status != "used":
+        decision.ai_status = status
+        return decision
+    chosen = routing_rules.route(facts, config, priority, specialty_hint=pick_id)
+    chosen.basis, chosen.ai_status, chosen.ai_reason = "ai", "used", reason
+    chosen.matched_keywords = decision.matched_keywords
+    if decision.department["id"] != pick_id:
+        chosen.rules_department = decision.department["name"]
+    return chosen
+
+
 async def navigate_care(step_input: StepInput) -> StepOutput:
     """Department / doctor / appointment type from the hospital config, with live HMS
-    practitioners overlaid on the doctor roster (see services/hms/roster.py). Zero LLM."""
+    practitioners overlaid on the doctor roster (see services/hms/roster.py). The department of
+    a new visit is the AI router's pick when the code checks accept it (routing.accept_ai_pick),
+    else the keyword rules'; urgency, emergencies and follow-ups never go to the model."""
     case_id = case_id_from(step_input)
     urgency = step_input.get_step_content("evaluate_urgency") or {}
     with db_session() as db:
@@ -182,12 +222,25 @@ async def navigate_care(step_input: StepInput) -> StepOutput:
             return StepOutput(content=cached)
         case = case_repo.case_or_404(db, case_id)
         config = effective_doctors_config(hospital_config.load())
-        # A follow-up stays in its previous visit's department unless a clinic rule names one.
         previous = visit_history.previous_visit(db, case)
+        # Clinical facts only - never the name or contact details.
+        lines = [f"{f.kind}: {f.value}" for f in case_repo.facts(db, case_id) if f.kind in AI_ROUTER_KINDS]
+    # Outside the unit of work: the model call must not hold a database transaction open.
+    ask_ai = bool(
+        (config.get("ai_routing") or {}).get("enabled")
+        and not urgency.get("specialty_hint") and previous is None
+    )
+    ai = await _ai_department(lines, config) if ask_ai else None
+    with db_session() as db:
+        case = case_repo.case_or_404(db, case_id)
+        facts = case_repo.facts(db, case_id)
+        # A follow-up stays in its previous visit's department unless a clinic rule names one.
         hint = urgency.get("specialty_hint") or (previous.department_id if previous else None)
-        decision = routing_rules.route(case_repo.facts(db, case_id), config, urgency["priority"], hint)
+        decision = routing_rules.route(facts, config, urgency["priority"], hint)
         if previous and not urgency.get("specialty_hint") and decision.department["id"] == previous.department_id:
             decision.basis = "follow_up"
+        if ask_ai:
+            decision = _apply_ai(decision, ai, facts, config, urgency["priority"])
         # Every doctor in the department is a candidate: the one with the earliest free time is
         # assigned (fewest open cases on a tie), and the patient may later pick another's time.
         open_cases = doctor_load.open_case_counts(db, [d["id"] for d in decision.doctors], excluding_case=case_id)
@@ -229,7 +282,9 @@ async def navigate_care(step_input: StepInput) -> StepOutput:
         audit.record(db, case_id, "system:care_navigator", "routing.recommended",
                      {"department_id": decision.department["id"], "doctor_id": decision.doctor["id"] if decision.doctor else None,
                       "appointment_type": decision.appointment_type["id"], "basis": decision.basis,
-                      "assigned_by": decision.assigned_by, "hms_slot": slot["id"] if slot else None})
+                      "assigned_by": decision.assigned_by, "hms_slot": slot["id"] if slot else None,
+                      "ai_status": decision.ai_status or None, "ai_department_id": ai[0] if ai else None,
+                      "rules_department": decision.rules_department or None})
         result = {"department": decision.department["name"]}
         complete_step(db, step_input, "navigate_care", result)
     return StepOutput(content=result)
@@ -281,7 +336,7 @@ async def write_summary(step_input: StepInput) -> StepOutput:
             sections, generated_by = _plain_sections(facts, entries), "fallback"
 
         missing = list(sections.get("missing_information", []))
-        for field in case_repo.missing_fields(db, case_id):
+        for field in [*case_repo.missing_fields(db, case_id), *case_repo.unasked_fields(db, case_id)]:
             label = f"Required intake field not collected: {field.replace('_', ' ')}"
             if label not in missing:
                 missing.append(label)
@@ -298,6 +353,20 @@ async def write_summary(step_input: StepInput) -> StepOutput:
                      {"generated_by": generated_by, "missing_information": len(missing)})
         result = {"generated_by": generated_by, "missing": len(missing)}
         complete_step(db, step_input, "write_prescreen_summary", result)
+    return StepOutput(content=result)
+
+
+async def read_files(step_input: StepInput) -> StepOutput:
+    """AI reads of uploaded images and scanned PDFs for the doctor. After urgency and routing, so
+    it can never change them; each file is time-limited and a failure just marks it unread."""
+    case_id = case_id_from(step_input)
+    with db_session() as db:
+        if cached := completed_step(db, step_input, "read_files"):
+            return StepOutput(content=cached)
+        summary = await file_read_service.read_case(db, case_id, "system:file_reader")
+        reads = summary.sections["reads"] if summary else []
+        result = {"files": len(reads), "read": sum(1 for r in reads if r["status"] == "read")}
+        complete_step(db, step_input, "read_files", result)
     return StepOutput(content=result)
 
 
@@ -366,6 +435,7 @@ prescreen_workflow = Workflow(
         step("check_discrepancies", check_discrepancies),
         step("evaluate_urgency", evaluate_urgency),
         step("navigate_care", navigate_care),
+        step("read_files", read_files),
         step("write_summary", write_summary),
         step("draft_ai_diagnosis", draft_ai_diagnosis),
         step("draft_report", draft_report),

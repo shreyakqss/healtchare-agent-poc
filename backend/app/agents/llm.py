@@ -131,17 +131,19 @@ async def stream_text(
     return text
 
 
-async def run_structured(agent: Agent, prompt: str, schema: type[T], *, interactive: bool = False) -> T:
+async def run_structured(
+    agent: Agent, prompt: str, schema: type[T], *, interactive: bool = False, **media: Any,
+) -> T:
     """Run an agent whose output_schema is `schema`; always returns an instance or raises AgentUnavailable.
 
     A provider can fail without raising - a WAF block or an error page comes back as
     ordinary response content, not an exception - so parsing it into `schema` is inside
-    this same try/except rather than after it.
+    this same try/except rather than after it. `media` (images=/files=) is passed to the run.
     """
     if not llm_available():
         raise AgentUnavailable("No LLM API key configured.")
     try:
-        content = (await _within_timeout(agent.arun(prompt), agent.name, interactive)).content
+        content = (await _within_timeout(agent.arun(prompt, **media), agent.name, interactive)).content
         if isinstance(content, schema):
             return content
         if isinstance(content, dict):

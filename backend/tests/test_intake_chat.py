@@ -80,6 +80,43 @@ def test_chat_max_assistant_questions_backstop(client, monkeypatch):
     assert r1["missing_fields"] != []
 
 
+def test_backstop_with_open_fields_still_reaches_a_clinician(client, monkeypatch):
+    """The P0: hitting the question cap with fields open used to leave the case short of the
+    completeness gate forever. The open fields close as "Not asked" and pre-screening fires."""
+    fired: list[str] = []
+
+    async def fake_run_prescreen(case_id, **_) -> None:
+        fired.append(str(case_id))
+
+    monkeypatch.setattr("app.services.workflow_jobs.run_prescreen", fake_run_prescreen)
+    monkeypatch.setattr(intake_service_module, "MAX_ASSISTANT_QUESTIONS", 1)
+    require_attachments(monkeypatch)
+    sid, cid = new_identified_session(client)
+    client.post(f"{BASE}/intake-sessions/{sid}/messages", json={"content": "chest pain"})
+    r1 = client.post(f"{BASE}/intake-sessions/{sid}/messages", json={"content": "no"}).json()
+    assert r1["intake_complete"] is True and "duration" in r1["missing_fields"]  # still shown as not collected
+    assert r1["captured_fields"]["duration"] == ["Not asked"]
+
+    detail = client.get(f"{BASE}/cases/{cid}").json()
+    assert detail["status"] != "INGESTING"  # claimed for pre-screening
+    assert "duration" in detail["missing_fields"]
+
+
+def test_model_down_closes_intake_after_repeated_failures(client, monkeypatch):
+    async def down(*_a, **_k):
+        raise AgentUnavailable("down")
+
+    sid, _ = new_identified_session(client)
+    client.post(f"{BASE}/intake-sessions/{sid}/messages", json={"content": "cough"})
+    monkeypatch.setattr(intake_service_module.fact_extractor, "extract", down)
+    replies = [client.post(f"{BASE}/intake-sessions/{sid}/messages", json={"content": "hello"}).json()
+               for _ in range(intake_service_module.MAX_FAILED_TURNS)]
+    assert all(r["reply"] == intake_service_module.UNDERSTANDING_UNAVAILABLE and not r["intake_complete"]
+               for r in replies[:-1])
+    assert replies[-1]["intake_complete"] is True
+    assert replies[-1]["reply"] == intake_service_module.CLOSING_ASSISTANT_DOWN
+
+
 def test_chat_completion_fires_prescreen(client, monkeypatch):
     """Once every required field is present and every required attachment kind is resolved,
     prescreen fires in the background. run_prescreen is replaced with a spy."""
